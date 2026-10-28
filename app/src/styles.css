@@ -1683,6 +1683,12 @@ button {
   color: var(--danger);
 }
 
+/* 主动留空 / 跳过：灰色斜体，和「未回答」区分开 */
+.ask-review-a.is-blank {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
 .chip {
   border: 1px solid var(--border);
   background: var(--bg);

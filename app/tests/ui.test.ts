@@ -116,7 +116,7 @@ test("ask 卡片：confirm 回传 { confirmed }", () => {
   assert.deepEqual(responses, [{ requestId: "req-2", response: { confirmed: false } }]);
 });
 
-test("ask 卡片：input 提交空值不发送", () => {
+test("ask 卡片：input 允许留空提交，按钮文案跟着变", () => {
   const { root, view, responses } = makeView();
   view.setPending([
     {
@@ -128,9 +128,26 @@ test("ask 卡片：input 提交空值不发送", () => {
       title: "补充说明",
     } as never,
   ]);
+
   const submit = root.querySelector<HTMLButtonElement>(".ask-card > .btn");
+  assert.equal(submit?.textContent, "留空提交", "空内容时提示可留空");
+
+  const input = root.querySelector<HTMLTextAreaElement>(".ask-input")!;
+  input.value = "有内容了";
+  input.dispatchEvent(new dom.window.Event("input"));
+  assert.equal(submit?.textContent, "提交", "有内容时恢复正常文案");
+
   submit?.click();
-  assert.equal(responses.length, 0);
+  assert.deepEqual(responses[0]?.response, { value: "有内容了" });
+});
+
+test("ask 卡片：input 留空也能提交（不再被卡住）", () => {
+  const { root, view, responses } = makeView();
+  view.setPending([
+    { sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "req-3b", method: "input", title: "t" } as never,
+  ]);
+  root.querySelector<HTMLButtonElement>(".ask-card > .btn")!.click();
+  assert.deepEqual(responses[0]?.response, { value: "" });
 });
 
 test("历史消息：PiDeck 实际的扁平结构（顶层 text 字段）", () => {
@@ -357,8 +374,13 @@ test("ask 卡片：batch_ask 显示题号进度并可逐题作答", () => {
   assert.ok(reviewBtn, "应有去审阅按钮");
   reviewBtn!.click();
   assert.ok((root.textContent ?? "").includes("确认全部回答"));
-  assert.ok((root.textContent ?? "").includes("还有题目未回答"), "未答完时按钮应提示");
   assert.equal(responses.length, 0, "未提交前不应回传");
+
+  // 现在允许留空：点「下一题」即视为留空作答，审阅页可直接提交
+  const finalSubmit = [...root.querySelectorAll<HTMLButtonElement>(".ask-card .btn")].find(
+    (b) => b.textContent === "提交",
+  );
+  assert.ok(finalSubmit && !finalSubmit.disabled, "留空也应允许提交");
 });
 
 test("ask 卡片：取消回传 cancelled", () => {
@@ -446,4 +468,254 @@ test("键盘弹起后保持贴底；用户翻上去则不抢位置", () => {
   scroll.dispatchEvent(new dom.window.Event("scroll"));
   view.keepBottomOnResize();
   assert.equal(top, 200, "用户主动上翻时不要抢位置");
+});
+
+test("select 但没有 options 时降级为输入框（回归：之前显示「暂不支持」）", () => {
+  const { root, view } = makeView();
+  view.setPending([
+    {
+      sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1",
+      method: "select", title: "要选哪个？",
+      // 服务端可能给空数组或 undefined
+    } as never,
+  ]);
+  assert.ok(root.querySelector(".ask-input"), "应渲染输入框");
+  assert.equal(root.querySelectorAll(".ask-option").length, 0);
+  assert.ok(!(root.textContent ?? "").includes("暂不支持"), "不该提示不支持");
+});
+
+test("select 带空数组 options 同样降级为输入框", () => {
+  const { root, view } = makeView();
+  view.setPending([
+    { sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1", method: "select", title: "t", options: [] } as never,
+  ]);
+  assert.ok(root.querySelector(".ask-input"));
+  assert.ok(!(root.textContent ?? "").includes("暂不支持"));
+});
+
+test("allowOther：选项与自定义输入框共存，提交输入框内容", () => {
+  const { root, view, responses } = makeView();
+  view.setPending([
+    {
+      sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1",
+      method: "select", title: "选一个", options: ["A", "B"], allowOther: true,
+    } as never,
+  ]);
+  assert.equal(root.querySelectorAll(".ask-option").length, 2, "选项仍在");
+  const input = root.querySelector<HTMLTextAreaElement>(".ask-input");
+  assert.ok(input, "自定义输入框存在");
+
+  input!.value = "我自己写的答案";
+  const submit = [...root.querySelectorAll<HTMLButtonElement>(".ask-card .btn")].find((b) =>
+    b.textContent?.includes("自定义"),
+  );
+  submit!.click();
+  assert.deepEqual(responses[0]?.response, { value: "我自己写的答案" });
+});
+
+test("batch_ask 某一题没有选项时只给输入框", () => {
+  const { root, view } = makeView();
+  view.setPending([
+    {
+      sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1",
+      method: "batch_ask", title: "",
+      batchQuestions: [{ question: "开放题，没有选项" }],
+    } as never,
+  ]);
+  assert.ok((root.textContent ?? "").includes("开放题"));
+  assert.ok(root.querySelector(".ask-input"), "应有输入框");
+  assert.equal(root.querySelectorAll(".ask-option").length, 0);
+});
+
+test("未知 method 才提示不支持", () => {
+  const { root, view } = makeView();
+  view.setPending([
+    { sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1", method: "weird_method", title: "t" } as never,
+  ]);
+  assert.ok((root.textContent ?? "").includes("暂不支持"));
+});
+
+test("batch_ask 带对象选项时渲染出可选按钮（回归：之前只有输入框）", () => {
+  const { root, view } = makeView();
+  view.setPending([
+    {
+      sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1",
+      method: "batch_ask",
+      title: "",
+      batchQuestions: [
+        {
+          id: "q1",
+          type: "select",
+          question: "部署到哪个环境？",
+          options: [
+            { label: "测试", value: "test", description: "不影响线上" },
+            { label: "生产", value: "prod" },
+          ],
+          allowOther: true,
+        },
+      ],
+    } as never,
+  ]);
+
+  const options = [...root.querySelectorAll(".ask-option")];
+  assert.equal(options.length, 2, "两个选项都要渲染出来");
+  const labels = options.map((o) => o.querySelector(".ask-option-label")?.textContent);
+  assert.deepEqual(labels, ["测试", "生产"]);
+  assert.equal(options[0]?.querySelector(".ask-option-desc")?.textContent, "不影响线上");
+  assert.ok(root.querySelector(".ask-input"), "allowOther 的自定义输入框也在");
+});
+
+test("batch_ask 点对象选项后回传 value 而不是 label", () => {
+  const { root, view, responses } = makeView();
+  view.setPending([
+    {
+      sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1",
+      method: "batch_ask", title: "",
+      batchQuestions: [
+        { id: "q1", type: "select", question: "选一个", options: [{ label: "测试", value: "test" }] },
+      ],
+    } as never,
+  ]);
+
+  root.querySelector<HTMLButtonElement>(".ask-option")!.click();
+
+  // 单选题点选项后自动进入审阅页
+  const reviewText = root.textContent ?? "";
+  assert.ok(reviewText.includes("确认全部回答"), `应进入审阅页，实际：${reviewText.slice(0, 80)}`);
+
+  const submit = [...root.querySelectorAll<HTMLButtonElement>(".ask-card .btn")].find(
+    (b) => b.textContent === "提交" && !b.classList.contains("btn-ghost"),
+  );
+  assert.ok(submit, "审阅页应有提交按钮");
+  submit!.click();
+
+  assert.equal(responses.length, 1, "应提交一次");
+  const value = String(responses[0]?.response.value ?? "");
+  assert.ok(value.includes("test"), `回传值应含 value(test)，实际：${value}`);
+});
+
+test("batch 选了选项但输入框为空时，答案不能被覆盖成空串（回归）", () => {
+  const { root, view, responses } = makeView();
+  view.setPending([
+    {
+      sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1",
+      method: "batch_ask", title: "",
+      batchQuestions: [
+        { id: "q1", type: "select", question: "选一个", options: [{ label: "测试", value: "test" }] },
+      ],
+    } as never,
+  ]);
+
+  root.querySelector<HTMLButtonElement>(".ask-option")!.click();
+
+  // 审阅页应显示已选答案，而不是「未回答」
+  const review = root.textContent ?? "";
+  assert.ok(review.includes("确认全部回答"));
+  assert.ok(!review.includes("未回答"), `审阅页不该显示未回答：${review.slice(0, 120)}`);
+
+  const submit = [...root.querySelectorAll<HTMLButtonElement>(".ask-card .btn")].find(
+    (b) => b.textContent === "提交" && !b.classList.contains("btn-ghost"),
+  );
+  submit!.click();
+  assert.ok(String(responses[0]?.response.value ?? "").includes("test"));
+});
+
+test("multi_select 可以多选（回归：之前被当成单选）", () => {
+  const { root, view } = makeView();
+  view.setPending([
+    {
+      sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1",
+      method: "batch_ask", title: "",
+      batchQuestions: [
+        {
+          id: "q1", type: "multi_select", question: "选多个",
+          options: [{ label: "A", value: "a" }, { label: "B", value: "b" }],
+        },
+      ],
+    } as never,
+  ]);
+
+  const options = [...root.querySelectorAll<HTMLButtonElement>(".ask-option")];
+  options[0]!.click();
+  // 多选不该自动跳题，应停在本页并高亮
+  assert.ok((root.textContent ?? "").includes("选多个"), "仍停留在当前题");
+  assert.ok(root.querySelectorAll(".ask-option.is-selected").length === 1, "第一个已选中");
+
+  const again = [...root.querySelectorAll<HTMLButtonElement>(".ask-option")];
+  again[1]!.click();
+  assert.equal(root.querySelectorAll(".ask-option.is-selected").length, 2, "可以同时选中两个");
+});
+
+test("batch 支持跳过（留空作答）", () => {
+  const { root, view, responses } = makeView();
+  view.setPending([
+    {
+      sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1",
+      method: "batch_ask", title: "",
+      batchQuestions: [{ id: "q1", type: "input", question: "随便说点什么" }],
+    } as never,
+  ]);
+
+  const skip = [...root.querySelectorAll<HTMLButtonElement>(".ask-card .btn")].find((b) => b.textContent === "跳过");
+  assert.ok(skip, "应有跳过按钮");
+  skip!.click();
+
+  const submit = [...root.querySelectorAll<HTMLButtonElement>(".ask-card .btn")].find(
+    (b) => b.textContent === "提交",
+  );
+  assert.ok(submit && !submit.disabled, "跳过后应可提交");
+  submit!.click();
+  assert.equal(responses.length, 1, "留空也能提交");
+});
+
+test("审阅页：留空显示「（留空）」，未碰过才显示「未回答」", () => {
+  const { root, view } = makeView();
+  view.setPending([
+    {
+      sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1",
+      method: "batch_ask", title: "",
+      batchQuestions: [
+        { id: "q1", type: "input", question: "第一题（会跳过）" },
+        { id: "q2", type: "confirm", question: "第二题（不碰）" },
+      ],
+    } as never,
+  ]);
+
+  // 第一题点跳过 → 留空
+  const skip = [...root.querySelectorAll<HTMLButtonElement>(".ask-card .btn")].find((b) => b.textContent === "跳过");
+  skip!.click();
+
+  // 第二题是 confirm，直接点「去审阅」不碰它
+  const reviewBtn = [...root.querySelectorAll<HTMLButtonElement>(".ask-card .btn")].find((b) => b.textContent === "去审阅");
+  reviewBtn!.click();
+
+  const answers = [...root.querySelectorAll(".ask-review-a")].map((el) => ({
+    text: el.textContent,
+    blank: el.classList.contains("is-blank"),
+    empty: el.classList.contains("is-empty"),
+  }));
+
+  assert.equal(answers[0]?.text, "（留空）", "跳过的题显示留空");
+  assert.equal(answers[0]?.blank, true, "留空用灰色样式，不是错误色");
+  assert.equal(answers[0]?.empty, false);
+
+  assert.equal(answers[1]?.text, "未回答", "完全没碰的 confirm 题才算未回答");
+  assert.equal(answers[1]?.empty, true);
+});
+
+test("审阅页：confirm 答案显示「是/否」而不是 true/false", () => {
+  const { root, view } = makeView();
+  view.setPending([
+    {
+      sessionId: "s1", agentId: "a1", runtimeGeneration: 1, requestId: "r1",
+      method: "batch_ask", title: "",
+      batchQuestions: [{ id: "q1", type: "confirm", question: "确认吗？" }],
+    } as never,
+  ]);
+
+  const yes = [...root.querySelectorAll<HTMLButtonElement>(".ask-card .btn")].find((b) => b.textContent === "是");
+  yes!.click();
+
+  const answer = root.querySelector(".ask-review-a")?.textContent;
+  assert.equal(answer, "是");
 });

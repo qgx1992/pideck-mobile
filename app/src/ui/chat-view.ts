@@ -9,10 +9,10 @@ import {
   isAnswered,
   normalizeBatchQuestions,
   serializeBatchAnswers,
-  splitAskOption,
+  toAskOptions,
   toggleSelection,
 } from "./ask-model.ts";
-import type { BatchAnswer } from "./ask-model.ts";
+import type { BatchAnswer, BatchAnswerMeta } from "./ask-model.ts";
 
 export interface ChatViewHandlers {
   onRespond: (pending: PendingUiRequest, response: Record<string, unknown>) => void;
@@ -376,7 +376,12 @@ export class ChatView {
       this.handlers.onRespond(pending, response);
     };
 
-    const method = String(pending.method ?? "");
+    const rawMethod = String(pending.method ?? "");
+    // 选项可能是字符串，也可能是 {label, value, description} 对象
+    const optionList = toAskOptions(pending.options);
+    // PiDeck 主进程在 select 没有选项时会把它降级成 input；
+    // 客户端也要做同样处理，否则会掉进「暂不支持」分支，用户看到一张空卡片。
+    const method = rawMethod === "select" && optionList.length === 0 ? "input" : rawMethod;
     const isBatch = method === "batch_ask" && Array.isArray(pending.batchQuestions);
 
     if (isBatch) {
@@ -387,9 +392,10 @@ export class ChatView {
     card.append(h("div", { class: "ask-kicker", text: "AI 提问" }));
     card.append(h("div", { class: "ask-title", text: pending.title || "需要你的确认" }));
 
-    if (method === "select" && Array.isArray(pending.options) && pending.options.length > 0) {
-      const parsed = pending.options.map(splitAskOption);
+    if (method === "select" && optionList.length > 0) {
+      const parsed = optionList;
       const multiple = (pending as { multiple?: boolean }).multiple === true;
+      const allowOther = pending.allowOther === true;
       const selected: string[] = [];
 
       const list = h("div", { class: "ask-options ask-options--column" });
@@ -425,8 +431,47 @@ export class ChatView {
       });
 
       card.append(list);
+      // allowOther：桌面端在选项下方额外给一个「或输入自定义内容…」
+      const otherInput = allowOther
+        ? h("textarea", {
+            class: "ask-input",
+            placeholder: pending.placeholder ?? "或输入自定义内容…",
+            value: pending.prefill ?? "",
+          })
+        : null;
+      if (otherInput) card.append(otherInput);
+
       if (multiple) {
-        card.append(hintEl, h("button", { class: "btn", text: "提交", onclick: submitMulti }));
+        card.append(
+          hintEl,
+          h("button", {
+            class: "btn",
+            text: "提交",
+            onclick: () => {
+              if (otherInput?.value.trim()) {
+                respond({ value: otherInput.value.trim() });
+                return;
+              }
+              submitMulti();
+            },
+          }),
+        );
+      } else if (otherInput) {
+        card.append(
+          h("button", {
+            class: "btn",
+            text: "提交自定义内容",
+            onclick: () => {
+              const value = otherInput.value.trim();
+              if (!value) {
+                hintEl.textContent = "先输入内容";
+                hintEl.classList.add("hint--warn");
+                return;
+              }
+              respond({ value });
+            },
+          }),
+        );
       }
     } else if (method === "confirm") {
       const row = h("div", { class: "ask-options" });
@@ -441,13 +486,18 @@ export class ChatView {
         placeholder: pending.placeholder ?? (method === "editor" ? "编辑内容…" : "输入回答…"),
         value: pending.prefill ?? "",
       });
-      const submit = h("button", {
-        class: "btn",
-        text: "提交",
-        onclick: () => {
-          const value = input.value.trim();
-          if (value) respond({ value });
-        },
+      const submit = h("button", { class: "btn", text: "提交" });
+
+      // 内容为空时允许「留空提交」（PiDeck 接受空字符串，不该逼用户打字）
+      const syncLabel = (): void => {
+        submit.textContent = input.value.trim() ? "提交" : "留空提交";
+        submit.title = input.value.trim() ? "" : "不填内容直接回答";
+      };
+      input.addEventListener("input", syncLabel);
+      syncLabel();
+
+      submit.addEventListener("click", () => {
+        respond({ value: input.value.trim() });
       });
       card.append(input, submit);
     } else {
@@ -472,6 +522,8 @@ export class ChatView {
   ): HTMLElement {
     const questions = normalizeBatchQuestions(pending.batchQuestions);
     const answers: Record<string, BatchAnswer> = {};
+    // 记录每题是「点了选项」还是「自己输入」，回传给 pi 的 wasCustom / label 需要它
+    const meta: Record<string, BatchAnswerMeta> = {};
     let index = 0;
     let reviewing = false;
 
@@ -492,13 +544,21 @@ export class ChatView {
         const list = h("div", { class: "ask-review" });
         for (const question of questions) {
           const answer = answers[question.id];
-          const text = Array.isArray(answer) ? answer.join("、") : (answer ?? "");
+          // 三种状态要分开：没碰过（undefined）/ 主动留空（""）/ 有内容
+          const answered = answer !== undefined;
+          const text = Array.isArray(answer)
+            ? answer.join("、")
+            : typeof answer === "boolean"
+              ? answer
+                ? "是"
+                : "否"
+              : (answer ?? "");
           list.append(
             h("div", { class: "ask-review-item" }, [
               h("div", { class: "ask-review-q", text: question.question }),
               h("div", {
-                class: `ask-review-a${text ? "" : " is-empty"}`,
-                text: text || "未回答",
+                class: `ask-review-a${answered ? (text ? "" : " is-blank") : " is-empty"}`,
+                text: answered ? (text || "（留空）") : "未回答",
               }),
             ]),
           );
@@ -519,7 +579,7 @@ export class ChatView {
               ...(incomplete ? { disabled: true } : {}),
               onclick: () => {
                 if (incomplete) return;
-                respond({ value: serializeBatchAnswers(questions, answers) });
+                respond({ value: serializeBatchAnswers(questions, answers, meta) });
               },
             }),
           ]),
@@ -533,7 +593,34 @@ export class ChatView {
 
         card.append(h("div", { class: "ask-question", text: question.question }));
 
-        if (question.options.length > 0) {
+        // confirm 题：是 / 否
+        if (question.kind === "confirm") {
+          card.append(
+            h("div", { class: "ask-options" }, [
+              h("button", {
+                class: "btn",
+                text: "是",
+                onclick: () => {
+                  answers[question.id] = true as unknown as BatchAnswer;
+                  meta[question.id] = { label: "是", wasCustom: false };
+                  advance();
+                },
+              }),
+              h("button", {
+                class: "btn btn-ghost",
+                text: "否",
+                onclick: () => {
+                  answers[question.id] = false as unknown as BatchAnswer;
+                  meta[question.id] = { label: "否", wasCustom: false };
+                  advance();
+                },
+              }),
+            ]),
+          );
+        }
+
+        // 该题没有选项时只显示输入框（不要给一张空卡片）
+        if (question.kind !== "confirm" && question.options.length > 0) {
           const list = h("div", { class: "ask-options ask-options--column" });
           for (const option of question.options) {
             const current = answers[question.id];
@@ -548,9 +635,12 @@ export class ChatView {
             button.addEventListener("click", () => {
               if (question.multiple) {
                 const currentList = Array.isArray(answers[question.id]) ? (answers[question.id] as string[]) : [];
-                answers[question.id] = toggleSelection(currentList, option.value);
+                const next = toggleSelection(currentList, option.value);
+                answers[question.id] = next;
+                meta[question.id] = { label: next.join("、"), wasCustom: false };
               } else {
                 answers[question.id] = option.value;
+                meta[question.id] = { label: option.label, wasCustom: false };
                 advance();
                 return;
               }
@@ -562,17 +652,23 @@ export class ChatView {
           if (question.multiple) card.append(h("p", { class: "hint", text: "可多选" }));
         }
 
-        const input = h("textarea", {
-          class: "ask-input",
-          placeholder: question.placeholder || (question.options.length > 0 ? "或输入自定义内容…" : "输入回答…"),
-          value: typeof answers[question.id] === "string" ? (answers[question.id] as string) : question.prefill,
-        });
-        input.addEventListener("input", () => {
-          answers[question.id] = input.value;
-        });
-        card.append(input);
+        if (question.kind !== "confirm") {
+          const input = h("textarea", {
+            class: "ask-input",
+            placeholder: question.placeholder || (question.options.length > 0 ? "或输入自定义内容…（可留空）" : "输入回答…（可留空）"),
+            value: typeof answers[question.id] === "string" ? (answers[question.id] as string) : question.prefill,
+          });
+          input.addEventListener("input", () => {
+            // 输入即记入答案（含空串），这样「不填直接下一题」不会被当成未作答
+            answers[question.id] = input.value;
+            meta[question.id] = { label: input.value, wasCustom: true };
+          });
+          card.append(input);
+        }
 
         const isLast = index === questions.length - 1;
+        const isAnsweredNow = answers[question.id] !== undefined;
+
         card.append(
           h("div", { class: "ask-options" }, [
             h("button", {
@@ -585,8 +681,20 @@ export class ChatView {
               },
             }),
             h("button", {
+              class: "btn btn-ghost",
+              text: "跳过",
+              title: "留空并继续（答案为空）",
+              onclick: () => {
+                answers[question.id] = "";
+                meta[question.id] = { label: "", wasCustom: true };
+                advance();
+              },
+            }),
+            h("button", {
               class: "btn",
+              // 没填任何东西时提示会留空提交，而不是禁用按钮
               text: isLast ? "去审阅" : "下一题",
+              title: isAnsweredNow ? "" : "这题会留空",
               onclick: () => advance(),
             }),
           ]),
@@ -607,7 +715,21 @@ export class ChatView {
       const question = questions[index];
       if (question) {
         const input = card.querySelector<HTMLTextAreaElement>(".ask-input");
-        if (input && input.value.trim()) answers[question.id] = input.value;
+        if (input) {
+          const text = input.value;
+          if (text) {
+            // 输入框有内容 → 以自定义内容为准
+            answers[question.id] = text;
+            meta[question.id] = { label: text, wasCustom: true };
+          } else if (answers[question.id] === undefined) {
+            // 既没点选项也没打字 → 视为留空作答，避免卡在未答状态
+            answers[question.id] = "";
+          }
+          // 注意：输入框为空但已经点过选项时，必须保留选项值，
+          // 否则会把刚选的答案覆盖成空串（审阅页显示「未回答」）。
+        } else if (answers[question.id] === undefined && question.kind !== "confirm") {
+          answers[question.id] = "";
+        }
       }
       if (index < questions.length - 1) {
         index += 1;
