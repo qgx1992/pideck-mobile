@@ -311,15 +311,22 @@ export class PiDeckClient {
     return this.requestJson<HealthInfo>("/api/health");
   }
 
+  /**
+   * 读取全量状态。
+   *
+   * 传 etag 时会带 `If-None-Match`，命中返回 `notModified: true`（省掉几十 KB 传输）。
+   *
+   * 注意：`If-None-Match` 不是 CORS 安全请求头，浏览器里跨域会触发预检而被拦。
+   * 之所以现在能用，是因为非 SSE 请求都走 CapacitorHttp 原生栈（无 CORS）；
+   * 浏览器开发模式走 Vite 的 /api 同源代理，也不触发预检。
+   * 如果哪天有人把这里接回 WebView 直连，必须把 etag 去掉。
+   */
   async getState(etag?: string | null): Promise<StateResponse> {
     const url = this.withQueryToken(this.buildUrl("/api/state"));
-    // 注意：这里刻意不发 If-None-Match。
-    // 它同样不是 CORS 安全请求头，一旦带上，跨域 GET 就会先发预检，
-    // 而 PiDeck 的预检只放行 content-type → WebView 里表现为 "Failed to fetch"。
-    // 快照本身只有几十 KB，靠 SSE 增量推送省流，304 的收益不值得这个风险。
+    const headers = etag ? { "if-none-match": etag } : undefined;
     const response = await this.fetchWithTimeout(
       url,
-      { method: "GET", headers: this.headers(undefined, { withAuth: false }) },
+      { method: "GET", headers: this.headers(headers, { withAuth: false }) },
       this.timeoutMs,
     );
     if (response.status === 304) {

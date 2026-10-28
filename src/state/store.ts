@@ -20,6 +20,20 @@ export interface StateStoreOptions {
   client: PiDeckClient;
   /** 不支持 SSE 时的轮询间隔，默认 5s */
   pollMs?: number;
+  /**
+   * SSE 正常时的兜底轮询间隔，默认 30s（仅在前台可见时执行）。
+   *
+   * 为什么要兜底：PiDeck 的 /api/events 是「变化驱动」的，而它的 revision 判据
+   * 只包含运行时状态与待答卡片——**会话列表变化（新建/删除/改名）不在其中**，
+   * 服务端在 revision 未变时直接 return，连 5s tick 的全量比对都不会执行。
+   * 结果就是列表类变更永远不会主动推送，只能靠客户端定时拉一次。
+   *
+   * 为什么省不掉流量：PiDeck 的 /api/state 虽然算了 ETag，但注入的 sendJson
+   * 只转发两个参数，`{ etag }` 被丢掉，响应里从来没有 ETag 头，也就永远拿不到 304。
+   * 所以每次都是全量（当前约 58 KB）；客户端做的是「前台 + 30s」限速，
+   * 后台不可见时完全不轮询。
+   */
+  fallbackPollMs?: number;
   onStatus?: (status: StoreStatus) => void;
   onError?: (error: unknown) => void;
   /** 首次快照到达 */
@@ -36,15 +50,19 @@ export class StateStore {
   private statusListeners = new Set<(status: StoreStatus) => void>();
   private controller: AbortController | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollIntervalMs = 0;
+  private visibilityHandler: (() => void) | null = null;
   private running = false;
   private status: StoreStatus = "idle";
   private readonly pollMs: number;
+  private readonly fallbackPollMs: number;
   private readonly options: StateStoreOptions;
 
   constructor(options: StateStoreOptions) {
     this.options = options;
     this.client = options.client;
     this.pollMs = options.pollMs ?? 5_000;
+    this.fallbackPollMs = options.fallbackPollMs ?? 30_000;
   }
 
   get state(): PiDeckState {
@@ -122,7 +140,24 @@ export class StateStore {
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.watchVisibility();
     void this.loop();
+  }
+
+  /** 回到前台立即对账一次（SSE 在后台通常已被系统挂起）。 */
+  private watchVisibility(): void {
+    if (typeof document === "undefined" || this.visibilityHandler) return;
+    this.visibilityHandler = () => {
+      if (document.visibilityState !== "visible" || !this.running) return;
+      void this.refresh().catch((error: unknown) => this.options.onError?.(error));
+    };
+    document.addEventListener("visibilitychange", this.visibilityHandler);
+  }
+
+  private detachVisibility(): void {
+    if (!this.visibilityHandler || typeof document === "undefined") return;
+    document.removeEventListener("visibilitychange", this.visibilityHandler);
+    this.visibilityHandler = null;
   }
 
   private async loop(): Promise<void> {
@@ -154,9 +189,12 @@ export class StateStore {
             this.setStatus("live");
             consecutiveFailures = 0;
             backoff.reset();
+            this.startPolling(controller.signal, this.fallbackPollMs);
           },
           onOpen: () => {
             this.setStatus("live");
+            // SSE 只推「运行时/pendingUi」相关变化，会话列表得靠轮询兜底
+            this.startPolling(controller.signal, this.fallbackPollMs);
           },
         });
         // 服务端正常收尾：退避后重连
@@ -183,12 +221,23 @@ export class StateStore {
     this.setStatus(this.status === "auth-required" ? "auth-required" : "closed");
   }
 
-  private startPolling(signal: AbortSignal): void {
-    if (this.pollTimer) return;
+  /**
+   * 启动轮询。
+   * intervalMs 不同会重建定时器：SSE 不通时用 5s 快速轮询，SSE 正常时退到 25s 兜底。
+   */
+  private startPolling(signal: AbortSignal, intervalMs: number = this.pollMs): void {
+    if (this.pollTimer && this.pollIntervalMs === intervalMs) return;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    this.pollIntervalMs = intervalMs;
     this.pollTimer = setInterval(() => {
       if (signal.aborted || !this.running) return;
+      // 后台标签页 / 息屏时不做无谓的全量拉取，回到前台会立即补一次
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       void this.refresh().catch((error: unknown) => this.options.onError?.(error));
-    }, this.pollMs);
+    }, intervalMs);
   }
 
   stop(): void {
@@ -199,6 +248,8 @@ export class StateStore {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    this.pollIntervalMs = 0;
+    this.detachVisibility();
     this.setStatus("closed");
   }
 }
