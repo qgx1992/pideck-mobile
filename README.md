@@ -1,41 +1,85 @@
 # pideck-mobile
 
-把 PiDeck 桌面端的「Web 服务」变成一个**可独立发 App 的客户端核心**：配对、状态同步、发消息、流式渲染、运行时控制、ask 卡片应答，全部只依赖 `fetch` + `AbortController`。
+把 PiDeck 桌面端的「Web 服务」变成一个**可独立发 App 的客户端**：配对、状态同步、发消息、流式渲染、运行时控制、ask 卡片应答。
 
-> 适用对象：想做一个自己的手机 App 连电脑端 PiDeck 的人。
-> 不包含：UI 组件、导航、原生壳。这些由你在 React Native / Capacitor / Flutter 里选型。
+仓库里有两个产物：`src/` 是框架无关的协议核心，`app/` 是可直接打 APK 的 Capacitor 客户端。全部只依赖 `fetch` + `AbortController`，无运行时依赖。
 
-已对照 **PiDeck 0.9.7（Windows）** 的实机行为核验，`docs/web-api.md` 是整理出的接口契约初稿。
+已对照 **PiDeck 0.9.7（Windows）** 的实机行为核验，`docs/web-api.md` 是整理出的接口契约。
 
 ---
 
-## 仓库里的两个可运行产物
+## 两个可运行产物
 
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
-| `src/`（本目录） | 协议与状态核心 + 探针 CLI | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端外壳（Vite + Capacitor） | `cd app && npm run dev` |
+| `src/` | 协议与状态核心 + 探针 CLI（**51 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
+| `app/` | 手机客户端（Vite + Capacitor，**184 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
 ## 目录结构
 
 ```
-src/
+src/                        协议核心（与 UI 无关，RN / Capacitor / Flutter 都能用）
 ├─ api/
-│  ├─ sse.ts       增量 SSE 解析 + 流式 UTF-8 解码（含 Hermes 无 TextDecoder 的降级）
-│  ├─ frames.ts    会话流帧 → ChatBlock[]（文本/思考/工具）
-│  ├─ client.ts    PiDeckClient：全部已核实端点 + 错误分类
-│  ├─ errors.ts    auth / offline / runtime / http / protocol 五类错误
-│  └─ backoff.ts   指数退避 + 抖动
-├─ state/store.ts  全局状态仓（SSE 优先，不支持流式时退化 ETag 轮询）
-├─ runtime/target.ts  {sessionId, agentId, runtimeGeneration} 三元组
-├─ session.ts      SessionChannel：常驻流 + 发送 + 断线重连
-├─ pairing.ts      二维码/手填链接 → { baseUrl, token }
-└─ cli/probe.ts    零依赖探针 CLI（验证协议用）
-docs/web-api.md    接口契约初稿（可整理后向 PiDeck 提 PR）
-tests/             node --test 单测（50 条）
+│  ├─ sse.ts                增量 SSE 解析 + 流式 UTF-8 解码（含 Hermes 无 TextDecoder 的降级）
+│  ├─ frames.ts             会话流帧 → ChatBlock[]（文本/思考/工具）
+│  ├─ client.ts             PiDeckClient：全部已核实端点 + 错误分类
+│  ├─ errors.ts             auth / offline / runtime / http / protocol 五类错误
+│  └─ backoff.ts            指数退避 + 抖动
+├─ state/store.ts           全局状态仓（SSE 优先，不支持流式时退化 ETag 轮询）
+├─ runtime/target.ts        {sessionId, agentId, runtimeGeneration} 三元组
+├─ session.ts               SessionChannel：常驻流 + 发送 + 断线重连
+├─ pairing.ts               二维码/手填链接 → { baseUrl, token }
+└─ cli/probe.ts             零依赖探针 CLI
+
+app/                        手机客户端（Capacitor 7 / Android）
+├─ src/main.ts              接线：配对 / 主界面 / 发送 / 停止
+├─ src/platform/            fetch 分流、主题、安全区、导航栏、配对持久化
+├─ src/ui/                  侧栏、对话、ask 卡片、@ 引用、/ 命令、工作区、模型选择
+├─ android/                 Android 工程（含导航栏插件与图标定制）
+├─ scripts/                 APK 构建、图标生成、验证脚本
+└─ assets-src/              图标源图（1024 / 512 / 192）
+
+docs/web-api.md             接口契约（可整理后向 PiDeck 提 PR）
+docs/issue-*.md             已提交给上游的两个缺陷草稿
 ```
+
+---
+
+## App 已实现的功能
+
+**侧栏**
+- 项目分组 + 组内会话，按 `updatedAt` 倒序
+- 默认只显示最近 6 个，其余折叠；展开/收起是显式意图，优先于自动展开
+- 运行中的会话有绿色呼吸条与圆点；分组折叠时项目头也会显示
+- DSH 会话带蓝色徽章与淡蓝底
+- 长按会话/项目 → 重命名、复制、导出 HTML、删除、移除项目
+
+**对话**
+- 流式渲染，工具调用与思考收进「执行过程」折叠块（默认收起）
+- 自动剥离正文里的 `<thinking>` 标签
+- 发送即本地回显，结束后重拉历史并清空流式区
+- 会话切换保留各自草稿
+- 悬浮「历史」按钮：列出可跳转的消息，点一条滚动定位并高亮
+
+**输入框**
+- `@` 文件引用（逐层浏览项目目录）、`/` 斜线命令（运行时命令 + 提示词库 + 内置）
+- 模型 / 思考档位切换（无运行时先自动激活）
+- 发送与停止合并为一个按钮，按会话状态切换
+
+**右侧工作区**
+- Git：分支、变更分组、提交历史
+- 文件：逐层浏览、内容预览（>512 KB 不预览）、行尾 `@` 直接引用
+
+**AI 提问卡片**
+- `select`（选项带描述、可多选）、`confirm`、`input`、`editor`、`batch_ask`（逐题作答 → 审阅 → 统一提交）
+- 允许留空：批量每题可「跳过」，单题按钮变「留空提交」
+- 审阅页三态：未回答（红）/（留空）（灰）/ 实际内容
+
+**外观与系统**
+- 主题三档（浅色 / 深色 / 跟随系统），状态栏与导航栏同步
+- 图标以桌面端为基础重绘（深色渐变底 + 白色 Pi + 品牌蓝 i 点）
 
 ---
 
@@ -44,10 +88,11 @@ tests/             node --test 单测（50 条）
 ### 1. 装依赖
 
 ```bash
-npm install
+npm install          # 协议核心
+cd app && npm install # 客户端
 ```
 
-### 2. 先在电脑上准备好入口
+### 2. 电脑上准备好入口
 
 桌面端 → 设置 → Web 服务 → 打开「局域网 Web 服务」，建议保持「启用访问令牌」开启。
 然后用「扫码访问」的二维码/链接（里面已带 token），或走 Tailscale 拿到 `https://xxx.ts.net` 再自己拼 `?token=`。
@@ -55,19 +100,10 @@ npm install
 ### 3. 用探针验证（不写代码就能确认链路通）
 
 ```bash
-# 探活 + 确认对面确实是 PiDeck
 node src/cli/probe.ts health --pair "http://192.168.1.20:8765/?token=<令牌>"
-
-# 看项目/会话/运行时概览
 node src/cli/probe.ts state --pair "..."
-
-# 发一条消息并实时打印流式输出
 node src/cli/probe.ts send --pair "..." --session <sessionId> "帮我看下 CI 为什么挂"
-
-# 只看某个会话的实时流
 node src/cli/probe.ts tail --pair "..." --session <sessionId>
-
-# 中止当前轮
 node src/cli/probe.ts stop --pair "..." --session <sessionId>
 ```
 
@@ -76,9 +112,20 @@ node src/cli/probe.ts stop --pair "..." --session <sessionId>
 ### 4. 测试与类型检查
 
 ```bash
-npm test        # node --test（Node ≥ 22.6 直接跑 .ts）
-npm run typecheck
+npm test && npm run typecheck                 # 核心：51 条
+cd app && npm test && npm run typecheck       # 客户端：184 条
+cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```
+
+### 5. 打包 APK
+
+```bash
+cd app
+npm run apk           # build web → cap copy → gradlew assembleDebug
+npm run publish:apk   # 复制到 ../apk/ 并刷新 SHA256SUMS.txt
+```
+
+需要 JDK 21 + Android SDK。`app/README.md` 里记了本机环境路径、镜像配置与踩过的坑。
 
 ---
 
@@ -115,14 +162,25 @@ const target = store.targetOf(sessionId);
 if (target) await channel.stopRun(target);
 ```
 
-### 回答 ask_question / 权限确认卡片
+### 回答 ask 卡片（两种格式，别弄混）
 
 ```ts
-for (const pending of store.pendingFor(sessionId)) {
-  // pending.method: select | confirm | input | editor | batch_ask
-  await client.respondUi(pending, { value: "允许" });
-}
+// 单题：value 就是原始值
+await client.respondUi(pending, { value: "允许" });      // select / input / editor
+await client.respondUi(pending, { confirmed: true });     // confirm
+await client.respondUi(pending, { cancelled: true });     // 取消
+
+// batch_ask：必须提交 JSON 字符串，否则扩展 JSON.parse 失败会判为「已取消」
+await client.respondUi(pending, {
+  value: JSON.stringify({
+    answers: [
+      { id: "q1", type: "select", value: "test", label: "测试", wasCustom: false },
+    ],
+  }),
+});
 ```
+
+`batch_ask` 的格式来自桌面端 `serializeBatchAnswers`：`value` 是机器值、`label` 是显示名、`wasCustom` 标记用户是否自己输入。
 
 ### 只想一次性拿完整输出
 
@@ -146,6 +204,8 @@ console.log(reducer.blocks);
 5. **错误分五类**：`auth`（重新配对）/ `offline`（重连）/ `runtime`（刷新状态）/ `http`（提示）/ `protocol`（代码 bug），
    UI 分支才有依据。
 6. **没有 Last-Event-ID**：这是服务端现状，不是省事；所以重连流程里一定有「重新对账」这一步。
+7. **batch_ask 走 JSON**：`ask_question` 工具把整包问题塞进 `ui.input()` 的 title，
+   扩展拿到字符串后直接 `JSON.parse`——提交人类可读文本会被当成「取消」。
 
 ---
 
@@ -160,18 +220,22 @@ console.log(reducer.blocks);
 
 ## Capacitor 注意点
 
-- 直接把 PiDeck 官方 Web 端当作 `webDir` 打包时，同源请求不触发 CORS，最简单。
-- 若要自研 UI，WebView 属于**跨域**：预检只允许 `content-type`，用 `Authorization` 会失败。
-  → 用 `?token=`（仅 GET 有效）或加原生 HTTP 插件走原生栈。
+WebView 是跨域环境，而 PiDeck 的 CORS 有两个限制（已在 `app/src/platform/fetch.ts` 处理）：
+
+1. 预检只放行 `content-type`，不放行 `authorization` → GET 用 `?token=`，POST 走原生栈。
+2. `workspace` 路由（files / prompts / skills / git）**实际响应不带 CORS 头** → 这些请求必须走 `CapacitorHttp`。
+
+分流规则：**SSE 留在 WebView**（要流式响应体），其余全部走 `CapacitorHttp`（没有 CORS 概念）。
 
 ---
 
 ## 已知限制
 
-- `/api/*` 是 PiDeck 的内部接口，**没有版本号也没有兼容承诺**。升级桌面端后请重跑 `npm test` 与探针。
-- `/api/health` 不返回版本，客户端无法判断对面版本；建议向上游提 PR 增加 `version`。
+- `/api/*` 是 PiDeck 的内部接口，**没有版本号也没有兼容承诺**。升级桌面端后请重跑测试与探针。
+- `/api/health` 不返回版本，客户端无法判断对面版本；已向上游提 issue 建议增加 `version`。
 - 服务端没有推送通道：App 在后台无法收到「任务完成」通知，只能前台 SSE 或自己做轮询。
-- 文件 / Git / 提示词等端点只做了透传，返回形状尚未逐字段固化。
+- 通过 Web API 删除会话后桌面端列表不会立即刷新（上游缺 IPC 广播，见 `docs/issue-delete-sync.md`）。
+- DSH 会话的历史读取依赖 DSH runtime；runtime 未就绪时该接口返回 500。
 
 ## 升级 PiDeck 后的回归清单
 
@@ -179,4 +243,4 @@ console.log(reducer.blocks);
 2. `state` → `projects/sessions/runtimes/pendingUiRequests` 四个字段都在
 3. `tail` 一个历史会话 → 帧仍是 `data: {...}` + `[DONE]`
 4. `send` → 文本 delta 正常、`finish` 后状态正确
-5. `npm test` 全绿
+5. 两套测试全绿：`npm test` + `cd app && npm test`
