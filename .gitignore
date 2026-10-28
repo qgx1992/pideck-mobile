@@ -1,0 +1,11 @@
+node_modules/
+*.log
+.env
+.DS_Store
+
+# build artifacts (APK not for VCS)
+apk/
+
+# 调试临时文件
+*.tmp.json
+st*.json

@@ -1,0 +1,22 @@
+{
+  "name": "pideck-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Portable client core for PiDeck's web service: auth, state, session streaming, runtime control.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "probe": "node src/cli/probe.ts",
+    "test": "node --test \"tests/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "@types/node": "^22.10.0"
+  },
+  "engines": {
+    "node": ">=22.6"
+  }
+}

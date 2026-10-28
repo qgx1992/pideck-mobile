@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="theme-color" content="#18181b" />
+    <title>PiDeck</title>
+    <!-- 首帧前先把主题写到 <html>，避免深色用户看到一瞬白屏 -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("pideck-app-theme");
+          var dark = saved === "dark" || (saved !== "light" && !window.matchMedia("(prefers-color-scheme: light)").matches);
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+          try {
+            if (window.Capacitor && window.Capacitor.getPlatform() === "android") {
+              document.documentElement.dataset.platform = "android";
+            }
+          } catch (e) {}
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", dark ? "#18181b" : "#f7f7f9");
+        } catch (e) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

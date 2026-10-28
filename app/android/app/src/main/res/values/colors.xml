@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#18181b</color>
+    <color name="colorPrimaryDark">#18181b</color>
+    <color name="colorAccent">#4f8cff</color>
+    <!-- 与 App 默认深色主题一致：状态栏/导航栏初值，运行时由 @capacitor/status-bar 覆盖 -->
+    <color name="appBackgroundDark">#18181b</color>
+    <color name="appBackgroundLight">#f7f7f9</color>
+</resources>
