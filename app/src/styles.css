@@ -812,6 +812,8 @@ button {
   display: none;
   touch-action: none;
   overscroll-behavior: contain;
+  /* 拖动时由 attachDrawerSwipe 临时设 inline opacity */
+  transition: opacity 0.12s linear;
 }
 
 .body.show-workspace .workspace-scrim {
@@ -1095,6 +1097,12 @@ button {
 
   .body.show-sidebar .sidebar {
     transform: translateX(0);
+  }
+
+  /* 拖动时由 edge-swipe 临时设 inline display/opacity；
+     打开后回到 .show-sidebar 接管 */
+  .scrim {
+    transition: opacity 0.12s linear;
   }
 
   .body.show-sidebar .scrim {

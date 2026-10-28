@@ -58,6 +58,8 @@ import {
 import type { ModelPickerSection } from "./ui/model-picker.ts";
 import { h, clear, toast } from "./ui/dom.ts";
 import { attachPressable } from "./ui/press.ts";
+import { attachDrawerGestures } from "./ui/drawer-gestures.ts";
+import type { DrawerOpenState } from "./ui/drawer-gestures.ts";
 import type { ChannelStatus } from "@core/session.ts";
 
 const root = document.getElementById("app");
@@ -423,6 +425,38 @@ function renderMain(): void {
     closeWorkspacePanel(); // 打开左侧栏时收起右侧工作区
     body.classList.add("show-sidebar");
   };
+
+  // 窄屏手势：左右两个抽屉由同一个控制器管理，保证互斥——
+  // 已有一侧打开时，反方向手势是「关闭它」，而不是去开另一侧。
+  disposers.push(
+    attachDrawerGestures({
+      isEnabled: () =>
+        isNarrowScreen() &&
+        !workspaceOpen &&
+        !document.querySelector(".sheet-backdrop"),
+      currentOpen: (): DrawerOpenState => {
+        if (body.classList.contains("show-sidebar")) return "left";
+        if (body.classList.contains("show-workspace")) return "right";
+        return "none";
+      },
+      left: {
+        drawer: sidebar,
+        scrim,
+        applyOpen: () => {
+          openDrawer();
+        },
+        applyClose: () => closeDrawer(),
+      },
+      right: {
+        drawer: wsPanel,
+        scrim: wsScrim,
+        applyOpen: () => {
+          void openWorkspacePanel();
+        },
+        applyClose: () => closeWorkspacePanel(),
+      },
+    }),
+  );
 
   menuBtn.addEventListener("click", () => {
     // 窄屏：抽屉开合；宽屏：侧栏显示/收起（收起后靠这个按钮恢复）
