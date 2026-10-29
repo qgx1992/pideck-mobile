@@ -16,7 +16,7 @@
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
 | `src/` | 协议与状态核心 + 探针 CLI（**56 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（Vite + Capacitor，**324 条测试**） | `cd app && npm run dev` / `npm run apk` |
+| `app/` | 手机客户端（Vite + Capacitor，**367 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
@@ -73,6 +73,9 @@ docs/issue-*.md             已提交给上游的两个缺陷草稿
 - **正文按 Markdown 渲染**：粗体/斜体/行内码/围栏代码块（带语言标签、复制、语法高亮）/
   有序无序与任务列表/表格/引用/标题，单换行按 GFM 断行
 - 自动剥离正文里的 `<thinking>` 标签
+- **消息里的图片**：从历史消息的 `parts` / `images` 里挖出来渲染成缩略图，点开看原图
+- **长按单条消息**：复制 / 编辑 / 改完重发 / 从这里分叉 / 删除（删除需二次确认）
+- **分支家族条**：会话被 fork 过后，对话上方显示家族链，点一下切到那一支
 - 发送即本地回显，结束后重拉历史并清空流式区
 - 会话切换保留各自草稿
 - 输入框右下角「历史」按钮：列出可跳转的消息，点一条滚动定位并高亮
@@ -83,7 +86,12 @@ docs/issue-*.md             已提交给上游的两个缺陷草稿
   两者内嵌在输入框左下角
 - 模型 / 思考档位切换（无运行时先自动激活），模型面板支持搜索（名称 / ID / 供应商）
 - 上下文用量：环形百分比 + 明细面板（输入/输出/缓存/花费）+ 一键压缩上下文
+- **供应商额度**：面板里手动查询余额/套餐用量（`GET /api/usage/:provider`），未开启时给引导
+- **发图片**：相册/拍照选图，发送前自动压到长边 1600 / JPEG 0.82，最多 4 张，缩略图可单张移除
+- **运行中排队 / 插话**：运行中再发消息可选「排队」（`followUp`，等这轮结束）或
+  「插话」（`steer`，立刻插进当前轮改方向）；主按钮仍是「停止」，发送走旁边的次按钮
 - 任务清单：读 `GET /api/sessions/:id/todo`，显示进度与「进行中」，可折叠
+- **子代理活动条**：读 `GET /api/sessions/:id/subagents`，显示类型/描述/状态与结果，5s 轮询
 - 发送与停止合并为一个按钮，按会话状态切换
 
 **右侧工作区**
@@ -138,7 +146,7 @@ node src/cli/probe.ts stop --pair "..." --session <sessionId>
 
 ```bash
 npm test && npm run typecheck                 # 核心：56 条
-cd app && npm test && npm run typecheck       # 客户端：324 条
+cd app && npm test && npm run typecheck       # 客户端：367 条
 cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```
 

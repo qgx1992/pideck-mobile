@@ -894,6 +894,65 @@ body.barcode-scanner-active .scan-overlay {
   display: none;
 }
 
+/* ---------------------------- 分支家族条 ---------------------------- */
+
+.branch-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 6px 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--bg-soft) 70%, transparent);
+  scrollbar-width: none;
+}
+
+.branch-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.branch-icon {
+  flex: none;
+  font-size: 13px;
+  color: var(--text-dim);
+  opacity: 0.8;
+}
+
+.branch-chip {
+  flex: none;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.branch-chip.is-forked {
+  border-style: dashed;
+}
+
+.branch-chip.is-active {
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+  background: color-mix(in oklab, var(--accent) 14%, var(--bg));
+  font-weight: 600;
+}
+
+/* 可长按的消息：给一点按压反馈，否则用户不知道这里能长按 */
+.msg--actionable {
+  -webkit-touch-callout: none;
+}
+
+.msg--actionable:active {
+  opacity: 0.92;
+}
+
 /* 宽屏收起侧栏后，header 里的按钮要能把它叫回来 */
 .main.sidebar-hidden .header .icon-btn {
   display: inline-flex;
@@ -1493,6 +1552,61 @@ body.barcode-scanner-active .scan-overlay {
   padding-left: 2px;
 }
 
+/* ---------------------------- 消息里的图片 ---------------------------- */
+
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  padding-left: 2px;
+}
+
+.msg-image {
+  width: 128px;
+  height: 128px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  cursor: zoom-in;
+}
+
+.msg-image:active {
+  opacity: 0.85;
+}
+
+/* 图片放大：全屏黑底，点任意处关闭 */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(16px + var(--safe-top)) 16px calc(16px + var(--safe-bottom));
+}
+
+.lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: calc(12px + var(--safe-top));
+  right: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-weight: 600;
+}
+
 /* ---------------------------- 执行过程（折叠） ---------------------------- */
 
 .process {
@@ -1698,6 +1812,59 @@ body.barcode-scanner-active .scan-overlay {
   outline: none;
   border-color: var(--border);
   border-color: color-mix(in oklab, var(--accent) 60%, var(--border));
+}
+
+/* 待发送图片的缩略图行（在输入框上方，有图才出现） */
+.composer-attachments {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 2px 8px;
+  scrollbar-width: none;
+}
+
+.composer-attachments::-webkit-scrollbar {
+  display: none;
+}
+
+.attach {
+  position: relative;
+  flex: none;
+  width: 64px;
+}
+
+.attach-img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  display: block;
+}
+
+.attach-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.attach-meta {
+  display: block;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 2px;
 }
 
 .composer-row {
@@ -1998,6 +2165,31 @@ body.barcode-scanner-active .scan-overlay {
   color: var(--text-dim);
 }
 
+/* 运行中的「排队 / 插话」：插话是打断式操作，用警示色区分 */
+.chip--mode {
+  font-weight: 600;
+}
+
+.chip--steer {
+  color: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 45%, var(--border));
+}
+
+/* 运行中且输入框有字时才出现的次按钮（主按钮此刻是「停止」） */
+.btn-queue {
+  flex: none;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  padding: 9px 12px;
+  white-space: nowrap;
+}
+
+.btn-queue:hover {
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+}
+
 /* ---------------------------- @ 文件引用的面包屑 ---------------------------- */
 
 .mention-crumbs {
@@ -2222,6 +2414,25 @@ body.barcode-scanner-active .scan-overlay {
 .sheet-input:focus {
   outline: none;
   border-color: var(--border);
+  border-color: color-mix(in oklab, var(--accent) 60%, var(--border));
+}
+
+.sheet-textarea {
+  width: 100%;
+  min-height: 120px;
+  max-height: 40vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font: inherit;
+  padding: 11px 12px;
+  margin-bottom: 6px;
+  resize: vertical;
+}
+
+.sheet-textarea:focus {
+  outline: none;
   border-color: color-mix(in oklab, var(--accent) 60%, var(--border));
 }
 
@@ -2727,6 +2938,174 @@ body.barcode-scanner-active .scan-overlay {
 
 .todo-item.is-in_progress .todo-text {
   color: var(--text);
+  font-weight: 600;
+}
+
+/* ---------------------------- 子代理活动条 ---------------------------- */
+
+.subagent-strip {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+  margin-bottom: 2px;
+}
+
+.subagent-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-align: left;
+}
+
+.subagent-head .subagent-icon {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.subagent-strip.has-active .subagent-icon {
+  color: var(--accent);
+  animation: todo-breathe 1.8s ease-in-out infinite;
+}
+
+.subagent-strip.has-failure .subagent-head {
+  color: var(--danger);
+}
+
+.subagent-label {
+  flex: none;
+}
+
+.subagent-summary {
+  flex: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 有子代理在跑：头部右侧一个小脉冲点 */
+.subagent-pulse {
+  display: none;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.subagent-strip.has-active .subagent-pulse {
+  display: inline-block;
+  animation: todo-pulse 1.2s ease-in-out infinite;
+}
+
+.subagent-head .chev-icon {
+  margin-left: auto;
+}
+
+.subagent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 9px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.subagent-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.subagent-type {
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+}
+
+.subagent-desc {
+  min-width: 0;
+  flex: 1 1 60%;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.subagent-status {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.subagent-item.is-running .subagent-status {
+  color: var(--accent);
+}
+
+.subagent-item.is-error .subagent-status {
+  color: var(--danger);
+}
+
+.subagent-item.is-completed .subagent-status {
+  color: var(--ok);
+}
+
+.subagent-detail {
+  flex: 1 1 100%;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 120px;
+  overflow-y: auto;
+  padding-left: 2px;
+}
+
+/* ---------------------------- 供应商额度 ---------------------------- */
+
+.usage-box {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.usage-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.usage-body {
+  margin-bottom: 10px;
+}
+
+.usage-hint {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.usage-refresh {
+  width: 100%;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
   font-weight: 600;
 }
 

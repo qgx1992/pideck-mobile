@@ -29,6 +29,9 @@ import {
 } from "./platform/storage.ts";
 import type { SavedPairing } from "./platform/storage.ts";
 import { createAppFetch } from "./platform/fetch.ts";
+import { compressImageFile } from "./platform/image.ts";
+import { canAddImage, formatBytes, MAX_IMAGES, toImageAttachment } from "./ui/image-attach-model.ts";
+import type { PendingImage } from "./ui/image-attach-model.ts";
 import { decodeQrFromImageFile, scanQrFromCamera } from "./platform/qr-scan.ts";
 import type { ScanOutcome } from "./platform/qr-scan.ts";
 import { describeScanMiss, pickScannedLink } from "./ui/pairing-scan-model.ts";
@@ -36,6 +39,10 @@ import { initTheme, setThemeMode, getThemeMode, themeLabel, THEME_MODES, onTheme
 import { initSafeArea } from "./platform/safe-area.ts";
 import { sleep } from "./platform/sleep.ts";
 import { ChatView } from "./ui/chat-view.ts";
+import { messageText } from "./ui/chat-view.ts";
+import { actionsForRole, confirmTextFor } from "./ui/message-actions-model.ts";
+import type { MessageAction } from "./ui/message-actions-model.ts";
+import { branchNodes, shortBranchTitle, shouldShowBranchBar } from "./ui/branch-model.ts";
 import { buildSidebarGroups, projectLabel, resolveExpandedProjects } from "./ui/sidebar-model.ts";
 import { renderProjectGroup } from "./ui/sidebar-view.ts";
 import { buildHeaderView } from "./ui/header-model.ts";
@@ -60,6 +67,14 @@ import {
 } from "./ui/model-picker.ts";
 import type { ModelPickerSection } from "./ui/model-picker.ts";
 import { h, clear, toast } from "./ui/dom.ts";
+import {
+  sendModeActionLabel,
+  sendModeHint,
+  sendModeLabel,
+  streamingBehaviorFor,
+  toggleSendMode,
+} from "./ui/send-mode.ts";
+import type { SendMode } from "./ui/send-mode.ts";
 import { attachPressable } from "./ui/press.ts";
 import { attachDrawerGestures } from "./ui/drawer-gestures.ts";
 import { attachBackButton } from "./platform/back-button.ts";
@@ -82,6 +97,11 @@ import {
 } from "./ui/session-prefs.ts";
 import { countModels, filterModelSections } from "./ui/model-picker.ts";
 import { createTodoStrip } from "./ui/todo-strip.ts";
+import { createSubagentStrip } from "./ui/subagent-strip.ts";
+import { normalizeSubagents } from "./ui/subagent-model.ts";
+import type { SubagentView } from "./ui/subagent-model.ts";
+import { USAGE_REFRESH_COOLDOWN_MS, buildUsageView, formatResetAt } from "./ui/provider-usage-model.ts";
+import type { UsageView } from "./ui/provider-usage-model.ts";
 import { parseSessionTodo, shouldAutoExpand } from "./ui/todo-model.ts";
 import type { TodoView } from "./ui/todo-model.ts";
 import {
@@ -150,6 +170,11 @@ const sessionDrafts = new Map<string, string>();
 let previousRuntimes: RuntimeSnapshot[] = [];
 /** 上一次的待答卡片快照，用来检测「AI 新提问」 */
 let previousPending: PendingSnapshot[] = [];
+/**
+ * 运行中发消息的行为：排队（默认）或插话。
+ * 跨会话保留：用户选了插话，切到别的会话还在跑时应该还是插话。
+ */
+let sendMode: SendMode = "queue";
 /** 后台服务已经替我们通知过的会话（回到前台后别再弹一次） */
 const notifiedByService = new Set<string>();
 /**
@@ -451,6 +476,8 @@ interface MainRefs {
   body: HTMLElement;
   sidebarScroll: HTMLElement;
   chatRoot: HTMLElement;
+  /** 分支家族条（fork 过的会话才显示） */
+  branchBar: HTMLElement;
   composer: HTMLTextAreaElement;
   /** 主按钮：空闲时「发送」，运行中变「停止」 */
   primaryBtn: HTMLButtonElement;
@@ -460,8 +487,16 @@ interface MainRefs {
   contextBtn: HTMLButtonElement;
   contextRing: HTMLElement;
   contextText: HTMLElement;
+  /** 运行中：排队 / 插话 切换 */
+  sendModeBtn: HTMLButtonElement;
+  /** 运行中且输入框有字时的「排队发送 / 插话发送」 */
+  queueSendBtn: HTMLButtonElement;
+  /** 待发送图片的缩略图容器 */
+  attachments: HTMLElement;
   /** 任务清单条带（agent 维护的 todo） */
   todoStrip: ReturnType<typeof createTodoStrip>;
+  /** 子代理活动条（pi-subagents 插件） */
+  subagentStrip: ReturnType<typeof createSubagentStrip>;
   /** 右侧「工作区」抽屉 */
   workspacePanel: HTMLElement;
   /** 用于切换 show-workspace 类 */
@@ -519,6 +554,8 @@ function renderMain(): void {
   ]);
 
   const chatRoot = h("div", { class: "chat-body" });
+  /** 分支家族条：会话被 fork 过才出现 */
+  const branchBar = h("div", { class: "branch-bar is-hidden" });
   const composer = h("textarea", { placeholder: "输入消息…", style: `height:${COMPOSER_MIN_H}px` });
   const primaryBtn = h("button", { class: "btn btn-primary-action", text: "发送", title: "发送（Enter）" });
   const mentionBtn = h("button", { class: "chip chip--icon", text: "@", title: "引用项目内文件" });
@@ -532,9 +569,17 @@ function renderMain(): void {
     { class: "chip chip--ctx is-hidden", title: "上下文用量", "aria-label": "上下文用量" },
     [contextRing, contextText],
   );
+  // 运行中才能选「排队 / 插话」，空闲时整组隐藏
+  const sendModeBtn = h("button", { class: "chip chip--mode is-hidden", text: sendModeLabel(sendMode) });
+  const queueSendBtn = h("button", { class: "btn btn-queue is-hidden", text: sendModeActionLabel(sendMode) });
   // @ / 放在输入框内部左下角，历史按钮固定在右下角
   // （输入框底部预留一条整宽的空白带，左右按钮都落在带子里，不会压到文字）
-  const inputTools = h("div", { class: "composer-inline-tools" }, [mentionBtn, slashBtn]);
+  const attachBtn = h("button", { class: "chip chip--icon", text: "图", title: "发送图片（相册 / 拍照）" });
+  const imageInput = h("input", { type: "file" });
+  imageInput.accept = "image/*";
+  imageInput.multiple = true;
+  imageInput.hidden = true;
+  const inputTools = h("div", { class: "composer-inline-tools" }, [mentionBtn, slashBtn, attachBtn]);
   const historyFab = h("button", {
     class: "composer-fab",
     title: "跳转到历史消息",
@@ -542,20 +587,30 @@ function renderMain(): void {
     "aria-label": "跳转到历史消息",
   });
   const composerInput = h("div", { class: "composer-input" }, [composer, inputTools, historyFab]);
-  const chips = h("div", { class: "composer-chips" }, [modelBtn, thinkingBtn, contextBtn]);
+  /** 待发送的图片缩略图（有图才占位） */
+  const attachmentsEl = h("div", { class: "composer-attachments is-hidden" });
+  const chips = h("div", { class: "composer-chips" }, [modelBtn, thinkingBtn, contextBtn, sendModeBtn]);
   const todoStrip = createTodoStrip();
+  const subagentStrip = createSubagentStrip();
   // 记住用户手动折叠的选择（优先于「有进行中就自动展开」）
   todoStrip.el.querySelector(".todo-head")?.addEventListener("click", () => {
     if (!activeSessionId) return;
     const current = todoCollapsed.get(activeSessionId) ?? !shouldAutoExpand(todoView);
     todoCollapsed.set(activeSessionId, !current);
   });
+  subagentStrip.el.querySelector(".subagent-head")?.addEventListener("click", () => {
+    if (!activeSessionId) return;
+    const current = subagentCollapsed.get(activeSessionId) ?? false;
+    subagentCollapsed.set(activeSessionId, !current);
+  });
   const composerEl = h("div", { class: "composer" }, [
+    subagentStrip.el,
     todoStrip.el,
+    attachmentsEl,
     composerInput,
-    h("div", { class: "composer-row" }, [chips, primaryBtn]),
+    h("div", { class: "composer-row" }, [chips, queueSendBtn, primaryBtn]),
   ]);
-  const chat = h("section", { class: "chat" }, [header, chatRoot, composerEl]);
+  const chat = h("section", { class: "chat" }, [header, branchBar, chatRoot, composerEl]);
 
   // 右侧「工作区」抽屉（对齐 Web 端 workspaceDrawer：Git / 文件 两个 Tab）
   const wsPanel = h("aside", { class: "workspace-panel" });
@@ -568,6 +623,7 @@ function renderMain(): void {
     onRespond: (pending, response) => {
       void respondToUi(pending, response);
     },
+    onMessageAction: (messageId, role) => openMessageActions(messageId, role),
   });
   chatView.setEmptyState("选择左侧会话，或直接输入消息新建一个。");
 
@@ -580,6 +636,7 @@ function renderMain(): void {
     body,
     sidebarScroll,
     chatRoot,
+    branchBar,
     composer,
     primaryBtn,
     modelBtn,
@@ -587,7 +644,11 @@ function renderMain(): void {
     contextBtn,
     contextRing,
     contextText,
+    sendModeBtn,
+    queueSendBtn,
+    attachments: attachmentsEl,
     todoStrip,
+    subagentStrip,
     workspacePanel: wsPanel,
     hostBody: body,
     scrim,
@@ -686,6 +747,21 @@ function renderMain(): void {
     if (isRunActive()) void stop();
     else void send();
   });
+  sendModeBtn.addEventListener("click", () => {
+    sendMode = toggleSendMode(sendMode);
+    renderComposerState();
+  });
+  queueSendBtn.addEventListener("click", () => {
+    void send();
+  });
+  attachBtn.addEventListener("click", () => imageInput.click());
+  imageInput.addEventListener("change", () => {
+    const files = [...(imageInput.files ?? [])];
+    // 清掉 value，否则同一张图选第二次不触发 change
+    imageInput.value = "";
+    if (files.length === 0) return;
+    void addImageFiles(files);
+  });
 
   searchInput.addEventListener("input", () => {
     sidebarQuery = searchInput.value;
@@ -701,7 +777,8 @@ function renderMain(): void {
 
   composer.addEventListener("input", () => {
     autosize(composer);
-    renderPrimaryButton();
+    // 输入变化会影响「运行中发送」按钮的显隐，所以走完整的 composer 状态
+    renderComposerState();
     if (activeSessionId) {
       const text = composer.value;
       if (text.trim()) sessionDrafts.set(activeSessionId, text);
@@ -774,6 +851,7 @@ function renderMain(): void {
   renderSidebar(store.state);
   renderHeader(store.state);
   renderComposerState();
+  renderAttachments();
   updateConnectionDot(store.getStatus());
 
   // 启动后停在会话界面，不再自动抽出侧栏：
@@ -791,6 +869,78 @@ const COMPOSER_MAX_H = 180;
 function autosize(el: HTMLTextAreaElement): void {
   el.style.height = "auto";
   el.style.height = `${Math.min(COMPOSER_MAX_H, Math.max(COMPOSER_MIN_H, el.scrollHeight))}px`;
+}
+
+/* ---------------------------- 待发送图片 ---------------------------- */
+
+/**
+ * 每个会话各自的待发送图片（与草稿同一思路）：切走再切回来不应该丢。
+ * 键用 sessionId，未选会话时用空串（新建会话时那些图会跟着新会话走）。
+ */
+const sessionImages = new Map<string, PendingImage[]>();
+
+function imageKey(): string {
+  return activeSessionId ?? "";
+}
+
+function currentImages(): PendingImage[] {
+  const key = imageKey();
+  let list = sessionImages.get(key);
+  if (!list) {
+    list = [];
+    sessionImages.set(key, list);
+  }
+  return list;
+}
+
+function clearCurrentImages(): void {
+  sessionImages.delete(imageKey());
+}
+
+/** 重画缩略图行；没有图就整行隐藏，不占输入框高度。 */
+function renderAttachments(): void {
+  if (!refs) return;
+  const list = currentImages();
+  clear(refs.attachments);
+  refs.attachments.classList.toggle("is-hidden", list.length === 0);
+
+  list.forEach((image, index) => {
+    const thumb = h("img", { class: "attach-img", "aria-label": image.name ?? `图片 ${index + 1}` });
+    thumb.src = image.dataUrl;
+    thumb.alt = image.name ?? `图片 ${index + 1}`;
+    const remove = h("button", { class: "attach-remove", text: "×", "aria-label": "移除这张图片" });
+    remove.addEventListener("click", () => {
+      currentImages().splice(index, 1);
+      renderAttachments();
+      renderComposerState();
+    });
+    const item = h("div", { class: "attach" }, [
+      thumb,
+      remove,
+      h("span", { class: "attach-meta", text: formatBytes(image.bytes) }),
+    ]);
+    refs?.attachments.append(item);
+  });
+}
+
+/** 选完图就压：宁可现在花一秒，也不要发送时因为 413 失败。 */
+async function addImageFiles(files: readonly File[]): Promise<void> {
+  const list = currentImages();
+  for (const file of files) {
+    if (!file.type.startsWith("image/")) continue;
+    if (!canAddImage(list.length)) {
+      toast(`最多 ${MAX_IMAGES} 张图`);
+      break;
+    }
+    try {
+      const image = await compressImageFile(file);
+      list.push(image);
+      renderAttachments();
+      renderComposerState();
+    } catch (error) {
+      toast(describeError(error));
+    }
+  }
 }
 
 function renderHeader(state: PiDeckState): void {
@@ -821,6 +971,8 @@ function renderHeader(state: PiDeckState): void {
   }
 
   if (document.title !== view.docTitle) document.title = view.docTitle;
+
+  renderBranchBar(state);
 }
 
 function toggleProject(projectId: string): void {
@@ -900,6 +1052,18 @@ function renderComposerState(): void {
   refs.thinkingBtn.title = level ? `思考档位：${level}（${thinkingHint(level)}）` : "选择思考档位";
   refs.thinkingBtn.classList.toggle("chip--muted", !level);
 
+  // 运行中才提供「排队 / 插话」；输入框有字时额外给一个发送按钮（主按钮此刻是「停止」）
+  const running = isRunActive();
+  refs.sendModeBtn.classList.toggle("is-hidden", !running);
+  refs.sendModeBtn.textContent = sendModeLabel(sendMode);
+  refs.sendModeBtn.title = `${sendModeHint(sendMode)}（点一下切换）`;
+  refs.sendModeBtn.classList.toggle("chip--steer", sendMode === "steer");
+
+  const canQueueSend = running && (refs.composer.value.trim().length > 0 || currentImages().length > 0);
+  refs.queueSendBtn.classList.toggle("is-hidden", !canQueueSend);
+  refs.queueSendBtn.textContent = sendModeActionLabel(sendMode);
+  refs.queueSendBtn.title = sendModeHint(sendMode);
+
   renderPrimaryButton();
 }
 
@@ -918,7 +1082,7 @@ function renderPrimaryButton(): void {
   if (!refs) return;
   const btn = refs.primaryBtn;
   const running = isRunActive();
-  const hasText = refs.composer.value.trim().length > 0;
+  const hasText = refs.composer.value.trim().length > 0 || currentImages().length > 0;
 
   if (running) {
     btn.textContent = "停止";
@@ -963,6 +1127,7 @@ async function openSession(sessionId: string): Promise<void> {
   channel = null;
   stopContextPolling();
   stopTodoPolling();
+  stopSubagentPolling();
   activeSessionId = sessionId;
   sessionHistory = [];
   activeProjectId = store.session(sessionId)?.projectId ?? activeProjectId;
@@ -973,6 +1138,7 @@ async function openSession(sessionId: string): Promise<void> {
   if (refs) {
     refs.composer.value = sessionDrafts.get(sessionId) ?? "";
     autosize(refs.composer);
+    renderAttachments();
     renderPrimaryButton();
   }
 
@@ -1032,6 +1198,7 @@ async function openSession(sessionId: string): Promise<void> {
   channel.start();
   startContextPolling(sessionId);
   startTodoPolling(sessionId);
+  startSubagentPolling(sessionId);
 
   // 切会话后头部（标题/状态/模型）必须立刻重画，否则会停留在上一个会话
   renderHeader(store.state);
@@ -1170,6 +1337,7 @@ async function resumeAfterBackground(): Promise<void> {
   void learnRuntimePrefs(sessionId, true);
   void refreshContextUsage(sessionId);
   void refreshTodo(sessionId);
+  void refreshSubagents(sessionId);
   renderComposerState();
   renderPrimaryButton();
   renderHeader(runtime.store.state);
@@ -1282,6 +1450,70 @@ function renderTodoStrip(): void {
   // 用户手动收起过就听用户的；否则有「进行中」就自动展开
   const collapsed = remembered ?? !shouldAutoExpand(todoView);
   refs.todoStrip.update(todoView, { collapsed });
+}
+
+/* ---------------------------- 子代理活动条 ---------------------------- */
+
+let subagentView: SubagentView[] = [];
+let subagentPollTimer: number | null = null;
+let subagentPollSession: string | null = null;
+const subagentCollapsed = new Map<string, boolean>();
+
+function stopSubagentPolling(): void {
+  if (subagentPollTimer !== null) {
+    window.clearTimeout(subagentPollTimer);
+    subagentPollTimer = null;
+  }
+  subagentPollSession = null;
+  subagentView = [];
+  renderSubagentStrip();
+}
+
+/**
+ * 拉一次子代理列表。
+ *
+ * 没装 pi-subagents 插件的机器会返回 503，这里当作「没有子代理」静默处理：
+ * 这是能力缺失，不是错误，不该弹 toast。
+ */
+async function refreshSubagents(sessionId: string): Promise<void> {
+  if (!runtime || sessionId !== activeSessionId) return;
+  try {
+    const raw = await runtime.client.listSubagents(sessionId);
+    if (sessionId !== activeSessionId) return;
+    subagentView = normalizeSubagents(raw);
+    renderSubagentStrip();
+  } catch {
+    if (sessionId !== activeSessionId) return;
+    subagentView = [];
+    renderSubagentStrip();
+  }
+}
+
+function startSubagentPolling(sessionId: string): void {
+  stopSubagentPolling();
+  subagentPollSession = sessionId;
+
+  const schedule = (): void => {
+    if (subagentPollSession !== sessionId) return;
+    subagentPollTimer = window.setTimeout(() => void tick(), 5_000);
+  };
+
+  const tick = async (): Promise<void> => {
+    if (subagentPollSession !== sessionId) return;
+    const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    if (!hidden) await refreshSubagents(sessionId);
+    schedule();
+  };
+
+  void tick();
+}
+
+function renderSubagentStrip(): void {
+  if (!refs) return;
+  const sessionId = activeSessionId;
+  const remembered = sessionId ? subagentCollapsed.get(sessionId) : undefined;
+  const collapsed = remembered ?? false;
+  refs.subagentStrip.update(subagentView, { collapsed });
 }
 
 /* ---------------------------- 上下文用量 ---------------------------- */
@@ -1406,7 +1638,102 @@ function openContextSheet(): void {
     const compactBtn = h("button", { class: "btn ctx-compact", text: "压缩上下文" });
     compactBtn.addEventListener("click", () => void compactContext(sessionId));
     sheet.append(compactBtn);
+    sheet.append(buildUsageSection(sessionId, usage));
   });
+}
+
+/* ---------------------------- 供应商额度 ---------------------------- */
+
+/** 查询结果缓存：同一个会话重新打开面板不该再打一次供应商计费接口 */
+const usageCache = new Map<string, { view: UsageView; at: number }>();
+
+function providerOf(sessionId: string, usage: ContextUsage | null): string {
+  const session = runtime?.store.session(sessionId);
+  return (usage?.provider || session?.model?.provider || "").trim();
+}
+
+function backendOf(sessionId: string): "pi" | "dsh" {
+  return runtime?.store.session(sessionId)?.backend === "dsh" ? "dsh" : "pi";
+}
+
+function renderUsageBody(body: HTMLElement, view: UsageView | null, loading: boolean): void {
+  clear(body);
+  if (loading) {
+    body.append(h("div", { class: "usage-hint", text: "正在查询…" }));
+    return;
+  }
+  if (!view) {
+    body.append(h("div", { class: "usage-hint", text: "点下面的按钮查询（会访问供应商的计费接口）" }));
+    return;
+  }
+  if (!view.available) {
+    body.append(h("div", { class: "usage-hint", text: view.hint ?? "没有可展示的额度" }));
+    return;
+  }
+  const list = h("ul", { class: "ctx-rows" });
+  for (const line of view.lines) {
+    list.append(
+      h("li", { class: "ctx-row" }, [
+        h("span", { class: "ctx-row-label", text: line.label }),
+        h("span", { class: "ctx-row-value", text: line.value }),
+      ]),
+    );
+  }
+  body.append(list);
+  if (view.at) {
+    body.append(h("div", { class: "usage-hint", text: `数据时间：${formatResetAt(new Date(view.at).toISOString())}` }));
+  }
+}
+
+/**
+ * 上下文面板里的「供应商额度」块。
+ *
+ * 查询是用户显式动作：探针会真的访问供应商计费接口，不能每次开面板都打。
+ * 手动刷新有 30s 冷却，避免连点。
+ */
+function buildUsageSection(sessionId: string, usage: ContextUsage | null): HTMLElement {
+  const provider = providerOf(sessionId, usage);
+  const box = h("div", { class: "usage-box" });
+  if (!provider) {
+    box.append(h("div", { class: "usage-title", text: "供应商额度" }));
+    box.append(h("div", { class: "usage-hint", text: "当前会话没有模型供应商信息" }));
+    return box;
+  }
+
+  box.append(h("div", { class: "usage-title", text: `供应商额度 · ${provider}` }));
+  const body = h("div", { class: "usage-body" });
+  const btn = h("button", { class: "btn usage-refresh", text: "查询额度" });
+  box.append(body, btn);
+
+  const cached = usageCache.get(provider);
+  renderUsageBody(body, cached?.view ?? null, false);
+
+  let lastAt = cached?.at ?? 0;
+  btn.addEventListener("click", () => {
+    const now = Date.now();
+    if (now - lastAt < USAGE_REFRESH_COOLDOWN_MS) {
+      toast("刚查过，稍等一下再刷（保护供应商接口）");
+      return;
+    }
+    lastAt = now;
+    void (async () => {
+      if (!runtime) return;
+      btn.disabled = true;
+      renderUsageBody(body, null, true);
+      try {
+        const raw = await runtime.client.getProviderUsage(provider, backendOf(sessionId));
+        const view = buildUsageView(raw, provider);
+        usageCache.set(provider, { view, at: Date.now() });
+        renderUsageBody(body, view, false);
+      } catch (error) {
+        renderUsageBody(body, { available: false, provider, lines: [], hint: describeError(error) }, false);
+      } finally {
+        btn.disabled = false;
+      }
+    })();
+  });
+
+  return box;
 }
 
 async function compactContext(sessionId: string): Promise<void> {
@@ -1538,7 +1865,10 @@ async function createSession(projectId?: string): Promise<void> {
 
 async function send(): Promise<void> {
   if (!runtime || !refs) return;
-  const text = refs.composer.value.trim();
+  const images = currentImages().slice();
+  const typed = refs.composer.value.trim();
+  // 只发图不写字时给服务端一句自然的话：/prompt 的 message 不能为空（400 messageRequired）
+  const text = typed || (images.length > 0 ? "看下这张图" : "");
   if (!text) return;
   refs.composer.value = "";
   autosize(refs.composer);
@@ -1565,8 +1895,15 @@ async function send(): Promise<void> {
 
     // 先把自己的提问显示出来，不要等服务端落盘
     chatView?.clearLive();
-    chatView?.appendLocalUser(text);
-    await current.send(text);
+    chatView?.appendLocalUser(typed || text, images.map((image) => image.dataUrl));
+    await current.send(text, {
+      // 运行中才带：空闲时排队/插话都等于普通发送
+      streamingBehavior: streamingBehaviorFor(isRunActive(), sendMode),
+      ...(images.length > 0 ? { images: images.map(toImageAttachment) } : {}),
+    });
+    // 发出去了才清掉缩略图（发送失败时图还在，可以直接重试）
+    clearCurrentImages();
+    renderAttachments();
     renderComposerState();
   } catch (error) {
     toast(describeError(error));
@@ -2633,6 +2970,201 @@ async function applyThinking(level: string): Promise<void> {
 
 function closeSheet(): void {
   document.querySelectorAll(".sheet-backdrop").forEach((node) => node.remove());
+}
+
+/* ---------------------------- 分支家族条 ---------------------------- */
+
+/**
+ * 会话被 fork 过时，在对话上方显示家族链（桌面端 WebBranchBar 同语义）。
+ * 只有一条会话时整条隐藏，不占屏幕。
+ */
+function renderBranchBar(state: PiDeckState): void {
+  if (!refs) return;
+  const nodes = branchNodes(state.sessions ?? [], activeSessionId);
+  if (!shouldShowBranchBar(nodes)) {
+    refs.branchBar.classList.add("is-hidden");
+    if (refs.branchBar.childElementCount > 0) clear(refs.branchBar);
+    return;
+  }
+
+  refs.branchBar.classList.remove("is-hidden");
+  clear(refs.branchBar);
+  refs.branchBar.append(h("span", { class: "branch-icon", text: "⑂", "aria-hidden": "true" }));
+  for (const node of nodes) {
+    const active = node.id === activeSessionId;
+    refs.branchBar.append(
+      h("button", {
+        class: `branch-chip${active ? " is-active" : ""}${node.forked ? " is-forked" : ""}`,
+        text: shortBranchTitle(node.title),
+        title: `${node.title}${node.forked ? "（分叉）" : ""}`,
+        onclick: () => {
+          if (!active) void openSession(node.id);
+        },
+      }),
+    );
+  }
+}
+
+/* ---------------------------- 单条消息的动作 ---------------------------- */
+
+function findMessageById(messageId: string): WireMessage | undefined {
+  return sessionHistory.find((message) => message.id === messageId || message.entryId === messageId);
+}
+
+async function copyText(text: string): Promise<void> {
+  const value = text.trim();
+  if (!value) {
+    toast("这条消息没有可复制的文本");
+    return;
+  }
+  try {
+    await navigator.clipboard?.writeText(value);
+    toast("已复制");
+  } catch {
+    toast("复制失败：系统剪贴板不可用");
+  }
+}
+
+function openMessageActions(messageId: string, role: string): void {
+  const actions = actionsForRole(role);
+  if (actions.length === 0) return;
+  const message = findMessageById(messageId);
+  const text = message ? messageText(message) : "";
+
+  openSheet(role === "user" ? "这条提问" : "这条回答", (sheet) => {
+    for (const action of actions) {
+      sheet.append(
+        h("button", {
+          class: `sheet-item${action.danger ? " sheet-item--danger" : ""}`,
+          text: action.label,
+          onclick: () => {
+            if (action.id === "edit") {
+              openEditMessageSheet(messageId, text);
+              return;
+            }
+            void runMessageAction(action.id, messageId, text);
+          },
+        }),
+      );
+    }
+  });
+}
+
+/** 编辑：直接在弹层里改文本，保存后重拉历史。 */
+function openEditMessageSheet(messageId: string, current: string): void {
+  openSheet("编辑这条消息", (sheet) => {
+    const area = h("textarea", { class: "sheet-textarea", value: current });
+    sheet.append(
+      area,
+      h("button", {
+        class: "sheet-item sheet-item--primary",
+        text: "保存",
+        onclick: () => {
+          const next = area.value.trim();
+          if (!next) {
+            toast("内容不能为空");
+            return;
+          }
+          if (next === current.trim()) {
+            closeSheet();
+            return;
+          }
+          void runMessageAction("edit", messageId, next);
+        },
+      }),
+    );
+    setTimeout(() => area.focus(), 60);
+  });
+}
+
+/** 从 prepare-resend / fork 的返回里宽松取字段（形状未在文档里固定）。 */
+function pickResultId(result: unknown, keys: readonly string[]): string | null {
+  if (!result || typeof result !== "object") return null;
+  const record = result as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (value && typeof value === "object") {
+      const nested = (value as Record<string, unknown>).id;
+      if (typeof nested === "string" && nested.trim()) return nested.trim();
+    }
+  }
+  return null;
+}
+
+async function runMessageAction(action: MessageAction, messageId: string, text: string): Promise<void> {
+  if (!runtime || !activeSessionId) return;
+  if (action === "copy") {
+    closeSheet();
+    await copyText(text);
+    return;
+  }
+
+  // 删除不可恢复，先要一次确认
+  if (action === "delete") {
+    openSheet("删除这条消息？", (sheet) => {
+      sheet.append(
+        h("p", { class: "sheet-note", text: confirmTextFor("delete") }),
+        h("button", {
+          class: "sheet-item sheet-item--danger",
+          text: "确认删除",
+          onclick: () => void applyMessageAction("delete", messageId, text),
+        }),
+      );
+    });
+    return;
+  }
+
+  await applyMessageAction(action, messageId, text);
+}
+
+async function applyMessageAction(action: MessageAction, messageId: string, text: string): Promise<void> {
+  if (!runtime || !activeSessionId) return;
+  const sessionId = activeSessionId;
+  closeSheet();
+  try {
+    const target = await ensureRuntimeTarget(sessionId);
+
+    if (action === "resend") {
+      const result = await runtime.client.prepareResend(sessionId, target, messageId);
+      const prefill = pickResultId(result, ["text", "prefill", "message"]) ?? text;
+      if (refs && prefill) {
+        refs.composer.value = prefill;
+        autosize(refs.composer);
+        renderComposerState();
+      }
+      toast("已填回输入框，改完再发");
+      return;
+    }
+
+    if (action === "fork") {
+      const message = findMessageById(messageId);
+      const entryId =
+        message && typeof message.entryId === "string" && message.entryId ? message.entryId : messageId;
+      const result = await runtime.client.fork(sessionId, target, entryId);
+      await runtime.store.refresh();
+      renderSidebar(runtime.store.state);
+      const nextId = pickResultId(result, ["sessionId", "session", "id"]);
+      if (nextId) {
+        await openSession(nextId);
+        toast("已从这条消息分叉");
+      } else {
+        toast("已分叉，在侧栏里选新会话");
+      }
+      return;
+    }
+
+    if (action === "edit") {
+      await runtime.client.editMessage(sessionId, target, messageId, text);
+    } else if (action === "delete") {
+      await runtime.client.deleteMessage(sessionId, target, messageId);
+    }
+
+    await reloadHistory(sessionId);
+    toast(action === "edit" ? "已保存" : "已删除");
+  } catch (error) {
+    toast(describeError(error));
+  }
 }
 
 function openSheet(title: string, build: (sheet: HTMLElement) => void): void {

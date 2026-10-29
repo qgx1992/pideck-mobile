@@ -57,9 +57,18 @@ export interface PromptInput {
   requestId: string;
   message: string;
   images?: ImageAttachment[];
+  /**
+   * 运行中发消息时的行为（桌面端 ComposerArea 同源）：
+   *   - `steer`：插话——立刻把这段输入插进当前轮，改变它接下来的动作
+   *   - `followUp`：排队——等当前轮结束后作为新的一轮发出
+   * 不传（默认）由服务端自己决定；空闲时无论传哪个都等于普通发送。
+   */
+  streamingBehavior?: StreamingBehavior;
   /** 透传字段（如 agentMessage），未核实的键原样带给服务端 */
   extra?: Record<string, unknown>;
 }
+
+export type StreamingBehavior = "steer" | "followUp";
 
 export interface SseOptions {
   signal?: AbortSignal;
@@ -420,6 +429,33 @@ export class PiDeckClient {
     });
   }
 
+  /**
+   * 子代理条目（pi-subagents 插件）。
+   *
+   * 返回的每一项形如 { id, type, description, status, result?, error?, toolUses?, tokens? }；
+   * 服务端未装配能力时是 503，调用方按「没数据」处理即可。
+   */
+  async listSubagents(sessionId: string): Promise<unknown[]> {
+    const response = await this.requestJson<{ subagents?: unknown[] }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/subagents`,
+    );
+    return Array.isArray(response.subagents) ? response.subagents : [];
+  }
+
+  /**
+   * 供应商用量/余额。
+   *
+   * 「未开启用量查询 / 供应商没端点」都是 200 + success:false（不是故障），
+   * 所以这里不抛错，交给 UI 决定是否展示。
+   */
+  async getProviderUsage(provider: string, backend: "pi" | "dsh" = "pi"): Promise<unknown> {
+    const response = await this.requestJson<{ result?: unknown }>(
+      `/api/usage/${encodeURIComponent(provider)}`,
+      { query: { backend } },
+    );
+    return response.result;
+  }
+
   async getTodo(sessionId: string): Promise<unknown> {
     const body = await this.requestJson<{ todo: unknown }>(`/api/sessions/${encodeURIComponent(sessionId)}/todo`);
     return body.todo ?? null;
@@ -456,6 +492,7 @@ export class PiDeckClient {
       requestId: input.requestId,
       message: input.message,
       ...(input.images && input.images.length > 0 ? { images: input.images } : {}),
+      ...(input.streamingBehavior ? { streamingBehavior: input.streamingBehavior } : {}),
       ...(input.extra ?? {}),
     };
     const response = await this.requestJson<{ result: unknown }>(

@@ -18,7 +18,7 @@ app/
 │  │                     上下文用量、任务清单、抽屉手势
 │  └─ ...
 ├─ scripts/              APK 构建、图标生成、smoke-ui（真数据）、verify-send（mock 链路）
-└─ tests/                node:test + jsdom，324 条
+└─ tests/                node:test + jsdom，367 条
 ```
 
 ## 本地开发（浏览器里就能用）
@@ -211,7 +211,9 @@ Vite 的 `build.sourcemap: true` 会把 `.map` 一起打进 APK（约 1 MB），
 
 ## 已知缺口（下一步）
 
-1. **历史消息结构**只做了宽松提取（`parts[].text` / `content`），图片消息暂不渲染。
+1. **历史消息结构**只做了宽松提取（`parts[].text` / `content` / `images`）。
+   图片已能渲染（含点开看原图），但**流式帧里不推图片**，所以正在生成时看不到图，
+   要等这一轮结束、历史重拉后才出现。
 2. **令牌明文存 localStorage**，上架前应换 `@capacitor/preferences` + 原生加密。
 3. **后台提醒靠前台服务**：PiDeck 服务端没有推送通道，App 被冻结后只能由
    `RunWatchService` 守 `/api/events`；深度 Doze 下系统仍可能限流。
@@ -222,3 +224,6 @@ Vite 的 `build.sourcemap: true` 会把 `.map` 一起打进 APK（约 1 MB），
 8. **扫码没做真机回归**：只验证到 Gradle 编译通过 + APK 产出（构建机上没有接设备）。
    首次在真机上请重点确认两件事：无 GMS 机型能回退到自绘取景框、取景框后面真的能看到相机画面
    （后者依赖 `MainActivity` 里把 WebView 背景设成透明）。
+9. **编辑/删除/重发/分叉只在本机接口形状上验证过**：`edit-message` / `delete-message` /
+   `prepare-resend` / `fork` 的返回体在文档里没固定，客户端做了宽松取值（`text`/`prefill`/
+   `sessionId` 等），拿不到就退到本地行为。真机上请先拿一个不重要的话试一遍。

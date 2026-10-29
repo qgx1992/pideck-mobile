@@ -12,6 +12,7 @@
 import { Backoff, sleep } from "./api/backoff.ts";
 import { ChatReducer } from "./api/frames.ts";
 import { PiDeckClient } from "./api/client.ts";
+import type { StreamingBehavior } from "./api/client.ts";
 import { isAuthError } from "./api/errors.ts";
 import type { ImageAttachment, RuntimeTarget } from "./types.ts";
 
@@ -165,7 +166,13 @@ export class SessionChannel {
    */
   async send(
     text: string,
-    options: { images?: ImageAttachment[]; requestId?: string; extra?: Record<string, unknown> } = {},
+    options: {
+      images?: ImageAttachment[];
+      requestId?: string;
+      /** 运行中：steer 插话 / followUp 排队（空闲时无意义） */
+      streamingBehavior?: StreamingBehavior;
+      extra?: Record<string, unknown>;
+    } = {},
   ): Promise<unknown> {
     if (!this.running) this.start();
     await this.waitConnected(4_000);
@@ -178,6 +185,7 @@ export class SessionChannel {
       requestId,
       message: text,
       ...(options.images ? { images: options.images } : {}),
+      ...(options.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}),
       ...(options.extra ? { extra: options.extra } : {}),
     });
     this.pendingSend = promise;

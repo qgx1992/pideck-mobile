@@ -3,6 +3,9 @@
 import type { ChatBlock, PendingUiRequest, RunStatus, WireMessage } from "@core/types.ts";
 import { h, clear } from "./dom.ts";
 import { renderMarkdownInto } from "./markdown.ts";
+import { collectImageSources } from "./image-attach-model.ts";
+import { openImageLightbox } from "./image-lightbox.ts";
+import { attachPressable } from "./press.ts";
 import { perfChips } from "./perf-metrics.ts";
 import type { PerfMetrics } from "./perf-metrics.ts";
 import { createProcessGroup, isProcessBlock, summarizeProcess } from "./process-group.ts";
@@ -19,6 +22,8 @@ import type { BatchAnswer, BatchAnswerMeta } from "./ask-model.ts";
 
 export interface ChatViewHandlers {
   onRespond: (pending: PendingUiRequest, response: Record<string, unknown>) => void;
+  /** 长按历史消息：交给上层弹菜单（编辑/重发/删除/分叉） */
+  onMessageAction?: (messageId: string, role: string) => void;
 }
 
 export class ChatView {
@@ -71,11 +76,11 @@ export class ChatView {
    * 服务端要等下一轮历史落盘才会带上这条消息，若不本地回显，用户会以为没发出去
    * （之前的 bug：只有重新进会话才看得到自己的提问）。
    */
-  appendLocalUser(text: string): void {
+  appendLocalUser(text: string, images: readonly string[] = []): void {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed && images.length === 0) return;
     this.clearLocalEcho();
-    const el = messageNode("user", trimmed, Date.now());
+    const el = messageNode("user", trimmed, Date.now(), undefined, images);
     el.classList.add("msg--local");
     this.historyEl.append(el);
     this.localEcho = { text: trimmed, el };
@@ -183,10 +188,25 @@ export class ChatView {
       const text = split.text;
 
       if (thinking) pending.push({ el: reasoningEntry(thinking), kind: "reasoning" });
-      if (!text) continue;
+      const images = collectImageSources(message);
+      if (!text && images.length === 0) continue;
 
       flushProcess();
-      this.historyEl.append(messageNode(role, text, message.timestamp, typeof message.id === "string" ? message.id : undefined));
+      const node = messageNode(
+        role,
+        text,
+        message.timestamp,
+        typeof message.id === "string" ? message.id : undefined,
+        images,
+      );
+      // 长按弹菜单：只在有 id 且上层愿意处理时才绑，否则白响一下震动
+      const mid = typeof message.id === "string" ? message.id : undefined;
+      const actionId = mid ?? (typeof message.entryId === "string" ? message.entryId : undefined);
+      if (actionId && this.handlers.onMessageAction) {
+        node.classList.add("msg--actionable");
+        attachPressable(node, { onLongPress: () => this.handlers.onMessageAction?.(actionId, role) });
+      }
+      this.historyEl.append(node);
       rendered += 1;
     }
 
@@ -856,7 +876,13 @@ export function messageText(message: WireMessage): string {
   return buckets.join("\n").trim();
 }
 
-function messageNode(role: string, text: string, timestamp: unknown, id?: string): HTMLElement {
+function messageNode(
+  role: string,
+  text: string,
+  timestamp: unknown,
+  id?: string,
+  images: readonly string[] = [],
+): HTMLElement {
   const wrap = h("article", { class: `msg msg--${role}` });
   if (id) wrap.dataset.mid = id;
   wrap.append(h("div", { class: "msg-role", text: role === "user" ? "我" : "Pi" }));
@@ -873,10 +899,25 @@ function messageNode(role: string, text: string, timestamp: unknown, id?: string
     mdSources.set(body, text);
   }
   wrap.append(body);
+  if (images.length > 0) wrap.append(imageStrip(images));
   if (typeof timestamp === "number" && timestamp > 0) {
     wrap.append(h("div", { class: "msg-time", text: new Date(timestamp).toLocaleTimeString().slice(0, 5) }));
   }
   return wrap;
+}
+
+/** 消息里的图片缩略图行；点开看原图（截图里的代码只有放大才看得清）。 */
+function imageStrip(sources: readonly string[]): HTMLElement {
+  const strip = h("div", { class: "msg-images" });
+  sources.forEach((src, index) => {
+    const img = h("img", { class: "msg-image", "aria-label": `图片 ${index + 1}` });
+    img.src = src;
+    img.loading = "lazy";
+    img.alt = `图片 ${index + 1}`;
+    img.addEventListener("click", () => openImageLightbox(src, img.alt));
+    strip.append(img);
+  });
+  return strip;
 }
 
 /** 历史里的思考条目（折叠在「执行过程」内部）。 */
