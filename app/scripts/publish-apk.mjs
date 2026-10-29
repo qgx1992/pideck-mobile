@@ -11,10 +11,11 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 const APP_DIR = path.resolve(import.meta.dirname, "..");
+const APP_VERSION = JSON.parse(readFileSync(path.join(APP_DIR, "package.json"), "utf8")).version;
 const release = process.argv.includes("--release");
 const variant = release ? "release" : "debug";
 const source = path.join(APP_DIR, "android", "app", "build", "outputs", "apk", variant, `app-${variant}.apk`);
-const fileName = `PiDeck-0.1.0-${variant}.apk`;
+const fileName = `PiDeck-${APP_VERSION}-${variant}.apk`;
 const targetDir = path.resolve(APP_DIR, "..", "apk");
 const target = path.join(targetDir, fileName);
 
