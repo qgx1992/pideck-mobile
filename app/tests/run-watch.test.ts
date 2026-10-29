@@ -6,6 +6,7 @@ import {
   collectRunWatchTitles,
   isRunWatchActive,
   shouldStartRunWatch,
+  splitNotifiedKeys,
   stopRunWatch,
 } from "../src/platform/run-watch.ts";
 
@@ -49,4 +50,24 @@ test("浏览器环境（非原生）不会真的启动，也不会抛错", async
   assert.equal(isRunWatchActive(), false);
   await stopRunWatch();
   assert.equal(isRunWatchActive(), false);
+});
+
+test("原生通知记录拆成「跑完」和「提问」两类", () => {
+  const split = splitNotifiedKeys([
+    "run:s1",
+    "run:s2",
+    "ask:s3:req-1",
+    "ask:s4:req-2",
+    "ask:s3:req-9",
+    "",
+    "garbage",
+  ]);
+  assert.deepEqual([...split.runs].sort(), ["s1", "s2"]);
+  assert.deepEqual([...split.asks].sort(), ["s3", "s4"], "同一会话多条提问合并成一个");
+});
+
+test("空输入不炸", () => {
+  const split = splitNotifiedKeys([]);
+  assert.equal(split.runs.size, 0);
+  assert.equal(split.asks.size, 0);
 });

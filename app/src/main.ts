@@ -63,10 +63,11 @@ import { attachBackButton } from "./platform/back-button.ts";
 import {
   collectRunWatchTitles,
   consumeLaunchSession,
-  consumeNotifiedSessions,
+  consumeNotifiedKeys,
   isRunWatchActive,
   setRunWatchVisible,
   shouldStartRunWatch,
+  splitNotifiedKeys,
   startRunWatch,
   stopRunWatch,
 } from "./platform/run-watch.ts";
@@ -145,6 +146,8 @@ let previousRuntimes: RuntimeSnapshot[] = [];
 let previousPending: PendingSnapshot[] = [];
 /** 后台服务已经替我们通知过的会话（回到前台后别再弹一次） */
 const notifiedByService = new Set<string>();
+/** 同理，但针对「AI 提问」 */
+const notifiedAsksByService = new Set<string>();
 /**
  * 从 /runtime/state 学到的模型/思考偏好。
  * catalog 里 session.model 常为 null（实测 223 个里只有 19 个有），
@@ -1006,8 +1009,12 @@ function detectCompletedRuns(state: PiDeckState): void {
   previousPending = nextPending;
 
   for (const ask of newAsks) {
+    // 后台服务已经发过这条了
+    if (notifiedAsksByService.delete(ask.sessionId)) continue;
     // 正在看这个会话时不打扰（卡片就在眼前）
     if (!hidden && ask.sessionId === activeSessionId) continue;
+    // App 在后台且看护服务在跑 → 交给原生发（我们随时可能被冻结）
+    if (hidden && isRunWatchActive()) continue;
     const session = state.sessions.find((item) => item.id === ask.sessionId);
     void notifyTaskFinished({
       sessionId: ask.sessionId,
@@ -1051,8 +1058,9 @@ async function resumeAfterBackground(): Promise<void> {
   const sessionId = activeSessionId;
 
   // 后台服务替我们发过的通知，记下来别重复弹
-  const notified = await consumeNotifiedSessions();
-  for (const id of notified) notifiedByService.add(id);
+  const notified = splitNotifiedKeys(await consumeNotifiedKeys());
+  for (const id of notified.runs) notifiedByService.add(id);
+  for (const id of notified.asks) notifiedAsksByService.add(id);
 
   await runtime.store.refresh().catch(() => undefined);
 

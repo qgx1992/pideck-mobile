@@ -75,14 +75,17 @@ export async function setRunWatchVisible(visible: boolean): Promise<void> {
   }
 }
 
-/** 取出「原生已经通知过」的会话 id，避免回到前台后重复弹。 */
-export async function consumeNotifiedSessions(): Promise<Set<string>> {
-  if (!native) return new Set();
+/**
+ * 取出「原生已经通知过」的记录，避免回到前台后重复弹。
+ * key 形如 `run:<sessionId>` 或 `ask:<sessionId>:<requestId>`。
+ */
+export async function consumeNotifiedKeys(): Promise<string[]> {
+  if (!native) return [];
   try {
     const result = await native.consumeNotified();
-    return new Set(result.sessionIds ?? []);
+    return Array.isArray(result.sessionIds) ? result.sessionIds : [];
   } catch {
-    return new Set();
+    return [];
   }
 }
 
@@ -122,4 +125,29 @@ export function collectRunWatchTitles(
     if (title) titles[item.sessionId] = title;
   }
   return titles;
+}
+
+export interface NotifiedKeys {
+  /** 原生已经替我们通知过「跑完」的会话 */
+  runs: Set<string>;
+  /** 原生已经替我们通知过「提问」的会话 */
+  asks: Set<string>;
+}
+
+/** 把原生给的 `run:…` / `ask:…` 拆成两类，便于分别去重。 */
+export function splitNotifiedKeys(keys: readonly string[]): NotifiedKeys {
+  const runs = new Set<string>();
+  const asks = new Set<string>();
+  for (const key of keys) {
+    if (typeof key !== "string") continue;
+    if (key.startsWith("run:")) {
+      const sessionId = key.slice(4);
+      if (sessionId) runs.add(sessionId);
+    } else if (key.startsWith("ask:")) {
+      const rest = key.slice(4);
+      const sessionId = rest.split(":")[0];
+      if (sessionId) asks.add(sessionId);
+    }
+  }
+  return { runs, asks };
 }
