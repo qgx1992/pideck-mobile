@@ -17,6 +17,26 @@ import { JSDOM } from "jsdom";
 const APP_DIR = path.resolve(import.meta.dirname, "..");
 const DIST_ASSETS = path.join(APP_DIR, "dist", "assets");
 
+/**
+ * 扫构建产物里的 CSS：不可见控制字符 + 被吞掉的 \25B8（▸）碎片。
+ * 这类问题只出现在伪元素上，textContent 永远查不到。
+ * @returns 命中的文件名，干净时返回 "无"
+ */
+function scanBuiltCss() {
+  let files;
+  try {
+    files = readdirSync(DIST_ASSETS).filter((name) => name.endsWith(".css"));
+  } catch {
+    return "(未构建，先 npm run build)";
+  }
+  if (files.length === 0) return "(没有 css 产物)";
+  const bad = files.filter((name) => {
+    const text = readFileSync(path.join(DIST_ASSETS, name), "utf-8");
+    return /[\u0000-\u0008\u000b\u000e-\u001f]/.test(text) || /content\s*:\s*"[^"]*B8/i.test(text);
+  });
+  return bad.length === 0 ? "无" : bad.join(", ");
+}
+
 function arg(name) {
   const index = process.argv.indexOf(`--${name}`);
   return index >= 0 ? process.argv[index + 1] : undefined;
@@ -339,6 +359,8 @@ Markdown: 助手气泡=${bodies.length} 粗体=${strong} 代码块=${code} 行�
   console.log(`  残留 B8 文案=${(doc.body.textContent ?? "").includes("B8")}`);
   const proc = doc.querySelector(".process summary .chev-icon");
   console.log(`  执行过程箭头=${Boolean(proc)}`);
+  // 伪元素不进 textContent，上面那条查不到；构建出来的 CSS 必须单独查
+  console.log(`  构建 CSS 残留=${scanBuiltCss()}`);
 }
 
 // 布局：@ / 必须嵌在输入框里，而不是下方工具行
