@@ -81,7 +81,8 @@ if (release) {
 }
 
 const task = release ? "assembleRelease" : "assembleDebug";
-run(gradle, [task, "--no-daemon", "--console=plain"], {
+// JDK 走命令行传入，不写进 gradle.properties（那个文件要跨平台）
+run(gradle, [task, "--no-daemon", "--console=plain", `-Dorg.gradle.java.home=${jdk}`], {
   cwd: path.join(APP_DIR, "android"),
   env,
   shell: isWindows,
