@@ -1218,6 +1218,40 @@ button {
   line-height: 1.7;
 }
 
+/* 首屏空态：垂直居中（.chat-scroll 是 flex 列，靠 auto 外边距吃掉剩余空间） */
+.history.is-empty-state {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.history.is-empty-state .empty-state {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 0 24px 36px;
+  text-align: center;
+}
+
+.empty-state-icon {
+  color: var(--accent);
+  opacity: 0.85;
+  /* 图标外面一圈很淡的光晕，避免在深色底上显得孤零零 */
+  filter: drop-shadow(0 6px 18px color-mix(in oklab, var(--accent) 35%, transparent));
+}
+
+/* 文案尽量两行排完，不要出现「新建一 / 个。」这种断法 */
+.empty-state-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text-dim);
+  max-width: 17em;
+  text-wrap: balance;
+}
+
 .error-card {
   border: 1px solid var(--border);
   border: 1px solid color-mix(in oklab, var(--danger) 45%, var(--border));

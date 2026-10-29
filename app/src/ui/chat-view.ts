@@ -50,6 +50,7 @@ export class ChatView {
 
   clear(): void {
     clear(this.historyEl);
+    this.historyEl.classList.remove("is-empty-state");
     clear(this.liveEl);
     clear(this.pendingEl);
     this.statusEl.textContent = "";
@@ -97,6 +98,22 @@ export class ChatView {
   setEmpty(text: string): void {
     clear(this.historyEl);
     this.historyEl.append(h("p", { class: "empty", text }));
+  }
+
+  /**
+   * 首屏空态：居中图标 + 一句引导。
+   * 和 setEmpty 分开，是因为「还没有会话」值得一个正式的引导位，
+   * 而「这个会话没有消息」只是提示一行字。
+   */
+  setEmptyState(text: string): void {
+    clear(this.historyEl);
+    this.historyEl.classList.add("is-empty-state");
+    this.historyEl.append(
+      h("div", { class: "empty-state" }, [
+        emptyStateIcon(),
+        h("p", { class: "empty-state-text", text }),
+      ]),
+    );
   }
 
   /** 当前是否已经渲染出内容（用于区分「首次加载失败」和「静默刷新失败」）。 */
@@ -928,4 +945,38 @@ function preview(value: unknown): string {
   } catch {
     return "[无法序列化]";
   }
+}
+
+/**
+ * 空态的图标：一个对话气泡里放 Pi 的记号。
+ * 纯 SVG，跟随主题色，不额外引资源。
+ */
+function emptyStateIcon(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 48 48");
+  svg.setAttribute("width", "56");
+  svg.setAttribute("height", "56");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("class", "empty-state-icon");
+
+  const bubble = document.createElementNS(ns, "path");
+  bubble.setAttribute("d", "M8 12a6 6 0 0 1 6-6h20a6 6 0 0 1 6 6v16a6 6 0 0 1-6 6H22l-8 7v-7h-0a6 6 0 0 1-6-6V12Z");
+  bubble.setAttribute("stroke", "currentColor");
+  bubble.setAttribute("stroke-width", "2");
+  bubble.setAttribute("stroke-linejoin", "round");
+  bubble.setAttribute("opacity", "0.55");
+
+  const letter = document.createElementNS(ns, "text");
+  letter.setAttribute("x", "24");
+  letter.setAttribute("y", "27");
+  letter.setAttribute("text-anchor", "middle");
+  letter.setAttribute("font-size", "16");
+  letter.setAttribute("font-weight", "700");
+  letter.setAttribute("fill", "currentColor");
+  letter.textContent = "Pi";
+
+  svg.append(bubble, letter);
+  return svg;
 }

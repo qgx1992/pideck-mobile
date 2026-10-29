@@ -502,7 +502,7 @@ function renderMain(): void {
       void respondToUi(pending, response);
     },
   });
-  chatView.setEmpty("选择左侧会话，或直接输入消息新建一个。");
+  chatView.setEmptyState("选择左侧会话，或直接输入消息新建一个。");
 
   refs = {
     headerTitle,
@@ -709,8 +709,8 @@ function renderMain(): void {
   renderComposerState();
   updateConnectionDot(store.getStatus());
 
-  // 宽屏默认展开侧栏；窄屏先停在列表页
-  if (isNarrowScreen() && !activeSessionId) openDrawer();
+  // 启动后停在会话界面，不再自动抽出侧栏：
+  // 空态里已经写清「选择左侧会话，或直接输入消息新建一个」，比强制弹抽屉更少打扰
 }
 
 /**
@@ -2676,7 +2676,7 @@ async function runSessionAction(
       channel = null;
       activeSessionId = null;
       chatView?.clear();
-      chatView?.setEmpty("选择左侧会话，或直接输入消息新建一个。");
+      chatView?.setEmptyState("选择左侧会话，或直接输入消息新建一个。");
     }
     await runtime.store.refresh();
     renderSidebar(runtime.store.state);

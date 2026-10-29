@@ -105,6 +105,20 @@ for (const group of groups.slice(0, 8)) {
 const header = doc.querySelector(".header")?.textContent?.trim();
 console.log(`\nheader: ${header || "(空态)"}`);
 
+// 首屏：侧栏不该自动展开，应停在会话界面并显示带图标的空态
+{
+  const body = doc.querySelector(".body");
+  const sidebarOpen = body?.classList.contains("show-sidebar") ?? false;
+  const state = doc.querySelector(".empty-state");
+  const icon = state?.querySelector("svg.empty-state-icon");
+  const text = state?.querySelector(".empty-state-text")?.textContent ?? "";
+  console.log(
+    `
+首屏空态: 侧栏展开=${sidebarOpen} 有图标=${Boolean(icon)} 有文案=${Boolean(text)} 尺寸=${icon?.getAttribute("width") ?? "-"}`,
+  );
+  console.log(`  文案: ${JSON.stringify(text)}`);
+}
+
 // 打开第一个会话，检查历史消息是否真的渲染出来
 const firstSession = doc.querySelector(".session");
 if (firstSession) {
