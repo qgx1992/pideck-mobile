@@ -2,6 +2,7 @@
 
 import type { ChatBlock, PendingUiRequest, RunStatus, WireMessage } from "@core/types.ts";
 import { h, clear } from "./dom.ts";
+import { renderMarkdownInto } from "./markdown.ts";
 import { createProcessGroup, isProcessBlock, summarizeProcess } from "./process-group.ts";
 import { splitThinking, stripCompleteThinking } from "./thinking-tags.ts";
 import {
@@ -224,8 +225,23 @@ export class ChatView {
 
     this.liveShape = shape;
 
-    this.statusEl.textContent =
+    // 运行中要有个会动的标识：静态文字在长回答里很容易被当成「卡住了」
+    const statusText =
       status === "running" ? "运行中…" : status === "error" ? "本轮失败" : status === "aborted" ? "已停止" : "";
+    if (this.statusEl.dataset.text !== statusText) {
+      clear(this.statusEl);
+      this.statusEl.dataset.text = statusText;
+      if (statusText) {
+        if (status === "running") {
+          this.statusEl.append(
+            h("span", { class: "run-spinner", "aria-hidden": "true" }),
+            h("span", { text: statusText }),
+          );
+        } else {
+          this.statusEl.append(h("span", { text: statusText }));
+        }
+      }
+    }
     this.statusEl.dataset.status = status;
     if (this.stick) this.scrollToBottom();
   }
@@ -796,7 +812,19 @@ function messageNode(role: string, text: string, timestamp: unknown, id?: string
   const wrap = h("article", { class: `msg msg--${role}` });
   if (id) wrap.dataset.mid = id;
   wrap.append(h("div", { class: "msg-role", text: role === "user" ? "我" : "Pi" }));
-  wrap.append(h("div", { class: "msg-body", text }));
+  const body = h("div", { class: "msg-body" });
+  if (role === "user") {
+    // 用户输入按纯文本渲染，保留自己敲的换行
+    body.textContent = text;
+  } else {
+    // 助手回答是 Markdown：粗体、代码块、列表、表格都要还原（对齐 Web 端）
+    const md = h("div", { class: "md" });
+    renderMarkdownInto(md, text);
+    body.append(md);
+    body.classList.add("msg-body--md");
+    mdSources.set(body, text);
+  }
+  wrap.append(body);
   if (typeof timestamp === "number" && timestamp > 0) {
     wrap.append(h("div", { class: "msg-time", text: new Date(timestamp).toLocaleTimeString().slice(0, 5) }));
   }
@@ -811,6 +839,12 @@ export function reasoningEntry(text: string): HTMLElement {
 }
 
 const LF2 = String.fromCharCode(10);
+
+/**
+ * .msg-body → 上一次渲染用的 Markdown 源文本。
+ * 流式更新非常频繁（每帧都可能推），源文本没变就不重排 DOM。
+ */
+const mdSources = new WeakMap<HTMLElement, string>();
 
 /** 历史里的工具条目（折叠在「执行过程」内部）。 */
 function historyToolEntry(
@@ -856,7 +890,17 @@ function updateBlockNode(node: HTMLElement, block: ChatBlock): void {
     }
     // 流式时同样会推送带 <thinking> 的正文，已闭合的直接剥掉
     const visible = stripCompleteThinking(block.text);
-    if (body.textContent !== visible) body.textContent = visible;
+    if (mdSources.get(body) !== visible) {
+      let md = body.querySelector<HTMLElement>(".md");
+      if (!md) {
+        md = h("div", { class: "md" });
+        body.textContent = "";
+        body.append(md);
+        body.classList.add("msg-body--md");
+      }
+      renderMarkdownInto(md, visible);
+      mdSources.set(body, visible);
+    }
     node.classList.toggle("is-done", block.done);
     return;
   }

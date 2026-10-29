@@ -59,11 +59,15 @@ test("折叠时加 is-collapsed 且箭头朝右", () => {
   const { ctx } = makeCtx();
   const collapsed = renderProjectGroup(groups[0]!, ctx);
   assert.ok(collapsed.classList.contains("is-collapsed"));
-  assert.equal(collapsed.querySelector(".chev")?.textContent, "\u25B8");
+  const collapsedChev = collapsed.querySelector(".project-head .chev-icon");
+  assert.ok(collapsedChev, "分组头应有 SVG 箭头");
+  assert.equal(collapsedChev?.getAttribute("width"), "14", "箭头大小对齐 Web 端 14px");
+  assert.equal(collapsedChev?.classList.contains("is-expanded"), false, "收起态不旋转");
 
   const expanded = renderProjectGroup(buildSidebarGroups({ projects, sessions }, "", new Set())[0]!, ctx);
   assert.equal(expanded.classList.contains("is-collapsed"), false);
-  assert.equal(expanded.querySelector(".chev")?.textContent, "\u25BE");
+  const expandedChev = expanded.querySelector(".project-head .chev-icon");
+  assert.equal(expandedChev?.classList.contains("is-expanded"), true, "展开态旋转 90°");
 });
 
 test("点项目头触发折叠回调，点会话触发打开回调", () => {
@@ -175,7 +179,10 @@ test("会话超过 6 个时只显示 6 个 + 展开按钮", () => {
   const { ctx } = makeCtx();
   const node = renderProjectGroup(groups[0]!, ctx);
   assert.equal(node.querySelectorAll(".session").length, 6, "默认只显示最近 6 个");
-  assert.equal(node.querySelector(".sessions-more")?.textContent, "▾ 展开其余 4 个");
+  const moreBtn = node.querySelector(".sessions-more");
+  assert.equal(moreBtn?.textContent, "展开其余 4 个");
+  assert.ok(moreBtn?.querySelector("svg.chev-icon"), "展开按钮也要有 SVG 箭头");
+  assert.equal(moreBtn?.querySelector(".chev-icon")?.classList.contains("is-expanded"), false);
 });
 
 test("展开后显示全部并变成「收起」", () => {
@@ -184,7 +191,9 @@ test("展开后显示全部并变成「收起」", () => {
   ctx.expandedProjects = new Set(["p-a"]);
   const node = renderProjectGroup(groups[0]!, ctx);
   assert.equal(node.querySelectorAll(".session").length, 10);
-  assert.equal(node.querySelector(".sessions-more")?.textContent, "▴ 收起");
+  const collapseBtn = node.querySelector(".sessions-more");
+  assert.equal(collapseBtn?.textContent, "收起");
+  assert.equal(collapseBtn?.querySelector(".chev-icon")?.classList.contains("is-expanded"), true);
 });
 
 test("点展开按钮回调项目 id，且不触发折叠分组", () => {

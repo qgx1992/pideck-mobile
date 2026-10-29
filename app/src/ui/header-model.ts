@@ -40,6 +40,8 @@ export function buildHeaderView(
   state: PiDeckState,
   activeSessionId: string | null,
   activeProjectId: string | null,
+  /** catalog 缺 model 时的兜底（来自 /runtime/state） */
+  prefsOverride?: { modelName?: string; thinkingLevel?: string },
 ): HeaderView {
   const session: SessionSummary | undefined = activeSessionId
     ? state.sessions.find((item) => item.id === activeSessionId)
@@ -63,10 +65,16 @@ export function buildHeaderView(
     .filter((item): item is string => Boolean(item))
     .join(" · ");
 
-  // 第二行：只留模型与思考档位
+  // 第二行：只留模型与思考档位（catalog 常为 null，允许用运行时学到的值兜底）
+  const modelText =
+    session?.model?.modelName ??
+    session?.model?.modelId ??
+    prefsOverride?.modelName ??
+    undefined;
+  const thinkingText = session?.thinkingLevel ?? prefsOverride?.thinkingLevel ?? "";
   const subtitle = [
-    session?.model?.modelName ?? session?.model?.modelId ?? undefined,
-    session?.thinkingLevel ? `思考 ${session.thinkingLevel}` : undefined,
+    modelText,
+    thinkingText ? `思考 ${thinkingText}` : undefined,
   ]
     .filter((item): item is string => Boolean(item))
     .join(" · ");

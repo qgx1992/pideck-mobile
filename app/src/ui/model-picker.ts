@@ -138,3 +138,34 @@ export function modelSubtitle(model: ModelOption): string {
   }
   return parts.join(" · ");
 }
+
+/**
+ * 按关键字过滤模型分组（面板里的搜索框用）。
+ *
+ * 匹配范围：模型名、modelId、provider。空格分隔的多个词必须**同时**命中，
+ * 这样「deep flash」能筛出 DeepSeek V4.1 Flash，而单个词也不会漏。
+ * 空查询原样返回（保持原顺序，不做无谓拷贝）。
+ */
+export function filterModelSections(
+  sections: readonly ModelPickerSection[],
+  query: string,
+): ModelPickerSection[] {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return sections as ModelPickerSection[];
+
+  const result: ModelPickerSection[] = [];
+  for (const section of sections) {
+    const models = section.models.filter((model) => {
+      const haystack = `${model.name} ${model.modelId} ${model.provider}`.toLowerCase();
+      return terms.every((term) => haystack.includes(term));
+    });
+    // 整组都不匹配就不要留空的分组标题
+    if (models.length > 0) result.push({ provider: section.provider, models });
+  }
+  return result;
+}
+
+/** 过滤后有多少个模型（搜索结果计数用）。 */
+export function countModels(sections: readonly ModelPickerSection[]): number {
+  return sections.reduce((sum, section) => sum + section.models.length, 0);
+}

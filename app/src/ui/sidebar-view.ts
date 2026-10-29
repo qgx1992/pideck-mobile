@@ -5,6 +5,7 @@
 
 import type { SessionSummary } from "@core/types.ts";
 import { h, fmtTime } from "./dom.ts";
+import { createChevron } from "./chevron.ts";
 import { attachPressable } from "./press.ts";
 import type { ProjectGroupView } from "./sidebar-model.ts";
 
@@ -61,7 +62,7 @@ export function renderProjectGroup(group: ProjectGroupView, ctx: SidebarViewCont
       title: group.collapsed ? "展开（长按可管理项目）" : "收起（长按可管理项目）",
     },
     [
-      h("span", { class: "chev", text: group.collapsed ? "\u25B8" : "\u25BE" }),
+      createChevron(!group.collapsed, 14),
       h("span", { class: "pname", text: group.label }),
       ...(groupRunningDot ? [groupRunningDot] : []),
       h("span", { class: "pcount", text: String(group.sessions.length) }),
@@ -93,15 +94,21 @@ export function renderProjectGroup(group: ProjectGroupView, ctx: SidebarViewCont
     if (overflow) {
       const hidden = group.sessions.length - SESSIONS_PREVIEW_COUNT;
       list.append(
-        h("button", {
-          class: `sessions-more${expanded ? " is-expanded" : ""}`,
-          // 带箭头：即使颜色没生效，也能一眼看出这是「展开/收起」开关
-          text: expanded ? "▴ 收起" : `▾ 展开其余 ${hidden} 个`,
-          onclick: (event: MouseEvent) => {
-            event.stopPropagation();
-            handlers.onToggleSessions(group.project.id);
+        h(
+          "button",
+          {
+            class: `sessions-more${expanded ? " is-expanded" : ""}`,
+            title: expanded ? "收起多余的会话" : `展开其余 ${hidden} 个会话`,
+            onclick: (event: MouseEvent) => {
+              event.stopPropagation();
+              handlers.onToggleSessions(group.project.id);
+            },
           },
-        }),
+          [
+            createChevron(expanded, 12),
+            h("span", { text: expanded ? "收起" : `展开其余 ${hidden} 个` }),
+          ],
+        ),
       );
     }
   }

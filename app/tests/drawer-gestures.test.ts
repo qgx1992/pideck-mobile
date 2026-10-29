@@ -2,8 +2,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
 import {
   drawerPercent,
+  hasHorizontalScrollerAncestor,
+  horizontalScrollRange,
+  isHorizontalScroller,
   planSwipe,
   progressForAction,
   shouldFinish,
@@ -77,4 +81,32 @@ test("起手过滤：交互控件内一律不接管", () => {
   assert.equal(shouldTrackGesture(5, 48, false, true), false);
   assert.equal(shouldTrackGesture(5, 48, true, true), false);
   assert.equal(shouldTrackGesture(5, 48, true, false), true);
+});
+
+/* ---------------- 横向滚动的容器里不接管手势 ---------------- */
+
+test("overflow-x 不是 auto/scroll 就不算横向滚动", () => {
+  assert.equal(isHorizontalScroller("hidden", 500, 100), false);
+  assert.equal(isHorizontalScroller("visible", 500, 100), false);
+});
+
+test("内容没超出可视宽度就不算横向滚动", () => {
+  assert.equal(isHorizontalScroller("auto", 100, 100), false);
+  assert.equal(isHorizontalScroller("auto", 101, 100), false, "1px 以内忽略");
+  assert.equal(isHorizontalScroller("auto", 300, 100), true);
+  assert.equal(isHorizontalScroller("scroll", 0, 0), false);
+});
+
+test("横向可滚动量", () => {
+  assert.equal(horizontalScrollRange(300, 100), 200);
+  assert.equal(horizontalScrollRange(100, 300), 0, "不能为负");
+  assert.equal(horizontalScrollRange(Number.NaN, 10), 0);
+});
+
+test("宽表格的拖动不会被当成抽屉手势（选择器层面）", () => {
+  const dom = new JSDOM('<!doctype html><body><div class="md"><div class="md-table-wrap"><table class="md-table"><tbody><tr><td>a</td></tr></tbody></table></div></div></body>');
+  const cell = dom.window.document.querySelector("td")!;
+  // jsdom 没有布局，scrollWidth 恒为 0，所以这里验证的是选择器兜底
+  assert.equal(hasHorizontalScrollerAncestor(cell), false);
+  assert.ok(cell.closest(".md-table-wrap"), "表格容器必须在排除名单里");
 });

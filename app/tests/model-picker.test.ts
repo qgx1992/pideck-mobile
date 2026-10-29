@@ -4,6 +4,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildModelSections,
+  countModels,
+  filterModelSections,
   findModel,
   modelKey,
   modelSubtitle,
@@ -95,4 +97,60 @@ test("modelSubtitle 展示 provider 与上下文规模", () => {
   const subtitle = modelSubtitle(sections[0]!.models[0]!);
   assert.ok(subtitle.includes("magpie"));
   assert.ok(subtitle.includes("1M 上下文"), `实际：${subtitle}`);
+});
+
+/* ---------------- 模型搜索 ---------------- */
+
+const searchable = [
+  {
+    provider: "magpie",
+    models: [
+      { key: "k1", provider: "magpie", modelId: "auto/deepseek-v4.1-flash", name: "Deepseek V4.1 Flash", thinkingLevels: [] },
+      { key: "k2", provider: "magpie", modelId: "auto/kimi-k2", name: "Kimi K2", thinkingLevels: [] },
+    ],
+  },
+  {
+    provider: "openai",
+    models: [
+      { key: "k3", provider: "openai", modelId: "gpt-5", name: "GPT-5", thinkingLevels: [] },
+    ],
+  },
+] as never;
+
+test("空查询原样返回", () => {
+  assert.equal(filterModelSections(searchable, "   "), searchable);
+});
+
+test("按模型名过滤（大小写不敏感）", () => {
+  const out = filterModelSections(searchable, "kimi");
+  assert.equal(countModels(out), 1);
+  assert.equal(out[0]?.models[0]?.name, "Kimi K2");
+});
+
+test("按 provider 过滤", () => {
+  const out = filterModelSections(searchable, "openai");
+  assert.equal(countModels(out), 1);
+  assert.equal(out[0]?.provider, "openai");
+});
+
+test("按 modelId 片段过滤", () => {
+  const out = filterModelSections(searchable, "deepseek");
+  assert.equal(countModels(out), 1);
+  assert.equal(out[0]?.models[0]?.modelId, "auto/deepseek-v4.1-flash");
+});
+
+test("多词必须同时命中", () => {
+  assert.equal(countModels(filterModelSections(searchable, "deepseek flash")), 1);
+  assert.equal(countModels(filterModelSections(searchable, "deepseek kimi")), 0);
+});
+
+test("不匹配的分组不会留下空标题", () => {
+  const out = filterModelSections(searchable, "gpt");
+  assert.equal(out.length, 1);
+  assert.equal(out[0]?.provider, "openai");
+});
+
+test("无匹配返回空数组", () => {
+  assert.deepEqual(filterModelSections(searchable, "zzzz"), []);
+  assert.equal(countModels([]), 0);
 });

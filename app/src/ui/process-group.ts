@@ -7,6 +7,7 @@
 
 import type { ChatBlock } from "@core/types.ts";
 import { h } from "./dom.ts";
+import { createChevron, setChevronExpanded } from "./chevron.ts";
 
 export interface ProcessSummary {
   tools: number;
@@ -53,7 +54,12 @@ export function createProcessGroup(options: { open?: boolean } = {}): ProcessGro
   const summaryEl = h("span", { class: "process-title", text: "执行过程" });
   const details = h("details", { class: "process" });
   if (options.open) details.setAttribute("open", "");
-  details.append(h("summary", {}, [summaryEl]));
+  // 箭头自己画（之前是 CSS content，被写坏成字面量 "B8"）
+  const chevron = createChevron(Boolean(options.open), 14);
+  details.append(h("summary", {}, [chevron, summaryEl]));
+  details.addEventListener("toggle", () => {
+    setChevronExpanded(chevron, details.hasAttribute("open"));
+  });
 
   const body = h("div", { class: "process-body" });
   details.append(body);

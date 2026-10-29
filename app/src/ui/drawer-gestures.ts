@@ -149,19 +149,75 @@ export interface DrawerGesturesOptions {
 const INTERACTIVE_SELECTOR = [
   "textarea",
   "input",
+  "select",
   "pre",
+  ".md-codeblock",
+  ".md-table-wrap",
+  ".md-table",
+  ".md-list",          // 缩进列表可能被用户横向拖看
   ".composer-chips",
   ".ask-card",
   ".ask-input",
   ".ws-preview",
+  ".ws-file-path",
   ".sheet",
   ".process-body",
+  ".tool-body",
+  ".reasoning-body",
 ].join(",");
+
+/**
+ * 横向可滚动量（像素差）。jsdom 里没有布局，所以单独抽出来便于测试。
+ */
+export function horizontalScrollRange(scrollWidth: number, clientWidth: number): number {
+  if (!Number.isFinite(scrollWidth) || !Number.isFinite(clientWidth)) return 0;
+  return Math.max(0, scrollWidth - clientWidth);
+}
+
+/**
+ * 这个元素当前能不能横向滚动。
+ * overflow-x 必须是 auto/scroll（hidden 只是裁剪，拖它也没意义）。
+ */
+export function isHorizontalScroller(
+  overflowX: string,
+  scrollWidth: number,
+  clientWidth: number,
+): boolean {
+  const scrollable = overflowX === "auto" || overflowX === "scroll" || overflowX === "overlay";
+  if (!scrollable) return false;
+  return horizontalScrollRange(scrollWidth, clientWidth) > 1;
+}
+
+/**
+ * 从触点往上找：有没有「能横向滚动」的祖先。
+ *
+ * 这是为了让宽表格 / 长代码行能左右拖，而不是把侧边栏拽出来——
+ * 之前只按选择器排除，`.md-table-wrap` 这种运行时才产生滚动条的容器漏掉了。
+ */
+export function hasHorizontalScrollerAncestor(target: EventTarget | null, root?: Element | null): boolean {
+  const start = target as Element | null;
+  if (!start || typeof start.closest !== "function") return false;
+
+  const view = start.ownerDocument?.defaultView;
+  let node: Element | null = start;
+  const stop = root ?? start.ownerDocument?.body ?? null;
+
+  while (node && node !== stop) {
+    const style = view?.getComputedStyle?.(node);
+    if (style && isHorizontalScroller(style.overflowX, node.scrollWidth, node.clientWidth)) {
+      return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
   const el = target as Element | null;
   if (!el || typeof el.closest !== "function") return false;
-  return el.closest(INTERACTIVE_SELECTOR) !== null;
+  if (el.closest(INTERACTIVE_SELECTOR) !== null) return true;
+  // 表格/代码块这类容器只有内容超宽时才滚，选择器覆盖不到，必须看实际滚动量
+  return hasHorizontalScrollerAncestor(el);
 }
 
 export function attachDrawerGestures(options: DrawerGesturesOptions): () => void {

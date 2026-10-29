@@ -6,6 +6,8 @@ export interface Props {
   class?: string;
   text?: string;
   title?: string;
+  "aria-label"?: string;
+  "aria-hidden"?: string;
   type?: string;
   placeholder?: string;
   value?: string;
@@ -28,6 +30,11 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   if (props.title) el.title = props.title;
   if (props.style) el.setAttribute("style", props.style);
   if (props.dataset) for (const [key, value] of Object.entries(props.dataset)) el.dataset[key] = value;
+  // aria-* / role 之类原样落到 attribute 上
+  for (const [key, value] of Object.entries(props)) {
+    if (!key.startsWith("aria-") && key !== "role") continue;
+    if (typeof value === "string") el.setAttribute(key, value);
+  }
 
   if (tag === "input" || tag === "textarea") {
     const field = el as unknown as HTMLInputElement;

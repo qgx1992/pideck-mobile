@@ -16,6 +16,8 @@ g.HTMLElement = dom.window.HTMLElement;
 g.Node = dom.window.Node;
 
 const { ChatView } = await import("../src/ui/chat-view.ts");
+const { createChevron, setChevronExpanded } = await import("../src/ui/chevron.ts");
+const { createProcessGroup } = await import("../src/ui/process-group.ts");
 
 function makeView() {
   const root = dom.window.document.getElementById("app")!;
@@ -718,4 +720,38 @@ test("审阅页：confirm 答案显示「是/否」而不是 true/false", () => 
 
   const answer = root.querySelector(".ask-review-a")?.textContent;
   assert.equal(answer, "是");
+});
+
+/* ---------------- 折叠箭头（SVG） ---------------- */
+
+test("chevron 默认朝右，展开时带 is-expanded", () => {
+  const collapsed = createChevron(false, 14);
+  assert.equal(collapsed.tagName.toLowerCase(), "svg");
+  assert.equal(collapsed.getAttribute("viewBox"), "0 0 24 24");
+  assert.equal(collapsed.getAttribute("width"), "14");
+  assert.equal(collapsed.getAttribute("stroke-width"), "2");
+  assert.equal(collapsed.getAttribute("aria-hidden"), "true");
+  assert.equal(collapsed.classList.contains("is-expanded"), false);
+  assert.equal(collapsed.querySelector("path")?.getAttribute("d"), "M9 18l6-6-6-6");
+
+  const expanded = createChevron(true, 12);
+  assert.equal(expanded.getAttribute("width"), "12");
+  assert.equal(expanded.classList.contains("is-expanded"), true);
+});
+
+test("就地切换箭头方向会同步 class", () => {
+  const node = createChevron(false, 14);
+  setChevronExpanded(node, true);
+  assert.equal(node.classList.contains("is-expanded"), true);
+  setChevronExpanded(node, false);
+  assert.equal(node.classList.contains("is-expanded"), false);
+  setChevronExpanded(null, true); // 不能炸
+});
+
+test("执行过程折叠头用 SVG 箭头，且不再是字面量 B8", () => {
+  const group = createProcessGroup({ open: true });
+  const chev = group.el.querySelector("summary .chev-icon");
+  assert.ok(chev, "summary 里应有箭头");
+  assert.equal(chev?.classList.contains("is-expanded"), true, "open 时朝下");
+  assert.ok(!group.el.textContent?.includes("B8"));
 });
