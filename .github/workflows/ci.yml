@@ -1,0 +1,68 @@
+name: CI
+
+# PR 与 push 的快速门禁：只跑类型检查 + 测试（不构建 Android，几十秒结束）。
+# 出包走 android-release.yml，别把两件事混在一个工作流里。
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "app/src/**"
+      - "app/tests/**"
+      - "app/scripts/**"
+      - "app/package.json"
+      - "app/package-lock.json"
+      - "app/tsconfig.json"
+      - "app/vite.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - ".github/workflows/ci.yml"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  protocol:
+    name: 协议核心（src/）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 类型检查
+        run: npm run typecheck
+      - name: 测试
+        run: npm test
+
+  app:
+    name: 客户端（app/）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            app/package-lock.json
+      # app 通过 @core 别名引用上一级的 src/，两个都装
+      - run: npm ci
+      - run: npm ci --prefix app
+      - name: 类型检查
+        run: npm run typecheck --prefix app
+      - name: 测试
+        run: npm test --prefix app
+      - name: 构建（确认 vite 能出包）
+        run: npm run build --prefix app
