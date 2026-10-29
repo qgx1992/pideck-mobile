@@ -14,6 +14,7 @@ g.document = dom.window.document;
 
 const {
   SPLASH_MIN_MS,
+  SPLASH_READY_MS,
   hideSplash,
   isSplashHidden,
   resetSplashStateForTest,
@@ -36,7 +37,7 @@ test("启动页上的提示文案可更新", () => {
   assert.equal(dom.window.document.getElementById("splash-hint")?.textContent, "正在连接 PiDeck…");
 });
 
-test("收起：等最短时间 → 加淡出类 → 从 DOM 移除", async () => {
+test("收起：等最短时间 → 进度条补满 → 淡出 → 从 DOM 移除", async () => {
   resetSplashStateForTest();
   const el = dom.window.document.getElementById("splash")!;
   el.dataset.shownAt = String(Date.now());
@@ -47,9 +48,13 @@ test("收起：等最短时间 → 加淡出类 → 从 DOM 移除", async () =>
   assert.equal(el.classList.contains("is-leaving"), false, "还没到最短时间");
 
   await wait(SPLASH_MIN_MS + 80);
-  assert.ok(el.classList.contains("is-leaving"), "到点后开始淡出");
+  assert.ok(el.classList.contains("is-ready"), "到点后先补满进度条");
+  assert.equal(el.classList.contains("is-leaving"), false, "补满期间还在");
 
-  await wait(380);
+  await wait(SPLASH_READY_MS + 60);
+  assert.ok(el.classList.contains("is-leaving"), "补满之后才开始淡出");
+
+  await wait(360);
   assert.equal(dom.window.document.getElementById("splash"), null, "淡出后从 DOM 移除");
 });
 
@@ -62,7 +67,7 @@ test("重复调用只收一次", async () => {
   hideSplash();
   hideSplash();
   hideSplash();
-  await wait(420);
+  await wait(SPLASH_READY_MS + 420);
   assert.equal(dom.window.document.querySelectorAll("#splash").length, 0);
 });
 
@@ -70,4 +75,16 @@ test("没有 splash 元素时静默返回，不抛错", () => {
   resetSplashStateForTest();
   hideSplash();
   assert.equal(isSplashHidden(), true);
+});
+
+test("点了启动页可以立刻跳过（不再等最短显示）", async () => {
+  resetSplashStateForTest();
+  dom.window.document.body.insertAdjacentHTML("afterbegin", '<div id="splash" data-shown-at="1"></div>');
+  const el = dom.window.document.getElementById("splash")!;
+  el.dataset.shownAt = String(Date.now());
+  hideSplash({ immediate: true });
+  await wait(SPLASH_READY_MS + 40);
+  assert.ok(el.classList.contains("is-leaving"), "立刻进入淡出");
+  await wait(360);
+  assert.equal(dom.window.document.getElementById("splash"), null);
 });
