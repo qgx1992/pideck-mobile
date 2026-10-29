@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 一键出 APK：build web → cap copy → gradlew assembleDebug
+ * 一键出 APK：build web → cap sync → gradlew assembleDebug
  *
  * 为什么要这个脚本：gradlew.bat 在启动前就要求 JAVA_HOME（org.gradle.java.home 来不及生效），
  * 所以这里自己找 JDK（环境变量 → winget 装到 Program Files 的 Temurin）再把它注入子进程环境。
@@ -60,7 +60,9 @@ if (!existsSync(path.join(APP_DIR, "android"))) {
 }
 
 run("npm", ["run", "build"]);
-run("npx", ["cap", "copy", "android"]);
+// 必须 sync 而不是 copy：新装的插件要写进 capacitor.settings.gradle，否则 Gradle 根本不编译它
+// （踩过：加了 @capacitor/app 但只 copy，backButton 事件永远不到 JS）
+run("npx", ["cap", "sync", "android"]);
 
 const env = { ...process.env, JAVA_HOME: jdk };
 run(gradle, ["assembleDebug", "--no-daemon", "--console=plain"], {
