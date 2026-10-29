@@ -98,6 +98,7 @@ import {
   completionTitle,
   diffCompletedRuns,
   diffNewPendingRequests,
+  shouldNotifyEnd,
 } from "./ui/run-completion.ts";
 import type { PendingSnapshot } from "./ui/run-completion.ts";
 import type { RuntimeSnapshot } from "./ui/run-completion.ts";
@@ -146,6 +147,11 @@ let previousRuntimes: RuntimeSnapshot[] = [];
 let previousPending: PendingSnapshot[] = [];
 /** 后台服务已经替我们通知过的会话（回到前台后别再弹一次） */
 const notifiedByService = new Set<string>();
+/**
+ * 当前会话这一轮的结局（reducer 的状态，比 /api/state 更细）。
+ * 用来区分「跑完」和「用户自己点了停止」——后者不该再弹通知。
+ */
+const runOutcome = new Map<string, string>();
 /** 同理，但针对「AI 提问」 */
 const notifiedAsksByService = new Set<string>();
 /**
@@ -935,6 +941,7 @@ async function openSession(sessionId: string): Promise<void> {
         if (runtime) renderHeader(runtime.store.state);
         // 一轮结束：把流式区收掉，并重拉历史，让消息进入正式历史
         if (previous === "running" && isSettled(c.reducer.status)) {
+          runOutcome.set(sessionId, c.reducer.status);
           void settleRun(sessionId);
           void refreshTodo(sessionId);
         }
@@ -1037,10 +1044,15 @@ function detectCompletedRuns(state: PiDeckState): void {
     // App 在后台且看护服务在跑 → 交给原生发（我们这边随时可能被冻结）
     if (hidden && isRunWatchActive()) continue;
 
+    // reducer 的结局更准（能区分用户主动停止），没有就用 state 里的状态
+    const endedAs = runOutcome.get(run.sessionId) ?? run.endedAs;
+    runOutcome.delete(run.sessionId);
+    if (!shouldNotifyEnd(endedAs)) continue;
+
     void notifyTaskFinished({
       sessionId: run.sessionId,
-      title: completionTitle(run.endedAs),
-      body: completionBody(session?.title),
+      title: completionTitle(endedAs),
+      body: completionBody(session?.title, endedAs),
     });
   }
 }

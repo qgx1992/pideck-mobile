@@ -12,8 +12,8 @@
 
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
-| `src/` | 协议与状态核心 + 探针 CLI（**51 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（Vite + Capacitor，**184 条测试**） | `cd app && npm run dev` / `npm run apk` |
+| `src/` | 协议与状态核心 + 探针 CLI（**56 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
+| `app/` | 手机客户端（Vite + Capacitor，**285 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
@@ -29,15 +29,16 @@ src/                        协议核心（与 UI 无关，RN / Capacitor / Flut
 │  └─ backoff.ts            指数退避 + 抖动
 ├─ state/store.ts           全局状态仓（SSE 优先，不支持流式时退化 ETag 轮询）
 ├─ runtime/target.ts        {sessionId, agentId, runtimeGeneration} 三元组
-├─ session.ts               SessionChannel：常驻流 + 发送 + 断线重连
+├─ session.ts               SessionChannel：常驻流 + 发送 + 断线重连 + 静默断流看门狗
 ├─ pairing.ts               二维码/手填链接 → { baseUrl, token }
 └─ cli/probe.ts             零依赖探针 CLI
 
 app/                        手机客户端（Capacitor 7 / Android）
 ├─ src/main.ts              接线：配对 / 主界面 / 发送 / 停止
 ├─ src/platform/            fetch 分流、主题、安全区、导航栏、配对持久化
-├─ src/ui/                  侧栏、对话、ask 卡片、@ 引用、/ 命令、工作区、模型选择
-├─ android/                 Android 工程（含导航栏插件与图标定制）
+├─ src/ui/                  侧栏、对话、Markdown、ask 卡片、@ 引用、/ 命令、工作区、
+│                           模型选择、上下文用量、任务清单
+├─ android/                 Android 工程（导航栏插件、后台看护服务、图标定制）
 ├─ scripts/                 APK 构建、图标生成、验证脚本
 └─ assets-src/              图标源图（1024 / 512 / 192）
 
@@ -58,14 +59,20 @@ docs/issue-*.md             已提交给上游的两个缺陷草稿
 
 **对话**
 - 流式渲染，工具调用与思考收进「执行过程」折叠块（默认收起）
+- **正文按 Markdown 渲染**：粗体/斜体/行内码/围栏代码块（带语言标签、复制、语法高亮）/
+  有序无序与任务列表/表格/引用/标题，单换行按 GFM 断行
 - 自动剥离正文里的 `<thinking>` 标签
 - 发送即本地回显，结束后重拉历史并清空流式区
 - 会话切换保留各自草稿
-- 悬浮「历史」按钮：列出可跳转的消息，点一条滚动定位并高亮
+- 输入框右下角「历史」按钮：列出可跳转的消息，点一条滚动定位并高亮
+- 运行中三处动画标识：对话底部旋转圆环、顶部栏呼吸绿点、侧栏绿条脉冲
 
 **输入框**
-- `@` 文件引用（逐层浏览项目目录）、`/` 斜线命令（运行时命令 + 提示词库 + 内置）
-- 模型 / 思考档位切换（无运行时先自动激活）
+- `@` 文件引用（逐层浏览项目目录）、`/` 斜线命令（运行时命令 + 提示词库 + 内置），
+  两者内嵌在输入框左下角
+- 模型 / 思考档位切换（无运行时先自动激活），模型面板支持搜索（名称 / ID / 供应商）
+- 上下文用量：环形百分比 + 明细面板（输入/输出/缓存/花费）+ 一键压缩上下文
+- 任务清单：读 `GET /api/sessions/:id/todo`，显示进度与「进行中」，可折叠
 - 发送与停止合并为一个按钮，按会话状态切换
 
 **右侧工作区**
@@ -77,7 +84,14 @@ docs/issue-*.md             已提交给上游的两个缺陷草稿
 - 允许留空：批量每题可「跳过」，单题按钮变「留空提交」
 - 审阅页三态：未回答（红）/（留空）（灰）/ 实际内容
 
-**外观与系统**
+**通知**
+- 任务完成 / 出错 / 中断、AI 新提问都会弹系统通知，点击跳回对应会话
+- 同一会话多个提问合并成一条；正在看的会话不打扰
+- **切到后台也生效**：原生前台服务守 `/api/events`，不受 WebView 冻结影响
+
+**手势与系统**
+- 左右抽屉滑动手势互斥；横向可滚动区域（宽表格、长代码行）不抢手势
+- 返回键一次只退一步：面板 → 工作区 → 侧边栏 → 再按退出
 - 主题三档（浅色 / 深色 / 跟随系统），状态栏与导航栏同步
 - 图标以桌面端为基础重绘（深色渐变底 + 白色 Pi + 品牌蓝 i 点）
 
@@ -112,8 +126,8 @@ node src/cli/probe.ts stop --pair "..." --session <sessionId>
 ### 4. 测试与类型检查
 
 ```bash
-npm test && npm run typecheck                 # 核心：51 条
-cd app && npm test && npm run typecheck       # 客户端：184 条
+npm test && npm run typecheck                 # 核心：56 条
+cd app && npm test && npm run typecheck       # 客户端：285 条
 cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```
 
@@ -227,13 +241,23 @@ WebView 是跨域环境，而 PiDeck 的 CORS 有两个限制（已在 `app/src/
 
 分流规则：**SSE 留在 WebView**（要流式响应体），其余全部走 `CapacitorHttp`（没有 CORS 概念）。
 
+另外两处只有在原生侧才能做的事：
+
+- **返回键**：Capacitor 的 `BridgeActivity` 不拦返回键，按下会直接 `finish()` 回桌面。
+  装 `@capacitor/app` 并注册 `backButton` 监听后才会交给 JS。
+- **后台提醒**：`RunWatchService`（`dataSync` 类型前台服务）守 `/api/events`，
+  因为 cached 进程会被冻结。服务必须在 App 仍可见时启动（Android 12+ 禁止后台启动前台服务），
+  所以「发送消息」的那一刻就乐观拉起。
+
 ---
 
 ## 已知限制
 
 - `/api/*` 是 PiDeck 的内部接口，**没有版本号也没有兼容承诺**。升级桌面端后请重跑测试与探针。
 - `/api/health` 不返回版本，客户端无法判断对面版本；已向上游提 issue 建议增加 `version`。
-- 服务端没有推送通道：App 在后台无法收到「任务完成」通知，只能前台 SSE 或自己做轮询。
+- 服务端没有推送通道。App 切后台会被系统冻结（WebView 里的 SSE 与定时器全停），
+  因此后台提醒由**原生前台服务**守 `/api/events` 实现，代价是运行期间通知栏有一条常驻的
+  「正在等待任务完成…」。深度 Doze 下前台服务也可能被限流。
 - 通过 Web API 删除会话后桌面端列表不会立即刷新（上游缺 IPC 广播，见 `docs/issue-delete-sync.md`）。
 - DSH 会话的历史读取依赖 DSH runtime；runtime 未就绪时该接口返回 500。
 

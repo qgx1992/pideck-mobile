@@ -365,8 +365,23 @@ public class RunWatchService extends Service {
 
     private void notifyFinished(String sessionId, String status, String sessionTitle) {
         String title = sessionTitle.isEmpty() ? titles.optString(sessionId, "") : sessionTitle;
-        String heading = status == null ? "任务已结束" : ("error".equals(status) ? "任务出错" : "任务完成");
-        String body = title.isEmpty() ? "会话已经跑完一轮" : "「" + title + "」已结束";
+        // 结束状态要和 JS 侧口径一致：崩溃/掉线不能说成「完成」
+        String heading;
+        String suffix;
+        if ("error".equals(status)) {
+            heading = "任务出错";
+            suffix = "运行出错，点击查看详情";
+        } else if ("closed".equals(status) || status == null) {
+            heading = "任务已中断";
+            suffix = "连接中断，点击查看";
+        } else if ("stopped".equals(status)) {
+            heading = "任务已停止";
+            suffix = "已停止";
+        } else {
+            heading = "任务完成";
+            suffix = "已结束";
+        }
+        String body = title.isEmpty() ? ("会话" + suffix) : ("「" + title + "」" + suffix);
 
         Intent intent = new Intent(this, MainActivity.class);
         intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);

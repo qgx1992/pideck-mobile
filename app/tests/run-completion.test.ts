@@ -9,6 +9,7 @@ import {
   completionTitle,
   diffCompletedRuns,
   diffNewPendingRequests,
+  shouldNotifyEnd,
 } from "../src/ui/run-completion.ts";
 
 test("running → idle 算完成", () => {
@@ -73,14 +74,21 @@ test("多个会话只挑出真正跑完的", () => {
 
 test("通知文案：出错与正常区分", () => {
   assert.equal(completionTitle("idle"), "任务完成");
-  assert.equal(completionTitle("gone"), "任务完成");
+  assert.equal(completionTitle("finished"), "任务完成");
   assert.equal(completionTitle("error"), "任务出错");
+  // 进程崩溃 / runtime 消失不能说成「完成」
+  assert.equal(completionTitle("gone"), "任务已中断");
+  assert.equal(completionTitle("closed"), "任务已中断");
+  assert.equal(completionTitle("stopped"), "任务已停止");
 });
 
 test("通知正文：带会话标题，缺标题时兜底", () => {
   assert.equal(completionBody("修 CI"), "「修 CI」已结束");
   assert.equal(completionBody("   "), "会话已结束，点击查看");
   assert.equal(completionBody(undefined), "会话已结束，点击查看");
+  assert.equal(completionBody("修 CI", "error"), "「修 CI」运行出错，点击查看详情");
+  assert.equal(completionBody("修 CI", "gone"), "「修 CI」连接中断，点击查看");
+  assert.equal(completionBody("修 CI", "stopped"), "「修 CI」已停止");
 });
 
 /* ---------------- 问答卡通知 ---------------- */
@@ -130,4 +138,12 @@ test("提问通知文案", () => {
   );
   assert.equal(askNotificationBody({ sessionId: "s1", count: 1, firstTitle: "" }, "修 CI"), "「修 CI」有一个问题待回答");
   assert.equal(askNotificationBody({ sessionId: "s1", count: 1, firstTitle: "" }), "有一个问题待回答");
+});
+
+test("用户自己点停止不弹通知", () => {
+  assert.equal(shouldNotifyEnd("aborted"), false);
+  assert.equal(shouldNotifyEnd("stopped"), false);
+  assert.equal(shouldNotifyEnd("idle"), true);
+  assert.equal(shouldNotifyEnd("error"), true, "出错要通知");
+  assert.equal(shouldNotifyEnd("gone"), true, "崩溃要通知");
 });
