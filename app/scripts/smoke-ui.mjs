@@ -208,11 +208,12 @@ if (wsBtn) {
 }
 
 // 跳转历史：点一条能否真的定位到 DOM
-const hasFab = doc.querySelector(".fab") !== null;
+const hasFab = doc.querySelector(".composer-fab") !== null;
+const fabInInput = Boolean(doc.querySelector(".composer-input .composer-fab"));
 console.log("");
-console.log(`历史悬浮按钮: ${hasFab ? "存在" : "缺失"}`);
+console.log(`历史按钮: ${hasFab ? "存在" : "缺失"}  在输入框内=${fabInInput}`);
 if (hasFab) {
-  doc.querySelector(".fab").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  doc.querySelector(".composer-fab").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   await new Promise((r) => setTimeout(r, 400));
   const head = doc.querySelector(".sheet-backdrop .sheet h2")?.textContent;
   const items = doc.querySelectorAll(".sheet-backdrop .jump-item").length;
@@ -236,6 +237,140 @@ if (hasFab) {
 const chips = [...doc.querySelectorAll(".composer-chips .chip")].map((el) => el.textContent);
 console.log(`
 composer chips: ${chips.join(" | ") || "(无)"}`);
+
+// 任务清单：切到「这个」会话（本身带 todo 的会话才有清单）再验一次
+{
+  const target = [...doc.querySelectorAll(".session")].find((el) =>
+    (el.querySelector(".sname")?.textContent ?? "").includes("开发PiDeck手机端"),
+  );
+  if (target) {
+    target.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await waitFor(() => !doc.querySelector(".todo-strip.is-hidden"), 6000);
+    const strip = doc.querySelector(".todo-strip");
+    const items = strip?.querySelectorAll(".todo-item") ?? [];
+    const running = strip?.querySelectorAll(".todo-item.is-in_progress").length ?? 0;
+    const done = strip?.querySelectorAll(".todo-item.is-completed").length ?? 0;
+    console.log(
+      `
+任务清单（带 todo 的会话）: 可见=${!strip?.classList.contains("is-hidden")} 条目=${items.length} 已完成=${done} 进行中=${running} 进度=${strip?.querySelector(".todo-progress")?.textContent ?? ""}`,
+    );
+    console.log(`  首条: ${strip?.querySelector(".todo-text")?.textContent ?? "(无)"}`);
+  }
+}
+
+// 任务清单条带
+{
+  const strip = doc.querySelector(".todo-strip");
+  const items = doc.querySelectorAll(".todo-item");
+  const done = doc.querySelectorAll(".todo-item.is-completed").length;
+  const running = doc.querySelectorAll(".todo-item.is-in_progress").length;
+  const hidden = strip?.classList.contains("is-hidden");
+  const progress = doc.querySelector(".todo-progress")?.textContent ?? "";
+  console.log(
+    `
+任务清单: 存在=${Boolean(strip)} 隐藏=${hidden} 条目=${items.length} 已完成=${done} 进行中=${running} 进度=${progress}`,
+  );
+  const spinner = doc.querySelector(".run-status .run-spinner");
+  console.log(`  运行中动画标识: ${Boolean(spinner)}`);
+}
+
+// Markdown：助手回答里应出现粗体 / 代码块 / 列表
+{
+  const bodies = [...doc.querySelectorAll(".msg-body--md")];
+  const strong = doc.querySelectorAll(".md strong").length;
+  const code = doc.querySelectorAll(".md-codeblock").length;
+  const inlineCode = doc.querySelectorAll(".md-inline-code").length;
+  const lists = doc.querySelectorAll(".md-list").length;
+  const tables = doc.querySelectorAll(".md-table").length;
+  const tokens = doc.querySelectorAll(".md-code .tok").length;
+  const cursors = doc.querySelectorAll(".md .md-p").length;
+  const sample = [...doc.querySelectorAll(".md strong")].slice(0, 3).map((el) => el.textContent);
+  console.log(
+    `
+Markdown: 助手气泡=${bodies.length} 粗体=${strong} 代码块=${code} 行内代码=${inlineCode} 列表=${lists} 表格=${tables} 段落=${cursors} 高亮token=${tokens}`,
+  );
+  console.log(`  粗体样例: ${sample.join(" / ") || "(无)"}`);
+}
+// 折叠箭头：必须是 14px 的 SVG，且不能残留字面量 B8
+{
+  const heads = [...doc.querySelectorAll(".project-head .chev-icon")];
+  const sizes = heads.map((el) => el.getAttribute("width"));
+  const moreChevs = [...doc.querySelectorAll(".sessions-more .chev-icon")];
+  const rotated = heads.filter((el) => el.classList.contains("is-expanded")).length;
+  console.log(
+    `
+折叠箭头: 分组头=${heads.length} 尺寸=${[...new Set(sizes)].join("/") || "(无)"} 展开态=${rotated} 展开按钮箭头=${moreChevs.length}`,
+  );
+  console.log(`  残留 B8 文案=${(doc.body.textContent ?? "").includes("B8")}`);
+  const proc = doc.querySelector(".process summary .chev-icon");
+  console.log(`  执行过程箭头=${Boolean(proc)}`);
+}
+
+// 布局：@ / 必须嵌在输入框里，而不是下方工具行
+{
+  const inline = doc.querySelector(".composer-input .composer-inline-tools");
+  const labels = inline ? [...inline.querySelectorAll("button")].map((el) => el.textContent.trim()) : [];
+  console.log(`
+inline tools: ${labels.join(" | ") || "(无)"}  在输入框内=${Boolean(inline)}`);
+
+  const wrap = doc.querySelector(".composer-input");
+  const rowChips = [...doc.querySelectorAll(".composer-row .chip")].map((el) => el.textContent.trim());
+  console.log(`composer-row chips: ${rowChips.join(" | ") || "(无)"}`);
+
+  const ctxChip = doc.querySelector(".chip--ctx");
+  const ctxText = ctxChip?.querySelector(".ctx-text")?.textContent?.trim() ?? "";
+  const ctxHidden = ctxChip ? ctxChip.classList.contains("is-hidden") : true;
+  const ring = ctxChip?.querySelector(".ctx-ring");
+  const pct = ring?.style.getPropertyValue("--ctx-pct") ?? "";
+  console.log(`上下文 chip: 文本=${JSON.stringify(ctxText)} 隐藏=${ctxHidden} 环百分比=${pct || "(空)"} title=${ctxChip?.title ?? ""}`);
+  const fab = doc.querySelector(".composer-fab");
+  console.log(`布局自检: 输入框包裹=${Boolean(wrap)} @在包裹内=${Boolean(wrap?.querySelector(".composer-inline-tools"))} 历史在包裹内=${Boolean(wrap?.querySelector(".composer-fab"))} 行内不再有@=${!rowChips.includes("@")} 历史文字=${JSON.stringify(fab?.textContent ?? "")}`);
+}
+
+// 模型面板：搜索能过滤
+{
+  const modelBtn = [...doc.querySelectorAll(".composer-row .chip")].find((el) => !el.classList.contains("chip--ctx") && !el.textContent.includes("思考"));
+  modelBtn?.click();
+  const ok = await waitFor(() => doc.querySelector(".sheet-search"), 6000);
+  if (!ok) {
+    console.log("  面板内容: " + JSON.stringify((doc.querySelector(".sheet")?.textContent ?? "").slice(0, 160)));
+    console.log("模型面板: 未打开搜索框");
+  } else {
+    // 只统计当前这个模型面板，别被残留的旧面板干扰
+    const search = doc.querySelector(".sheet-search");
+    const scope = search.closest(".sheet");
+    // 取消按钮也是 .sheet-item，统计时要排除
+    const items = () => scope.querySelectorAll(".sheet-item:not(.sheet-item--cancel)").length;
+
+    // 打开面板时不能自动聚焦搜索框，否则手机会立刻弹出键盘挡住列表
+    console.log(`  搜索框自动聚焦=${doc.activeElement === search}`);
+    search.blur();
+
+    const total = items();
+    search.value = "kimi";
+    search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 50));
+    const filtered = items();
+
+    search.value = "zzzznope";
+    search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 50));
+    const none = items();
+    const noteVisible = ![...scope.querySelectorAll(".sheet-note")].every((el) => el.classList.contains("is-hidden"));
+
+    console.log(`模型面板搜索: 全部=${total} 「kimi」=${filtered} 「zzzznope」=${none} 空提示可见=${noteVisible}`);
+    doc.querySelector(".sheet-backdrop")?.remove();
+  }
+}
+
+// 上下文面板：点 chip 应出明细
+{
+  doc.querySelector(".chip--ctx")?.click();
+  const ok = await waitFor(() => doc.querySelector(".ctx-rows li"), 4000);
+  const rows = [...doc.querySelectorAll(".ctx-row")].map((el) => el.textContent.replace(/\s+/g, " ").trim());
+  console.log(`上下文面板: 已打开=${Boolean(ok)} 明细=${rows.join(" | ") || "(无)"}`);
+  doc.querySelector(".sheet-backdrop")?.remove();
+}
 
 dom.window.close();
 process.exit(0);
