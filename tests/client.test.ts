@@ -198,3 +198,21 @@ test("normalizeBaseUrl 容错：补 scheme、去尾斜杠、丢 query", () => {
   const client = new PiDeckClient({ baseUrl: "192.168.1.5:8765/?token=zzz", token: TOKEN });
   assert.equal(client.baseUrl, "http://192.168.1.5:8765");
 });
+
+test("streamSse 每收到一个分片就回调 onActivity（用于检测连接假死）", async () => {
+  const LF = String.fromCharCode(10);
+  const frames = [
+    'data: {"type":"text-start","id":"t1"}' + LF + LF,
+    ": ping" + LF + LF,
+    "data: [DONE]" + LF + LF,
+  ];
+  const { client } = clientWith(() => sseResponse(frames));
+  let activity = 0;
+  await client.streamSession("s1", {
+    onEvent: () => undefined,
+    onActivity: () => {
+      activity += 1;
+    },
+  });
+  assert.equal(activity, 3, "三个分片应触发三次活动回调（含心跳）");
+});

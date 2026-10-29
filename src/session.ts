@@ -33,6 +33,14 @@ export interface SessionChannelOptions {
   onError?: (error: unknown) => void;
   /** 重连成功（期间可能漏帧，建议此时重拉一次历史） */
   onRecovered?: () => void;
+  /**
+   * 多久没收到任何字节（含心跳）就判定连接假死并强制重连，默认 50s。
+   *
+   * 服务端每 15s 发一次 `: ping`，所以 50s 无字节基本等于流已死。
+   * 典型场景：App 切后台被系统冻结，socket 既不来数据也不报错，
+   * 不主动断开会一直挂在半开连接上，永远等不到 finish。
+   */
+  stallMs?: number;
   autoReconnect?: boolean;
 }
 
@@ -41,7 +49,9 @@ export class SessionChannel {
   readonly reducer = new ChatReducer();
   private readonly client: PiDeckClient;
   private readonly options: SessionChannelOptions;
-  private controller: AbortController | null = null;
+  /** 当前这一轮连接的控制器（重连时换新的，不影响整个 loop） */
+  private iteration: AbortController | null = null;
+  private readonly stallMs: number;
   private status: ChannelStatus = "idle";
   private running = false;
   private everConnected = false;
@@ -51,6 +61,7 @@ export class SessionChannel {
     this.options = options;
     this.client = options.client;
     this.sessionId = options.sessionId;
+    this.stallMs = options.stallMs ?? 50_000;
   }
 
   getStatus(): ChannelStatus {
@@ -76,17 +87,30 @@ export class SessionChannel {
   }
 
   private async loop(): Promise<void> {
-    const controller = new AbortController();
-    this.controller = controller;
     const backoff = new Backoff({ baseMs: 800, maxMs: 15_000 });
     const autoReconnect = this.options.autoReconnect !== false;
 
-    while (this.running && !controller.signal.aborted) {
+    while (this.running) {
+      const iteration = new AbortController();
+      this.iteration = iteration;
+      let lastActivity = Date.now();
+      let stalled = false;
+
+      // 看门狗：服务端心跳 15s 一次，超过 stallMs 没有任何字节就判定假死
+      const watchdog = setInterval(() => {
+        if (Date.now() - lastActivity <= this.stallMs) return;
+        stalled = true;
+        iteration.abort();
+      }, Math.min(5_000, Math.max(50, Math.round(this.stallMs / 5))));
+
       try {
         this.setStatus(backoff.attempts === 0 ? "connecting" : "reconnecting");
         await this.client.streamSession(this.sessionId, {
-          signal: controller.signal,
+          signal: iteration.signal,
           onEvent: () => undefined,
+          onActivity: () => {
+            lastActivity = Date.now();
+          },
           onOpen: () => {
             const recovered = this.everConnected;
             this.everConnected = true;
@@ -107,20 +131,28 @@ export class SessionChannel {
         });
         if (!autoReconnect) break;
       } catch (error) {
-        if (controller.signal.aborted || !this.running) break;
+        if (!this.running) break;
         if (isAuthError(error)) {
           this.setStatus("auth-required");
           this.options.onError?.(error);
           break;
         }
-        this.options.onError?.(error);
-        if (!autoReconnect) {
-          this.setStatus("closed");
-          break;
-        }
+        // 假死 / 主动重连触发的 abort：不算错误，安静重连
+        if (!iteration.signal.aborted) this.options.onError?.(error);
+      } finally {
+        clearInterval(watchdog);
+        if (this.iteration === iteration) this.iteration = null;
       }
-      if (!this.running || controller.signal.aborted) break;
-      await sleep(backoff.nextDelay(), controller.signal);
+
+      if (!this.running) break;
+      if (stalled) {
+        // 静默断流：重置退避，立刻重连（后台恢复后要尽快追上）
+        backoff.reset();
+        this.setStatus("reconnecting");
+      } else if (!autoReconnect) {
+        break;
+      }
+      await sleep(stalled ? 0 : backoff.nextDelay());
     }
     if (this.status !== "auth-required") this.setStatus("closed");
   }
@@ -173,10 +205,22 @@ export class SessionChannel {
     this.touch();
   }
 
+  /**
+   * 强制重连（保持 running）。
+   * 用在 App 从后台回到前台的场景：此时流多半已被系统冻死，但没有报错。
+   */
+  forceReconnect(): void {
+    if (!this.running) {
+      this.start();
+      return;
+    }
+    this.iteration?.abort();
+  }
+
   close(): void {
     this.running = false;
-    this.controller?.abort();
-    this.controller = null;
+    this.iteration?.abort();
+    this.iteration = null;
     this.setStatus("closed");
   }
 }

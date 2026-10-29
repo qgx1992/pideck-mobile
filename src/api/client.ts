@@ -66,6 +66,11 @@ export interface SseOptions {
   onEvent: (event: SseEvent) => void;
   /** 收到响应头（连接已建立）时回调 */
   onOpen?: () => void;
+  /**
+   * 收到任意字节时回调（含 SSE 注释心跳 `: ping`）。
+   * 用于检测「连接假死」：后台被系统冻结后 socket 不报错也不来数据。
+   */
+  onActivity?: () => void;
   onClose?: () => void;
 }
 
@@ -289,6 +294,7 @@ export class PiDeckClient {
         const { done, value } = await reader.read();
         if (done) break;
         if (!value) continue;
+        options.onActivity?.();
         for (const event of parser.push(decoder.decode(value))) options.onEvent(event);
       }
       for (const event of parser.flush()) options.onEvent(event);

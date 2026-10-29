@@ -52,6 +52,7 @@ export class StateStore {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private pollIntervalMs = 0;
   private visibilityHandler: (() => void) | null = null;
+  private refreshing: Promise<void> | null = null;
   private running = false;
   private status: StoreStatus = "idle";
   private readonly pollMs: number;
@@ -110,7 +111,16 @@ export class StateStore {
 
   /* ---------------------------- 拉取 ---------------------------- */
 
+  /** 同一时刻只发一个 /api/state 请求（后台恢复时可能被多处同时触发）。 */
   async refresh(): Promise<void> {
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = this.doRefresh().finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+
+  private async doRefresh(): Promise<void> {
     const response = await this.client.getState(this.etag);
     if (response.notModified) return;
     this.etag = response.etag;
