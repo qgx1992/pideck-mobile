@@ -29,6 +29,9 @@ import {
 } from "./platform/storage.ts";
 import type { SavedPairing } from "./platform/storage.ts";
 import { createAppFetch } from "./platform/fetch.ts";
+import { decodeQrFromImageFile, scanQrFromCamera } from "./platform/qr-scan.ts";
+import type { ScanOutcome } from "./platform/qr-scan.ts";
+import { describeScanMiss, pickScannedLink } from "./ui/pairing-scan-model.ts";
 import { initTheme, setThemeMode, getThemeMode, themeLabel, THEME_MODES, onThemeChange } from "./platform/theme.ts";
 import { initSafeArea } from "./platform/safe-area.ts";
 import { sleep } from "./platform/sleep.ts";
@@ -246,43 +249,104 @@ function renderPairing(options: { link?: string; error?: string } = {}): void {
     statusEl.className = `status${tone ? ` status--${tone}` : ""}`;
   };
 
-  const connectBtn = h("button", { class: "btn", text: "连接" });
-  connectBtn.addEventListener("click", () => {
-    void (async () => {
-      const link = linkInput.value.trim();
-      const manualBase = baseInput.value.trim();
-      const manualToken = tokenInput.value.trim();
-
-      let baseUrl = "";
-      let token = "";
-      if (link) {
-        const payload = parsePairingInput(link);
+  /** 解析链接 → 握手。链接本身坏了也要给提示，不能只挂一个未捕获的 rejection。 */
+  const attemptConnect = async (linkText: string, manualBase: string, manualToken: string): Promise<void> => {
+    let baseUrl = "";
+    let token = "";
+    try {
+      if (linkText) {
+        const payload = parsePairingInput(linkText);
         baseUrl = payload.baseUrl;
         token = payload.token;
       } else {
         baseUrl = manualBase;
         token = manualToken;
       }
-      if (!token) {
-        setStatus("缺少令牌：粘贴完整链接，或填下面的令牌", "error");
-        return;
-      }
-      if (isDev && !baseUrl) baseUrl = window.location.origin;
-      if (!baseUrl) {
-        setStatus("缺少地址", "error");
-        return;
-      }
+    } catch (error) {
+      setStatus(describeError(error), "error");
+      return;
+    }
 
-      connectBtn.disabled = true;
-      setStatus("正在握手…");
-      try {
-        await connect({ baseUrl, token });
-      } catch (error) {
+    if (!token) {
+      setStatus("缺少令牌：粘贴完整链接，或填下面的令牌", "error");
+      return;
+    }
+    if (isDev && !baseUrl) baseUrl = window.location.origin;
+    if (!baseUrl) {
+      setStatus("缺少地址", "error");
+      return;
+    }
+
+    setStatus("正在握手…");
+    try {
+      await connect({ baseUrl, token });
+    } catch (error) {
+      setStatus(describeError(error), "error");
+    }
+  };
+
+  const connectBtn = h("button", { class: "btn", text: "连接" });
+  connectBtn.addEventListener("click", () => {
+    connectBtn.disabled = true;
+    void attemptConnect(linkInput.value.trim(), baseInput.value.trim(), tokenInput.value.trim())
+      .finally(() => {
         connectBtn.disabled = false;
-        setStatus(describeError(error), "error");
-      }
-    })();
+      });
   });
+
+  /** 扫码/选图的结果统一从这里进 */
+  const applyScanOutcome = (outcome: ScanOutcome): void => {
+    if (outcome.kind === "failed") {
+      setStatus(outcome.message, "error");
+      return;
+    }
+    if (outcome.kind === "cancelled") {
+      setStatus("已取消扫码");
+      return;
+    }
+    const pick = pickScannedLink([outcome.text]);
+    if (!pick.link) {
+      setStatus(describeScanMiss(pick), "error");
+      return;
+    }
+    // 填进输入框再连：连不上时用户能直接在框里改地址
+    linkInput.value = pick.link;
+    setStatus("已识别二维码，正在握手…");
+    void attemptConnect(pick.link, "", "");
+  };
+
+  const scanBtn = h("button", { class: "btn scan-camera", text: "扫码连接" });
+  scanBtn.addEventListener("click", () => {
+    scanBtn.disabled = true;
+    setStatus("正在打开相机…");
+    void scanQrFromCamera()
+      .then(applyScanOutcome)
+      .catch((error: unknown) => setStatus(describeError(error), "error"))
+      .finally(() => {
+        scanBtn.disabled = false;
+      });
+  });
+
+  // 相册/截图里的二维码：不需要相机权限，纯 JS 解码（两端都能用）
+  const albumBtn = h("button", { class: "btn btn-ghost scan-album", text: "从相册选图" });
+  const fileInput = h("input", { type: "file" });
+  fileInput.accept = "image/*";
+  fileInput.hidden = true;
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    // 清掉 value，否则同一张图选第二次不触发 change
+    fileInput.value = "";
+    if (!file) return;
+    albumBtn.disabled = true;
+    setStatus("正在识别图片…");
+    void decodeQrFromImageFile(file)
+      .then(applyScanOutcome)
+      .catch((error: unknown) => setStatus(describeError(error), "error"))
+      .finally(() => {
+        albumBtn.disabled = false;
+      });
+  });
+  albumBtn.addEventListener("click", () => fileInput.click());
 
   if (options.error) setStatus(options.error, "error");
 
@@ -292,6 +356,8 @@ function renderPairing(options: { link?: string; error?: string } = {}): void {
       h("p", {
         text: "先在电脑上打开：设置 → Web 服务 → 局域网 Web 服务（保持令牌鉴权开启），再扫描/复制那里的链接。",
       }),
+      h("div", { class: "pair-actions" }, [scanBtn, albumBtn, fileInput]),
+      h("div", { class: "divider", text: "或者粘贴链接" }),
       h("div", {}, [
         h("span", { class: "label", text: "配对链接" }),
         linkInput,

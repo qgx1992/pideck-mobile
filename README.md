@@ -16,7 +16,7 @@
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
 | `src/` | 协议与状态核心 + 探针 CLI（**56 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（Vite + Capacitor，**285 条测试**） | `cd app && npm run dev` / `npm run apk` |
+| `app/` | 手机客户端（Vite + Capacitor，**324 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
@@ -38,7 +38,7 @@ src/                        协议核心（与 UI 无关，RN / Capacitor / Flut
 
 app/                        手机客户端（Capacitor 7 / Android）
 ├─ src/main.ts              接线：配对 / 主界面 / 发送 / 停止
-├─ src/platform/            fetch 分流、主题、安全区、导航栏、配对持久化
+├─ src/platform/            fetch 分流、主题、安全区、导航栏、配对持久化、扫码/相册解码
 ├─ src/ui/                  侧栏、对话、Markdown、ask 卡片、@ 引用、/ 命令、工作区、
 │                           模型选择、上下文用量、任务清单
 ├─ android/                 Android 工程（导航栏插件、后台看护服务、图标定制）
@@ -52,6 +52,14 @@ docs/issue-*.md             已提交给上游的两个缺陷草稿
 ---
 
 ## App 已实现的功能
+
+**配对**
+- 扫码连接：相机扫桌面端「扫码访问」的二维码，识别到就直接握手
+- 两条扫码路线自动切换：优先 Google 原生扫描界面，无 Google Play Services 的机型
+  （华为等）退到 App 内自绘取景框 + 自带 ML Kit 模型
+- 从相册/截图选一张二维码图解码（纯 JS，不需要相机权限）
+- 扫码结果会清洗：去引号/零宽字符/多行说明/整串 URL 编码，再交给协议层校验
+- 也可以直接粘贴链接，或手填地址 + 令牌；最近连接的机器可一键切回
 
 **侧栏**
 - 项目分组 + 组内会话，按 `updatedAt` 倒序
@@ -130,7 +138,7 @@ node src/cli/probe.ts stop --pair "..." --session <sessionId>
 
 ```bash
 npm test && npm run typecheck                 # 核心：56 条
-cd app && npm test && npm run typecheck       # 客户端：285 条
+cd app && npm test && npm run typecheck       # 客户端：324 条
 cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```
 

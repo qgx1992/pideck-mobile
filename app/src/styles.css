@@ -191,6 +191,181 @@ button {
   gap: 8px;
 }
 
+/* 扫码入口：相机为主按钮，相册为次按钮 */
+.pair-actions {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.pair-actions .btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 42px;
+}
+
+/* 扫码遮罩：相机画面在 WebView 下面，所以整个页面藏起来，只留它 */
+body.barcode-scanner-active {
+  visibility: hidden;
+}
+
+body.barcode-scanner-active .scan-overlay {
+  visibility: visible;
+}
+
+.scan-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  /* 透明：让下层的相机预览透出来；只给四周压暗，突出取景框 */
+  background: radial-gradient(
+    circle at 50% 42%,
+    rgba(0, 0, 0, 0) 0,
+    rgba(0, 0, 0, 0) 26vmin,
+    rgba(0, 0, 0, 0.62) 26.6vmin,
+    rgba(0, 0, 0, 0.78) 100%
+  );
+  color: #fff;
+  padding: calc(18px + var(--safe-top)) 18px calc(26px + var(--safe-bottom));
+}
+
+.scan-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scan-title {
+  font-size: 15px;
+  font-weight: 600;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+}
+
+.scan-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.scan-frame {
+  position: relative;
+  width: min(66vw, 260px);
+  aspect-ratio: 1;
+}
+
+.scan-corner {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--accent);
+  border-radius: 4px;
+}
+
+.scan-corner--tl {
+  top: 0;
+  left: 0;
+  border-right: none;
+  border-bottom: none;
+}
+
+.scan-corner--tr {
+  top: 0;
+  right: 0;
+  border-left: none;
+  border-bottom: none;
+}
+
+.scan-corner--bl {
+  bottom: 0;
+  left: 0;
+  border-right: none;
+  border-top: none;
+}
+
+.scan-corner--br {
+  bottom: 0;
+  right: 0;
+  border-left: none;
+  border-top: none;
+}
+
+/* 扫描线：纯装饰，告诉用户「在动」 */
+.scan-sweep {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.9;
+  animation: scan-sweep 2.1s ease-in-out infinite;
+}
+
+@keyframes scan-sweep {
+  0%,
+  100% {
+    top: 8%;
+  }
+  50% {
+    top: 90%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-sweep {
+    animation: none;
+    top: 50%;
+  }
+}
+
+.scan-hint {
+  max-width: min(78vw, 320px);
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.86);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+}
+
+.scan-hint--error {
+  color: #ffb4b4;
+}
+
+.scan-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+}
+
+.scan-btn {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border-radius: 999px;
+  padding: 9px 18px;
+  font-weight: 600;
+  backdrop-filter: blur(6px);
+}
+
+.scan-btn.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.scan-btn--ghost {
+  background: rgba(255, 255, 255, 0.1);
+}
+
 .pairing .status {
   font-size: 13px;
   min-height: 20px;

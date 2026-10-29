@@ -2,7 +2,7 @@
 
 PiDeck 手机客户端外壳：Vite + TypeScript + Capacitor，协议层复用上一级 `pideck-mobile/src`（通过 `@core` 别名）。
 
-功能已经对齐桌面端的主要体验：配对 → 会话列表 → 对话（流式 + Markdown + 语法高亮）→
+功能已经对齐桌面端的主要体验：扫码配对 → 会话列表 → 对话（流式 + Markdown + 语法高亮）→
 停止 → ask 卡片应答 → 新建会话 → 项目切换 → 工作区（Git / 文件）→ 任务清单 → 上下文用量 →
 后台通知；另有抽屉手势、返回键处理与主题三档。
 
@@ -13,12 +13,12 @@ app/
 ├─ capacitor.config.ts   原生壳配置（含 CapacitorHttp）
 ├─ src/
 │  ├─ main.ts            接线：配对/主界面/发送/停止/通知/返回键/后台恢复
-│  ├─ platform/          fetch 分流、主题、安全区、导航栏、本地通知、后台看护、返回键
+│  ├─ platform/          fetch 分流、主题、安全区、导航栏、本地通知、后台看护、返回键、扫码
 │  ├─ ui/                侧栏、对话、Markdown、语法高亮、ask 卡片、工作区、模型选择、
 │  │                     上下文用量、任务清单、抽屉手势
 │  └─ ...
 ├─ scripts/              APK 构建、图标生成、smoke-ui（真数据）、verify-send（mock 链路）
-└─ tests/                node:test + jsdom，285 条
+└─ tests/                node:test + jsdom，324 条
 ```
 
 ## 本地开发（浏览器里就能用）
@@ -122,12 +122,24 @@ gh secret set ANDROID_KEYSTORE_PROPERTIES < android/keystore.properties
 
 产物：
 ```
-apk/PiDeck-0.1.1-release.apk    # 约 4 MB，debug 签名
-apk/PiDeck-0.1.1-release.apk  # 约 3.4 MB，自己的 keystore 签名
-apk/index.html               # 下载页（含二维码）
-apk/qr.svg                   # 二维码
-apk/SHA256SUMS.txt           # 校验值
+apk/PiDeck-0.1.2-debug.apk    # 约 27 MB，debug 签名（含扫码插件后变大）
+apk/PiDeck-0.1.2-release.apk  # 约 13.5 MB，自己的 keystore 签名
+apk/index.html               # 下载页（二维码内联）
+apk/qr.svg                   # 同一张二维码的独立文件
+apk/SHA256SUMS.txt           # 校验值（多项目合并，不会覆盖别人的条目）
 ```
+
+下载页里的二维码指向**页面地址本身**，不是某个版本的 APK 文件，所以换版本不用重建二维码；
+但换机器/换端口必须重建，否则手机扫出来还是旧地址：
+
+```bash
+python app/scripts/gen-qr.py                                  # 自动取本机 IP + 8080
+python app/scripts/gen-qr.py --url http://100.x.x.x:8080/     # Tailscale 等场景
+node app/scripts/verify-qr.mjs --expect http://10.10.0.172:8080/   # 解出来核对
+```
+
+`verify-qr.mjs` 把内联 SVG 的模块方块还原成位图再用 jsQR 解——二维码没法肉眼核对，
+这一步能拦住「指向旧 IP / 旧文件名」这种只有扫了才知道的问题。
 
 局域网分发（任意静态服务器都行，示例用 Python）：
 
@@ -159,6 +171,44 @@ WebView 里跨域 POST 带 Bearer 会被浏览器拦掉；而带 `?token=` 的 G
 | POST 等 | `CapacitorHttp.request` | 原生 HTTP 栈，无 CORS 约束 |
 | 浏览器 dev | 普通 `fetch` + Vite 代理 | 同源，不存在跨域 |
 
+## 配对页扫码
+
+相机扫码走 `@capacitor-mlkit/barcode-scanning`（ML Kit），两条路线运行时自动选：
+
+| 顺序 | 调用 | 需要的环境 | 说明 |
+|---|---|---|---|
+| 1 | `BarcodeScanner.scan()` | Google Play Services 的 code scanner 模块 | 原生全屏扫描器，自带手电筒；华为等无 GMS 机型不可用 |
+| 2 | `BarcodeScanner.startScan()` | 无要求（模型打包在 APK 里） | 相机画面铺在 WebView 下方，取景框由 `ui/scan-overlay.ts` 自绘 |
+
+路线 2 能生效的前提是这几处（改动时容易漏）：
+
+- `MainActivity.onCreate` 把 WebView 背景设为 `Color.TRANSPARENT`，否则取景框后面是一片纯色
+- `styles.css` 的 `body.barcode-scanner-active { visibility: hidden }` 把整页藏起来，只留 `.scan-overlay`
+- `AndroidManifest.xml` 声明 `CAMERA` 与 `com.google.mlkit.vision.DEPENDENCIES=barcode_ui`
+- 新增插件后必须 `cap sync`（不是 `cap copy`），否则 `capacitor.settings.gradle` 里没有它，Gradle 根本不编译
+
+相册解码不用插件，直接用 `jsqr` 在 canvas 上解（`readBarcodesFromImage` 只吃本地文件路径，
+而 `<input type="file">` 拿到的是 File 对象）。`jsqr` 是动态 import 的：
+它的 dist 里带一份 demo，整包 ~130 KB minified，首屏不应该为它买单。
+
+### 体积代价
+
+ML Kit 自带原生库 `libbarhopper_v3.so`（arm64 4.7 MB + armv7 3.1 MB）和三个 `.tflite` 模型：
+
+| 包 | 加扫码前 | 加扫码后 |
+|---|---|---|
+| release | ~3.4 MB | **~14 MB** |
+| debug | ~4 MB | ~27 MB |
+
+已经做的控制：release 的 `ndk.abiFilters` 只留 `arm64-v8a` / `armeabi-v7a`（省下 x86 系列 ~11 MB）。
+还有两条可选的：
+
+- 开 R8（`minifyEnabled true` + `shrinkResources true`）能把 8.9 MB 的 `classes.dex` 砍掉一半以上，
+  但插件是按类名反射注册的，开了必须每台机型回归一遍才敢发（所以没默认打开）
+- 改成 ABI split（每个 ABI 一个 APK，arm64 约 9 MB），代价是下载页要给两个包
+
+Vite 的 `build.sourcemap: true` 会把 `.map` 一起打进 APK（约 1 MB），排查线上问题时有用，暂不删。
+
 ## 已知缺口（下一步）
 
 1. **历史消息结构**只做了宽松提取（`parts[].text` / `content`），图片消息暂不渲染。
@@ -169,3 +219,6 @@ WebView 里跨域 POST 带 Bearer 会被浏览器拦掉；而带 `?token=` 的 G
 5. 会话列表不是实时推送的（`stateRevision` 不含列表），靠 30s 兜底轮询。
 6. Android 明文 HTTP 已在 `capacitor.config.ts` 打开（`cleartext`），公网场景请改用 Tailscale HTTPS。
 7. **语言只有中文**；代码高亮只覆盖常见语言，未知语言按纯文本渲染（不会乱上色）。
+8. **扫码没做真机回归**：只验证到 Gradle 编译通过 + APK 产出（构建机上没有接设备）。
+   首次在真机上请重点确认两件事：无 GMS 机型能回退到自绘取景框、取景框后面真的能看到相机画面
+   （后者依赖 `MainActivity` 里把 WebView 背景设成透明）。

@@ -1,6 +1,6 @@
 {
   "name": "pideck-mobile-app",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "PiDeck 手机客户端外壳（Vite + TypeScript + Capacitor）",
@@ -19,14 +19,18 @@
     "smoke:ui": "node scripts/smoke-ui.mjs",
     "verify:send": "node scripts/verify-send.mjs",
     "gen:keystore": "node scripts/gen-keystore.mjs",
+    "gen:qr": "python scripts/gen-qr.py",
+    "verify:qr": "node scripts/verify-qr.mjs",
     "apk:release": "node scripts/build-apk.mjs --release"
   },
   "dependencies": {
+    "@capacitor-mlkit/barcode-scanning": "^7.5.0",
     "@capacitor/android": "^7.0.0",
     "@capacitor/app": "^7.1.2",
     "@capacitor/core": "^7.0.0",
     "@capacitor/local-notifications": "^7.0.7",
-    "@capacitor/status-bar": "^7.0.6"
+    "@capacitor/status-bar": "^7.0.6",
+    "jsqr": "^1.4.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",

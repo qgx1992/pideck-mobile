@@ -10,8 +10,8 @@ if (hasReleaseKeystore) {
 }
 
 // 允许 CI 用 -PpideckVersionName / -PpideckVersionCode 覆盖版本（本地构建走默认值）
-def pideckVersionName = (project.findProperty("pideckVersionName") ?: "0.1.1").toString()
-def pideckVersionCode = (project.findProperty("pideckVersionCode") ?: "101").toString().toInteger()
+def pideckVersionName = (project.findProperty("pideckVersionName") ?: "0.1.2").toString()
+def pideckVersionCode = (project.findProperty("pideckVersionCode") ?: "102").toString().toInteger()
 
 android {
     namespace "dev.pideck.mobile"
@@ -52,6 +52,12 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             if (hasReleaseKeystore) {
                 signingConfig signingConfigs.release
+            }
+            // 扫码插件带来 ML Kit 的原生库 libbarhopper_v3.so（每个 ABI 3~6 MB）。
+            // 真机只有 arm，release 裁掉 x86/x86_64（模拟器用 debug 包）。
+            // 四个 ABI 全留：debug 27 MB → release 12 MB 左右。
+            ndk {
+                abiFilters 'arm64-v8a', 'armeabi-v7a'
             }
         }
     }

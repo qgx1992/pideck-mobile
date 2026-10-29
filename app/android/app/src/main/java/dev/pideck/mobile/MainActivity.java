@@ -1,6 +1,7 @@
 package dev.pideck.mobile;
 
 import android.content.Intent;
+import android.graphics.Color;
 import android.os.Bundle;
 
 import com.getcapacitor.BridgeActivity;
@@ -17,6 +18,14 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NavigationBarPlugin.class);
         registerPlugin(RunWatchPlugin.class);
         super.onCreate(savedInstanceState);
+
+        // 扫码（BarcodeScanner.startScan）时相机预览铺在 WebView 之下，
+        // WebView 背景不透明就只能看到一片纯色，取景框里是空的。
+        // 页面自己的背景色在 body 上，不受影响。
+        if (bridge != null && bridge.getWebView() != null) {
+            bridge.getWebView().setBackgroundColor(Color.TRANSPARENT);
+        }
+
         captureSession(getIntent());
     }
 
