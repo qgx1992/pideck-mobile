@@ -1,7 +1,8 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
-  appId: "dev.pideck.mobile",
+  // 必须与 android/app/build.gradle 的 applicationId 一致（Capacitor 会校验）
+  appId: "top.caoayu.pideck",
   appName: "PiDeck",
   webDir: "dist",
   server: {

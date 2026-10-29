@@ -1,0 +1,162 @@
+name: Android Release
+
+# 出签名 APK 并挂到 Release。
+#
+#   - push tag v*        → 构建并把 APK 传到该 tag 的 Release（没有就创建）
+#   - workflow_dispatch  → 只构建并产出 artifact，不碰 Release（用来验证流水线）
+#
+# 需要的 repository secrets（都是只写，不进日志）：
+#   ANDROID_KEYSTORE_BASE64     pideck-release.keystore 的 base64
+#   ANDROID_KEYSTORE_PROPERTIES keystore.properties 的完整内容
+#
+# 本地设置方法（不会回显）：
+#   base64 -w0 app/android/pideck-release.keystore | gh secret set ANDROID_KEYSTORE_BASE64
+#   gh secret set ANDROID_KEYSTORE_PROPERTIES < app/android/keystore.properties
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（形如 0.1.0，仅用于命名与 versionName）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析版本号
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(node -p "require('./app/package.json').version")"
+          fi
+          # 0.1.0 → 100；1.2.3 → 10203；保证单调递增
+          IFS='.' read -r MAJOR MINOR PATCH <<< "${VERSION}"
+          CODE=$(( MAJOR * 10000 + MINOR * 100 + ${PATCH:-0} ))
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "code=${CODE}" >> "$GITHUB_OUTPUT"
+          echo "构建版本 ${VERSION}（versionCode=${CODE}）"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            app/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装依赖
+        run: |
+          npm ci
+          npm ci --prefix app
+
+      - name: 类型检查与测试
+        run: |
+          npm run typecheck
+          npm test
+          npm run typecheck --prefix app
+          npm test --prefix app
+
+      - name: 构建 Web 产物并同步原生工程
+        run: |
+          npm run build --prefix app
+          cd app && npx cap sync android
+
+      - name: 确保 gradlew 可执行
+        run: chmod +x app/android/gradlew
+
+      - name: 还原签名文件
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PROPERTIES: ${{ secrets.ANDROID_KEYSTORE_PROPERTIES }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64}" ] || [ -z "${KEYSTORE_PROPERTIES}" ]; then
+            echo "::error::缺少 ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PROPERTIES secrets"
+            exit 1
+          fi
+          echo "${KEYSTORE_BASE64}" | base64 -d > app/android/pideck-release.keystore
+          printf '%s\n' "${KEYSTORE_PROPERTIES}" > app/android/keystore.properties
+          chmod 600 app/android/pideck-release.keystore app/android/keystore.properties
+
+      - name: 构建签名 APK
+        working-directory: app/android
+        run: |
+          ./gradlew assembleRelease --no-daemon --console=plain \
+            -PpideckVersionName=${{ steps.version.outputs.version }} \
+            -PpideckVersionCode=${{ steps.version.outputs.code }}
+
+      - name: 校验签名与标识
+        id: verify
+        run: |
+          set -euo pipefail
+          APK="app/android/app/build/outputs/apk/release/app-release.apk"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
+          APKSIGNER="$(find "$SDK/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          AAPT="$(find "$SDK/build-tools" -name aapt2 -type f | sort -V | tail -1)"
+
+          "$APKSIGNER" verify --print-certs "$APK" | tee /tmp/certs.txt
+          grep -q "pideck" /tmp/certs.txt || { echo "::error::签名证书不对"; exit 1; }
+
+          BADGING="$("$AAPT" dump badging "$APK" | head -3)"
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "package: name='top.caoayu.pideck'" || {
+            echo "::error::applicationId 不是 top.caoayu.pideck"; exit 1;
+          }
+
+          SHA="$(sha256sum "$APK" | cut -d' ' -f1)"
+          NAME="PiDeck-${{ steps.version.outputs.version }}-release.apk"
+          cp "$APK" "$NAME"
+          printf '%s  %s\n' "$SHA" "$NAME" > SHA256SUMS.txt
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "file=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "✓ ${NAME}  sha256=${SHA}"
+
+      - name: 清理签名材料
+        if: always()
+        run: rm -f app/android/pideck-release.keystore app/android/keystore.properties
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pideck-apk-${{ steps.version.outputs.version }}
+          path: |
+            ${{ steps.verify.outputs.file }}
+            SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: 上传到 Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.verify.outputs.file }}
+            SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          # 不传 body：已有 Release 的说明保持不变，只追加资产

@@ -66,6 +66,16 @@ npm run apk          # build web → cap sync → gradlew assembleDebug
 npm run publish:apk  # 复制到 ../apk/，写 SHA256SUMS.txt
 ```
 
+### 包名与共存
+
+| 构建类型 | applicationId | 说明 |
+|---|---|---|
+| debug | `top.caoayu.pideck.debug` | 带 `-debug` 版本后缀，可与 release 同时安装 |
+| release | `top.caoayu.pideck` | 正式包，自己 keystore 签名 |
+
+`namespace` 仍是 `dev.pideck.mobile`（Java 源码包不动），只换了安装身份。
+更早的 `dev.pideck.mobile` 老包也能共存，方便平滑迁移后卸载。
+
 ### 出签名发布包（给别人装 / 覆盖升级用）
 
 `npm run apk` 出来的是 **debug 签名**包——自己装没问题，但换一台机器或想覆盖升级时，
@@ -91,7 +101,24 @@ Gradle 侧（`android/app/build.gradle`）读取逻辑：有 `keystore.propertie
 PIDECK_KEYSTORE_PASSWORD='你的强密码' npm run gen:keystore
 ```
 
-CI 场景把这两个值做成 secrets，构建前落盘成 `keystore.properties` 即可。
+### CI 自动出包
+
+`.github/workflows/android-release.yml`：
+
+| 触发 | 行为 |
+|---|---|
+| push `v*` tag | 构建 + 校验签名 + 上传 APK 到该 tag 的 Release |
+| 手动 run（workflow → Run workflow） | 只构建并产出 artifact，不动 Release |
+
+签名材料通过 repository secrets 注入（脚本里也是落盘后用完立即删除）：
+
+```bash
+base64 -w0 android/pideck-release.keystore | gh secret set ANDROID_KEYSTORE_BASE64
+gh secret set ANDROID_KEYSTORE_PROPERTIES < android/keystore.properties
+```
+
+版本号从 tag 推导（`v0.2.0` → versionName `0.2.0`、versionCode `200`），
+通过 `-PpideckVersionName/-PpideckVersionCode` 传给 Gradle，不需要手改 build.gradle。
 
 产物：
 ```

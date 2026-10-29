@@ -9,15 +9,21 @@ if (hasReleaseKeystore) {
     keystorePropsFile.withInputStream { stream -> keystoreProps.load(stream) }
 }
 
+// 允许 CI 用 -PpideckVersionName / -PpideckVersionCode 覆盖版本（本地构建走默认值）
+def pideckVersionName = (project.findProperty("pideckVersionName") ?: "0.1.0").toString()
+def pideckVersionCode = (project.findProperty("pideckVersionCode") ?: "3").toString().toInteger()
+
 android {
     namespace "dev.pideck.mobile"
     compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "dev.pideck.mobile"
+        // 安装身份与 Java 包名分开：namespace 仍是 dev.pideck.mobile（源码包不动），
+        // 只把 applicationId 换成自己的域名，这样 release 包和旧的 debug 包能共存。
+        applicationId "top.caoayu.pideck"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
-        versionName "0.1.0"
+        versionCode pideckVersionCode
+        versionName pideckVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -36,6 +42,11 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // 加后缀：debug 包（top.caoayu.pideck.debug）和签名 release 包可以同时装在一台手机上
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
