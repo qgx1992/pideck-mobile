@@ -15,3 +15,8 @@ android/capacitor-cordova-android-plugins/
 # Python 缓存（gen-icon.py / gen-splash.py）
 __pycache__/
 *.pyc
+
+# 发布签名：keystore 与密码绝不入库
+keystore.properties
+*.keystore
+*.jks

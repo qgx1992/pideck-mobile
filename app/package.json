@@ -17,7 +17,9 @@
     "apk": "node scripts/build-apk.mjs",
     "publish:apk": "node scripts/publish-apk.mjs",
     "smoke:ui": "node scripts/smoke-ui.mjs",
-    "verify:send": "node scripts/verify-send.mjs"
+    "verify:send": "node scripts/verify-send.mjs",
+    "gen:keystore": "node scripts/gen-keystore.mjs",
+    "apk:release": "node scripts/build-apk.mjs --release"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",

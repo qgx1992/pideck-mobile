@@ -1,6 +1,9 @@
 # pideck-mobile
 
-把 PiDeck 桌面端的「Web 服务」变成一个**可独立发 App 的客户端**：配对、状态同步、发消息、流式渲染、运行时控制、ask 卡片应答。
+把 [PiDeck](https://pideck.caoayu.top/) 桌面端的「Web 服务」变成一个**可独立发 App 的客户端**：配对、状态同步、发消息、流式渲染、运行时控制、ask 卡片应答。
+
+> **桌面端**：<https://pideck.caoayu.top/> · 源码 <https://github.com/ayuayue/PiDeck>
+> 这个仓库只是手机客户端，Agent 行为、模型调用、会话读写都由 pi 原生负责。
 
 仓库里有两个产物：`src/` 是框架无关的协议核心，`app/` 是可直接打 APK 的 Capacitor 客户端。全部只依赖 `fetch` + `AbortController`，无运行时依赖。
 
@@ -260,6 +263,16 @@ WebView 是跨域环境，而 PiDeck 的 CORS 有两个限制（已在 `app/src/
   「正在等待任务完成…」。深度 Doze 下前台服务也可能被限流。
 - 通过 Web API 删除会话后桌面端列表不会立即刷新（上游缺 IPC 广播，见 `docs/issue-delete-sync.md`）。
 - DSH 会话的历史读取依赖 DSH runtime；runtime 未就绪时该接口返回 500。
+
+## 许可证
+
+**PolyForm Noncommercial License 1.0.0** —— 见 [LICENSE.md](./LICENSE.md)。
+
+一句话版：**可以自由用于个人学习、研究、非营利场景，可以修改和分发；不可商用。**
+商业使用（包括公司内部生产环境、付费产品、代客户部署等）需要单独授权。
+
+选这个而不是 MIT：这个项目是和 PiDeck 配套的个人工具，希望代码公开可读可用，
+但不希望被直接包装成商业产品售卖。
 
 ## 升级 PiDeck 后的回归清单
 

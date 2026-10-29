@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /**
- * 一键出 APK：build web → cap sync → gradlew assembleDebug
+ * 一键出 APK：build web → cap sync → gradlew assembleDebug / assembleRelease
+ *
+ *   npm run apk            # debug 包（带 debug 签名，可直接 adb install）
+ *   npm run apk:release    # release 包（读取 android/keystore.properties 签名）
  *
  * 为什么要这个脚本：gradlew.bat 在启动前就要求 JAVA_HOME（org.gradle.java.home 来不及生效），
  * 所以这里自己找 JDK（环境变量 → winget 装到 Program Files 的 Temurin）再把它注入子进程环境。
@@ -46,6 +49,8 @@ function run(command, args, options = {}) {
   execFileSync(command, args, { cwd: APP_DIR, stdio: "inherit", shell: isWindows, ...options });
 }
 
+const release = process.argv.includes("--release");
+
 const jdk = findJdk();
 if (!jdk) {
   console.error("✗ 找不到 JDK：请先装 JDK 21（winget install EclipseAdoptium.Temurin.21.JDK）或设置 JAVA_HOME");
@@ -65,11 +70,24 @@ run("npm", ["run", "build"]);
 run("npx", ["cap", "sync", "android"]);
 
 const env = { ...process.env, JAVA_HOME: jdk };
-run(gradle, ["assembleDebug", "--no-daemon", "--console=plain"], {
+
+if (release) {
+  const props = path.join(APP_DIR, "android", "keystore.properties");
+  if (!existsSync(props)) {
+    console.error("✗ 缺少 android/keystore.properties：先跑 npm run gen:keystore");
+    process.exit(1);
+  }
+  console.log("签名来源: android/keystore.properties（keystore 与密码不入库）");
+}
+
+const task = release ? "assembleRelease" : "assembleDebug";
+run(gradle, [task, "--no-daemon", "--console=plain"], {
   cwd: path.join(APP_DIR, "android"),
   env,
   shell: isWindows,
 });
 
-const apk = path.join(APP_DIR, "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-console.log(`\n✓ APK: ${apk}`);
+const apkFolder = release ? "release" : "debug";
+const apkName = release ? "app-release.apk" : "app-debug.apk";
+const apk = path.join(APP_DIR, "android", "app", "build", "outputs", "apk", apkFolder, apkName);
+console.log(`APK: ${apk}`);

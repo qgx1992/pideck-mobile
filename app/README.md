@@ -66,9 +66,37 @@ npm run apk          # build web → cap sync → gradlew assembleDebug
 npm run publish:apk  # 复制到 ../apk/，写 SHA256SUMS.txt
 ```
 
+### 出签名发布包（给别人装 / 覆盖升级用）
+
+`npm run apk` 出来的是 **debug 签名**包——自己装没问题，但换一台机器或想覆盖升级时，
+签名不一致会装不上（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）。发布版必须用自己的 keystore。
+
+```bash
+npm run gen:keystore    # 只跑一次：生成 android/pideck-release.keystore + keystore.properties
+npm run apk:release     # 出签名包
+npm run publish:apk -- --release   # 丢到 ../apk/ 供下载
+```
+
+- 密码由脚本随机生成，写进 `android/keystore.properties`，**不回显到终端**
+- `keystore.properties` 与 `*.keystore` 都在 `.gitignore` 里，不会入库
+- **务必立刻备份这两个文件**：丢了 keystore，后续版本就无法覆盖安装升级，
+  只能换 applicationId 重新发（老用户得卸载重装，历史数据也会没）
+
+Gradle 侧（`android/app/build.gradle`）读取逻辑：有 `keystore.properties` 就配置
+`signingConfigs.release`，没有则 release 包不签名并打印提示，不会让构建直接失败。
+
+想用自己的密码：
+
+```bash
+PIDECK_KEYSTORE_PASSWORD='你的强密码' npm run gen:keystore
+```
+
+CI 场景把这两个值做成 secrets，构建前落盘成 `keystore.properties` 即可。
+
 产物：
 ```
-../apk/PiDeck-0.1.0-debug.apk   # 约 4 MB，debug 签名
+../apk/PiDeck-0.1.0-debug.apk    # 约 4 MB，debug 签名
+../apk/PiDeck-0.1.0-release.apk  # 约 3.4 MB，自己的 keystore 签名
 ../apk/index.html               # 下载页（含二维码）
 ../apk/qr.svg                   # 二维码
 ../apk/SHA256SUMS.txt           # 校验值

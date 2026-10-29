@@ -1,5 +1,14 @@
 apply plugin: 'com.android.application'
 
+// 发布签名配置：从 android/keystore.properties 读取（该文件与 keystore 都不入库）。
+// 没有这个文件时 release 包不打签名，assembleRelease 仍然能跑通（产出 -unsigned.apk）。
+def keystorePropsFile = rootProject.file("keystore.properties")
+def hasReleaseKeystore = keystorePropsFile.exists()
+def keystoreProps = new Properties()
+if (hasReleaseKeystore) {
+    keystorePropsFile.withInputStream { stream -> keystoreProps.load(stream) }
+}
+
 android {
     namespace "dev.pideck.mobile"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +16,8 @@ android {
         applicationId "dev.pideck.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "0.1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,12 +25,29 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            release {
+                storeFile rootProject.file(keystoreProps.getProperty("storeFile", "pideck-release.keystore"))
+                storePassword keystoreProps.getProperty("storePassword", "")
+                keyAlias keystoreProps.getProperty("keyAlias", "pideck")
+                keyPassword keystoreProps.getProperty("keyPassword", "")
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
         }
     }
+}
+
+if (!hasReleaseKeystore) {
+    logger.lifecycle("· 未找到 android/keystore.properties：release 包将不签名（先跑 npm run gen:keystore）")
 }
 
 repositories {
