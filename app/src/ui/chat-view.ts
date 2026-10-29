@@ -3,6 +3,8 @@
 import type { ChatBlock, PendingUiRequest, RunStatus, WireMessage } from "@core/types.ts";
 import { h, clear } from "./dom.ts";
 import { renderMarkdownInto } from "./markdown.ts";
+import { perfChips } from "./perf-metrics.ts";
+import type { PerfMetrics } from "./perf-metrics.ts";
 import { createProcessGroup, isProcessBlock, summarizeProcess } from "./process-group.ts";
 import { splitThinking, stripCompleteThinking } from "./thinking-tags.ts";
 import {
@@ -31,6 +33,8 @@ export class ChatView {
   private liveGroups: Array<ReturnType<typeof createProcessGroup>> = [];
   private liveShape = "";
   private localEcho: { text: string; el: HTMLElement } | null = null;
+  /** 最近一轮的吞吐指标（首 token / 流式 / 均速） */
+  private perf: PerfMetrics | null = null;
   private stick = true;
 
   constructor(root: HTMLElement, handlers: ChatViewHandlers) {
@@ -93,6 +97,9 @@ export class ChatView {
     this.liveKey = "";
     this.statusEl.textContent = "";
     this.statusEl.dataset.status = "";
+    this.statusEl.dataset.text = "";
+    this.statusEl.dataset.key = "";
+    this.perf = null;
   }
 
   setEmpty(text: string): void {
@@ -245,22 +252,46 @@ export class ChatView {
     // 运行中要有个会动的标识：静态文字在长回答里很容易被当成「卡住了」
     const statusText =
       status === "running" ? "运行中…" : status === "error" ? "本轮失败" : status === "aborted" ? "已停止" : "";
-    if (this.statusEl.dataset.text !== statusText) {
-      clear(this.statusEl);
-      this.statusEl.dataset.text = statusText;
-      if (statusText) {
-        if (status === "running") {
-          this.statusEl.append(
-            h("span", { class: "run-spinner", "aria-hidden": "true" }),
-            h("span", { text: statusText }),
-          );
-        } else {
-          this.statusEl.append(h("span", { text: statusText }));
-        }
-      }
-    }
+    this.renderStatus(status, statusText);
     this.statusEl.dataset.status = status;
     if (this.stick) this.scrollToBottom();
+  }
+
+  /** 状态行：左边是状态（运行中带转圈），右边是吞吐指标。 */
+  private renderStatus(status: string, statusText: string): void {
+    const key = `${status}|${statusText}|${JSON.stringify(this.perf)}`;
+    if (this.statusEl.dataset.key === key) return;
+    this.statusEl.dataset.key = key;
+    this.statusEl.dataset.text = statusText;
+
+    clear(this.statusEl);
+    if (statusText) {
+      const head = h("span", { class: "run-status-head" });
+      if (status === "running") head.append(h("span", { class: "run-spinner", "aria-hidden": "true" }));
+      head.append(h("span", { text: statusText }));
+      this.statusEl.append(head);
+    }
+
+    const chips = perfChips(this.perf);
+    if (chips.length > 0) {
+      const stats = h("span", { class: "run-stats" });
+      for (const chip of chips) {
+        stats.append(h("span", { class: `run-stat run-stat--${chip.key}`, title: chip.title, text: chip.text }));
+      }
+      this.statusEl.append(stats);
+    }
+
+    // 状态行变了要保证「贴底」时跟着走
+    if (this.stick) this.scrollToBottom();
+  }
+
+  /**
+   * 更新吞吐指标（首 token / 流式 TPS / 均速）。
+   * 传 null 清空。跑完之后仍保留，方便回头看这一轮的速度。
+   */
+  setRunStats(metrics: PerfMetrics | null): void {
+    this.perf = metrics;
+    this.renderStatus(this.statusEl.dataset.status || "idle", this.statusEl.dataset.text || "");
   }
 
   private blockKey(block: ChatBlock): string {

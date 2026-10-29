@@ -105,6 +105,13 @@ for (const group of groups.slice(0, 8)) {
 const header = doc.querySelector(".header")?.textContent?.trim();
 console.log(`\nheader: ${header || "(空态)"}`);
 
+// 运行状态行里的吞吐指标（跑完之后仍保留）
+{
+  const stats = [...doc.querySelectorAll(".run-stats .run-stat")].map((el) => el.textContent);
+  console.log(`
+吞吐指标: ${stats.join(" · ") || "(无：这个会话最近没有可用的指标)"}`);
+}
+
 // 首屏：侧栏不该自动展开，应停在会话界面并显示带图标的空态
 {
   const body = doc.querySelector(".body");

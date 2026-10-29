@@ -2620,3 +2620,47 @@ button {
     animation: none;
   }
 }
+
+/* ---------------------------- 运行中：吞吐指标 ---------------------------- */
+
+.run-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.run-status-head {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.run-stats {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.run-stat {
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--text-dim) 12%, transparent);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 首 token 用蓝色区分：它是「等」的成本，和后面两个「速度」不是一类 */
+.run-stat--ttft {
+  color: color-mix(in oklab, var(--accent) 80%, var(--text));
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+}
+
+.run-status[data-status="running"] .run-stat--streaming {
+  color: var(--text);
+}

@@ -91,6 +91,7 @@ import {
   ringPercent,
 } from "./ui/context-usage.ts";
 import type { ContextUsage } from "./ui/context-usage.ts";
+import { readPerfMetrics } from "./ui/perf-metrics.ts";
 import type { LearnedPrefs } from "./ui/session-prefs.ts";
 import {
   askNotificationBody,
@@ -1250,6 +1251,8 @@ async function refreshContextUsage(sessionId: string): Promise<void> {
     if (sessionId !== activeSessionId) return;
     contextUsage = readContextUsage(raw);
     renderContextChip();
+    // 同一次请求里就带着吞吐指标，不用再发一次
+    chatView?.setRunStats(readPerfMetrics(raw));
   } catch {
     /* 运行时刚起 / 已停：保留上一次的读数 */
   }
