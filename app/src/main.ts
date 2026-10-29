@@ -60,6 +60,7 @@ import { h, clear, toast } from "./ui/dom.ts";
 import { attachPressable } from "./ui/press.ts";
 import { attachDrawerGestures } from "./ui/drawer-gestures.ts";
 import { attachBackButton } from "./platform/back-button.ts";
+import { armSplashWatchdog, hideSplash, setSplashHint } from "./ui/splash.ts";
 import {
   collectRunWatchTitles,
   consumeLaunchSession,
@@ -226,6 +227,8 @@ function mount(node: HTMLElement): void {
 
 function renderPairing(options: { link?: string; error?: string } = {}): void {
   teardown();
+  // 配对页是本地渲染，出来就说明启动完成了
+  hideSplash();
   const history = listPairings();
   const linkInput = h("textarea", {
     placeholder: "粘贴桌面端「扫码访问」的链接（示例：http://192.168.1.20:8765/?token=…）",
@@ -2769,14 +2772,21 @@ function confirmRemoveProject(projectId: string): void {
 /* ------------------------------------------------------------------ */
 
 function bootstrap(): void {
+  // 万一某个初始化分支挂住，启动动画也必须自己收掉（否则界面被挡死）
+  armSplashWatchdog();
+
   const saved = loadPairing();
   if (!saved) {
     renderPairing();
     return;
   }
-  void connect(saved).catch((error: unknown) => {
-    renderPairing({ link: saved.baseUrl ? `${saved.baseUrl}/?token=${saved.token}` : "", error: describeError(error) });
-  });
+  setSplashHint("正在连接 PiDeck…");
+  void connect(saved).then(
+    () => hideSplash(),
+    (error: unknown) => {
+      renderPairing({ link: saved.baseUrl ? `${saved.baseUrl}/?token=${saved.token}` : "", error: describeError(error) });
+    },
+  );
 }
 
 bootstrap();

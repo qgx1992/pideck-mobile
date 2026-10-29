@@ -9,3 +9,7 @@ apk/
 # 调试临时文件
 *.tmp.json
 st*.json
+
+# Python 缓存（gen-icon.py / gen-splash.py）
+__pycache__/
+*.pyc

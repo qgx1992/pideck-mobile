@@ -8,7 +8,7 @@
  * 令牌不会被打日志；也可以用 PIDECK_BASE / PIDECK_TOKEN。
  */
 
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -29,10 +29,16 @@ if (!baseUrl || !token) {
   process.exit(1);
 }
 
-const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-  url: "http://localhost/",
-  pretendToBeVisual: true,
-});
+const dom = new JSDOM(
+  readFileSync(path.join(APP_DIR, "index.html"), "utf-8").replace(
+    /<script type="module"[^>]*><\/script>/,
+    "",
+  ),
+  {
+    url: "http://localhost/",
+    pretendToBeVisual: true,
+  },
+);
 const g = globalThis;
 g.window = dom.window;
 g.document = dom.window.document;
@@ -237,6 +243,14 @@ if (hasFab) {
 const chips = [...doc.querySelectorAll(".composer-chips .chip")].map((el) => el.textContent);
 console.log(`
 composer chips: ${chips.join(" | ") || "(无)"}`);
+
+// 启动动画：必须自己收起，否则整块 fixed 遮罩会把界面挡死
+{
+  const gone = await waitFor(() => !doc.getElementById("splash"), 4000);
+  const el = doc.getElementById("splash");
+  console.log(`
+启动动画: 已移除=${gone} 残留=${el ? el.className : "(无)"}`);
+}
 
 // 任务清单：切到「这个」会话（本身带 todo 的会话才有清单）再验一次
 {
