@@ -44,9 +44,12 @@ function findJdk() {
 }
 
 function run(command, args, options = {}) {
-  console.log(`\n$ ${command} ${args.join(" ")}`);
-  // Windows 上 npm/npx/gradlew 都是 .cmd/.bat，必须走 shell
-  execFileSync(command, args, { cwd: APP_DIR, stdio: "inherit", shell: isWindows, ...options });
+  // Windows 上 npm/npx/gradlew 都是 .cmd/.bat，必须走 shell。
+  // 走 shell 时命令本身也要引号：项目路径可能带空格（D:/A-my project/...），
+  // 不加引号 cmd 会在第一个空格处把路径截断。
+  const quoted = isWindows && command.includes(" ") ? `"${command}"` : command;
+  console.log(`$ ${quoted} ${args.join(" ")}`);
+  execFileSync(quoted, args, { cwd: APP_DIR, stdio: "inherit", shell: isWindows, ...options });
 }
 
 const release = process.argv.includes("--release");
@@ -82,7 +85,10 @@ if (release) {
 
 const task = release ? "assembleRelease" : "assembleDebug";
 // JDK 走命令行传入，不写进 gradle.properties（那个文件要跨平台）
-run(gradle, [task, "--no-daemon", "--console=plain", `-Dorg.gradle.java.home=${jdk}`], {
+// 不再用 -Dorg.gradle.java.home 传路径：Windows 下走 shell，
+// 路径带空格（Program Files / 项目目录）会被拆参数，加引号又会被尾随反斜杠转义掉。
+// 直接靠下面 env 里的 JAVA_HOME —— Gradle 与 gradlew.bat 都会读它。
+run(gradle, [task, "--no-daemon", "--console=plain"], {
   cwd: path.join(APP_DIR, "android"),
   env,
   shell: isWindows,

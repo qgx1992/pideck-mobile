@@ -139,7 +139,7 @@ cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```bash
 cd app
 npm run apk           # build web → cap copy → gradlew assembleDebug
-npm run publish:apk   # 复制到 ../apk/ 并刷新 SHA256SUMS.txt
+npm run publish:apk   # 复制到项目根下的 apk/ 并刷新 SHA256SUMS.txt
 ```
 
 需要 JDK 21 + Android SDK。`app/README.md` 里记了本机环境路径、镜像配置与踩过的坑。

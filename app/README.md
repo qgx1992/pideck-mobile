@@ -63,7 +63,7 @@ npm run build
 
 ```bash
 npm run apk          # build web → cap sync → gradlew assembleDebug
-npm run publish:apk  # 复制到 ../apk/，写 SHA256SUMS.txt
+npm run publish:apk  # 复制到项目根下的 apk/，写 SHA256SUMS.txt
 ```
 
 ### 包名与共存
@@ -84,7 +84,7 @@ npm run publish:apk  # 复制到 ../apk/，写 SHA256SUMS.txt
 ```bash
 npm run gen:keystore    # 只跑一次：生成 android/pideck-release.keystore + keystore.properties
 npm run apk:release     # 出签名包
-npm run publish:apk -- --release   # 丢到 ../apk/ 供下载
+npm run publish:apk -- --release   # 丢到项目根下的 apk/ 供下载
 ```
 
 - 密码由脚本随机生成，写进 `android/keystore.properties`，**不回显到终端**
@@ -122,17 +122,17 @@ gh secret set ANDROID_KEYSTORE_PROPERTIES < android/keystore.properties
 
 产物：
 ```
-../apk/PiDeck-0.1.0-debug.apk    # 约 4 MB，debug 签名
-../apk/PiDeck-0.1.0-release.apk  # 约 3.4 MB，自己的 keystore 签名
-../apk/index.html               # 下载页（含二维码）
-../apk/qr.svg                   # 二维码
-../apk/SHA256SUMS.txt           # 校验值
+apk/PiDeck-0.1.1-release.apk    # 约 4 MB，debug 签名
+apk/PiDeck-0.1.1-release.apk  # 约 3.4 MB，自己的 keystore 签名
+apk/index.html               # 下载页（含二维码）
+apk/qr.svg                   # 二维码
+apk/SHA256SUMS.txt           # 校验值
 ```
 
 局域网分发（任意静态服务器都行，示例用 Python）：
 
 ```bash
-cd .. && python -m http.server 8080 --bind 0.0.0.0 --directory apk
+python -m http.server 8080 --bind 0.0.0.0 --directory apk
 ```
 
 然后手机访问 `http://<电脑IP>:8080/`。装 APK 需要在系统里允许「未知来源」。
