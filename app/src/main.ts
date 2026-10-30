@@ -82,6 +82,8 @@ import {
   sendModeActionLabel,
   sendModeHint,
   sendModeLabel,
+  sendModeSwitchToast,
+  shouldShowRunningSend,
   streamingBehaviorFor,
   toggleSendMode,
 } from "./ui/send-mode.ts";
@@ -500,9 +502,7 @@ interface MainRefs {
   contextBtn: HTMLButtonElement;
   contextRing: HTMLElement;
   contextText: HTMLElement;
-  /** 运行中：排队 / 插话 切换 */
-  sendModeBtn: HTMLButtonElement;
-  /** 运行中且输入框有字时的「排队发送 / 插话发送」 */
+  /** 运行中且输入框有东西时的「排队 / 插话」发送按钮 */
   queueSendBtn: HTMLButtonElement;
   /** 待发送图片的缩略图容器 */
   attachments: HTMLElement;
@@ -585,9 +585,13 @@ function renderMain(): void {
     { class: "chip chip--ctx is-hidden", title: "上下文用量", "aria-label": "上下文用量" },
     [contextRing, contextText],
   );
-  // 运行中才能选「排队 / 插话」，空闲时整组隐藏
-  const sendModeBtn = h("button", { class: "chip chip--mode is-hidden", text: sendModeLabel(sendMode) });
-  const queueSendBtn = h("button", { class: "btn btn-queue is-hidden", text: sendModeActionLabel(sendMode) });
+  // 运行中且输入框有东西时，在「历史」左侧出现一个「排队 / 插话」按钮：
+  // 点一下按当前模式发送，长按切换模式（主按钮此刻是「停止」，不能用来发）
+  const queueSendBtn = h("button", {
+    class: "composer-fab composer-fab--queue is-hidden",
+    text: sendModeLabel(sendMode),
+    "aria-label": "运行中发送",
+  });
   // @ / 放在输入框内部左下角，历史按钮固定在右下角
   // （输入框底部预留一条整宽的空白带，左右按钮都落在带子里，不会压到文字）
   const attachBtn = h("button", { class: "chip chip--icon", text: "图", title: "发送图片（相册 / 拍照）" });
@@ -602,10 +606,12 @@ function renderMain(): void {
     text: "历史",
     "aria-label": "跳转到历史消息",
   });
-  const composerInput = h("div", { class: "composer-input" }, [composer, inputTools, historyFab]);
+  /** 输入框右下角的按钮组：排队发送 + 历史 */
+  const fabs = h("div", { class: "composer-fabs" }, [queueSendBtn, historyFab]);
+  const composerInput = h("div", { class: "composer-input" }, [composer, inputTools, fabs]);
   /** 待发送的图片缩略图（有图才占位） */
   const attachmentsEl = h("div", { class: "composer-attachments is-hidden" });
-  const chips = h("div", { class: "composer-chips" }, [modelBtn, thinkingBtn, contextBtn, sendModeBtn]);
+  const chips = h("div", { class: "composer-chips" }, [modelBtn, thinkingBtn, contextBtn]);
   const todoStrip = createTodoStrip();
   const subagentStrip = createSubagentStrip();
   // 记住用户手动折叠的选择（优先于「有进行中就自动展开」）
@@ -624,7 +630,7 @@ function renderMain(): void {
     todoStrip.el,
     attachmentsEl,
     composerInput,
-    h("div", { class: "composer-row" }, [chips, queueSendBtn, primaryBtn]),
+    h("div", { class: "composer-row" }, [chips, primaryBtn]),
   ]);
   const chat = h("section", { class: "chat" }, [header, branchBar, chatRoot, composerEl]);
 
@@ -661,7 +667,6 @@ function renderMain(): void {
     contextBtn,
     contextRing,
     contextText,
-    sendModeBtn,
     queueSendBtn,
     attachments: attachmentsEl,
     todoStrip,
@@ -764,12 +769,14 @@ function renderMain(): void {
     if (isRunActive()) void stop();
     else void send();
   });
-  sendModeBtn.addEventListener("click", () => {
-    sendMode = toggleSendMode(sendMode);
-    renderComposerState();
-  });
-  queueSendBtn.addEventListener("click", () => {
-    void send();
+  // 输入框右下角的「排队 / 插话」：点一下发送，长按切换模式
+  attachPressable(queueSendBtn, {
+    onTap: () => void send(),
+    onLongPress: () => {
+      sendMode = toggleSendMode(sendMode);
+      renderComposerState();
+      toast(sendModeSwitchToast(sendMode));
+    },
   });
   attachBtn.addEventListener("click", () => imageInput.click());
   imageInput.addEventListener("change", () => {
@@ -1154,17 +1161,15 @@ function renderComposerState(): void {
   refs.thinkingBtn.title = level ? `思考档位：${level}（${thinkingHint(level)}）` : "选择思考档位";
   refs.thinkingBtn.classList.toggle("chip--muted", !level);
 
-  // 运行中才提供「排队 / 插话」；输入框有字时额外给一个发送按钮（主按钮此刻是「停止」）
+  // 运行中 + 输入框有东西（文字或图片）时，才在「历史」左侧出现「排队 / 插话」
   const running = isRunActive();
-  refs.sendModeBtn.classList.toggle("is-hidden", !running);
-  refs.sendModeBtn.textContent = sendModeLabel(sendMode);
-  refs.sendModeBtn.title = `${sendModeHint(sendMode)}（点一下切换）`;
-  refs.sendModeBtn.classList.toggle("chip--steer", sendMode === "steer");
-
-  const canQueueSend = running && (refs.composer.value.trim().length > 0 || currentImages().length > 0);
-  refs.queueSendBtn.classList.toggle("is-hidden", !canQueueSend);
-  refs.queueSendBtn.textContent = sendModeActionLabel(sendMode);
-  refs.queueSendBtn.title = sendModeHint(sendMode);
+  const hasContent = refs.composer.value.trim().length > 0 || currentImages().length > 0;
+  const showRunningSend = shouldShowRunningSend(running, hasContent);
+  refs.queueSendBtn.classList.toggle("is-hidden", !showRunningSend);
+  refs.queueSendBtn.classList.toggle("is-steer", sendMode === "steer");
+  refs.queueSendBtn.textContent = sendModeLabel(sendMode);
+  refs.queueSendBtn.title = `${sendModeHint(sendMode)}；长按切换模式`;
+  refs.queueSendBtn.setAttribute("aria-label", `${sendModeActionLabel(sendMode)}（长按切换模式）`);
 
   renderPrimaryButton();
 }

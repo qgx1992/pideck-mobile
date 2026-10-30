@@ -41,3 +41,18 @@ export function streamingBehaviorFor(running: boolean, mode: SendMode): Streamin
   if (!running) return undefined;
   return mode === "steer" ? "steer" : "followUp";
 }
+
+/**
+ * 「运行中发送」按钮的显隐。
+ *
+ * 两个条件同时满足才显示：这一轮正在跑（否则主按钮就是「发送」），
+ * 且输入框里有东西可发（文字或图片）。以前只看 running，没打字也会挂一个按钮出来。
+ */
+export function shouldShowRunningSend(running: boolean, hasContent: boolean): boolean {
+  return running && hasContent;
+}
+
+/** 长按切换模式后的提示文案（手机上只能靠这个告诉用户切换生效了）。 */
+export function sendModeSwitchToast(mode: SendMode): string {
+  return `已切换为「${sendModeLabel(mode)}」：${sendModeHint(mode)}`;
+}

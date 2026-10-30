@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { SEND_MODE_ORDER, sendModeActionLabel, sendModeHint, sendModeLabel, streamingBehaviorFor, toggleSendMode } =
+const { SEND_MODE_ORDER, sendModeActionLabel, sendModeHint, sendModeLabel, sendModeSwitchToast, shouldShowRunningSend, streamingBehaviorFor, toggleSendMode } =
   await import("../src/ui/send-mode.ts");
 
 test("两种模式都有中文标签与提示", () => {
@@ -35,4 +35,21 @@ test("空闲时不带 streamingBehavior", () => {
 test("运行中按选择的模式映射到协议字段", () => {
   assert.equal(streamingBehaviorFor(true, "queue"), "followUp");
   assert.equal(streamingBehaviorFor(true, "steer"), "steer");
+});
+
+/**
+ * 回归：以前只看 running 就显示按钮，输入框空着也会挂一个「排队」出来。
+ * 现在必须同时满足「在跑」+「有东西可发」。
+ */
+test("运行中发送按钮：必须同时满足在跑 + 有内容", () => {
+  assert.equal(shouldShowRunningSend(true, true), true);
+  assert.equal(shouldShowRunningSend(true, false), false, "运行中但输入框空着 → 不显示");
+  assert.equal(shouldShowRunningSend(false, true), false, "没在跑时主按钮就是发送 → 不显示");
+  assert.equal(shouldShowRunningSend(false, false), false);
+});
+
+test("切换模式的提示带模式名与说明", () => {
+  assert.match(sendModeSwitchToast("steer"), /插话/);
+  assert.match(sendModeSwitchToast("queue"), /排队/);
+  assert.match(sendModeSwitchToast("queue"), /结束后/);
 });

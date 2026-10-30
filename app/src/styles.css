@@ -1979,12 +1979,18 @@ body.barcode-scanner-active .scan-overlay {
   background: color-mix(in oklab, var(--danger) 12%, transparent);
 }
 
-/* 悬浮按钮：发送历史 */
-/* 历史按钮：固定在输入框内部右下角，和左边 @ / 同一水平线 */
-.composer-fab {
+/* 输入框右下角的按钮组：排队/插话 + 历史 */
+.composer-fabs {
   position: absolute;
   right: 10px;
   bottom: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 历史按钮：与左侧 @ / 同一水平线 */
+.composer-fab {
   height: 24px;
   padding: 0 10px;
   border: 1px solid var(--border);
@@ -1994,6 +2000,19 @@ body.barcode-scanner-active .scan-overlay {
   font-size: 11.5px;
   line-height: 1;
   letter-spacing: 0.02em;
+}
+
+/* 运行中的「排队 / 插话」：比历史按钮更显眼，因为它是可执行动作 */
+.composer-fab--queue {
+  font-weight: 650;
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.composer-fab--queue.is-steer {
+  background: var(--danger);
+  border-color: var(--danger);
 }
 
 .composer-fab:hover,
@@ -2212,30 +2231,7 @@ body.barcode-scanner-active .scan-overlay {
   color: var(--text-dim);
 }
 
-/* 运行中的「排队 / 插话」：插话是打断式操作，用警示色区分 */
-.chip--mode {
-  font-weight: 600;
-}
-
-.chip--steer {
-  color: var(--danger);
-  border-color: color-mix(in oklab, var(--danger) 45%, var(--border));
-}
-
-/* 运行中且输入框有字时才出现的次按钮（主按钮此刻是「停止」） */
-.btn-queue {
-  flex: none;
-  background: var(--bg-elev);
-  color: var(--text);
-  border: 1px solid var(--border);
-  font-weight: 600;
-  padding: 9px 12px;
-  white-space: nowrap;
-}
-
-.btn-queue:hover {
-  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
-}
+/* 运行中的「排队 / 插话」样式见 .composer-fab--queue（在输入框右下角按钮组里） */
 
 /* ---------------------------- @ 文件引用的面包屑 ---------------------------- */
 

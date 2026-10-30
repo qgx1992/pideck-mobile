@@ -16,7 +16,7 @@
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
 | `src/` | 协议与状态核心 + 探针 CLI（**56 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（Vite + Capacitor，**382 条测试**） | `cd app && npm run dev` / `npm run apk` |
+| `app/` | 手机客户端（Vite + Capacitor，**384 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
@@ -93,8 +93,9 @@ docs/issue-*.md             已提交给上游的两个缺陷草稿
 - 上下文用量：环形百分比 + 明细面板（输入/输出/缓存/花费）+ 一键压缩上下文
 - **供应商额度**：面板里手动查询余额/套餐用量（`GET /api/usage/:provider`），未开启时给引导
 - **发图片**：相册/拍照选图，发送前自动压到长边 1600 / JPEG 0.82，最多 4 张，缩略图可单张移除
-- **运行中排队 / 插话**：运行中再发消息可选「排队」（`followUp`，等这轮结束）或
-  「插话」（`steer`，立刻插进当前轮改方向）；主按钮仍是「停止」，发送走旁边的次按钮
+- **运行中排队 / 插话**：运行中且有内容时，输入框右下角「历史」左侧出现「排队」/
+  「插话」按钮：点一下按当前模式发送（主按钮此时是「停止」），长按切换模式并弹提示。
+  两种模式分别对应 `followUp`（等这轮结束）和 `steer`（立刻插进当前轮改方向）
 - 任务清单：读 `GET /api/sessions/:id/todo`，显示进度与「进行中」，可折叠
 - **子代理活动条**：读 `GET /api/sessions/:id/subagents`，显示类型/描述/状态与结果，5s 轮询
 - 发送与停止合并为一个按钮，按会话状态切换
@@ -151,7 +152,7 @@ node src/cli/probe.ts stop --pair "..." --session <sessionId>
 
 ```bash
 npm test && npm run typecheck                 # 核心：56 条
-cd app && npm test && npm run typecheck       # 客户端：382 条
+cd app && npm test && npm run typecheck       # 客户端：384 条
 cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```
 
