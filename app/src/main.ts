@@ -143,6 +143,9 @@ import { USAGE_REFRESH_COOLDOWN_MS, buildUsageView, formatResetAt } from "./ui/p
 import type { UsageView } from "./ui/provider-usage-model.ts";
 import { parseSessionTodo, shouldAutoExpand } from "./ui/todo-model.ts";
 import type { TodoView } from "./ui/todo-model.ts";
+import { historyProgressLabel, historyTimeLabel, mergeTodoHistory } from "./ui/todo-history-model.ts";
+import type { TodoHistoryEntry } from "./ui/todo-history-model.ts";
+import { loadTodoHistory, saveTodoHistory } from "./platform/todo-history.ts";
 import {
   contextChipLabel,
   contextChipTitle,
@@ -442,8 +445,23 @@ function renderPairing(options: { link?: string; error?: string } = {}): void {
 
   if (options.error) setStatus(options.error, "error");
 
+  // 已经连着设备时（从「添加设备」进来的）必须能退回去，
+  // 否则整页被 clear 掉，返回键也没有层可关，用户就卡死在配对页了。
+  const canGoBack = endpoints.length > 0;
+  const backBtn = h("button", {
+    class: "pairing-back",
+    text: "← 返回",
+    title: "回到已连接的设备",
+    onclick: () => {
+      if (!runtime) return;
+      teardown();
+      renderMain();
+    },
+  });
+
   mount(
     h("div", { class: "pairing" }, [
+      canGoBack ? h("div", { class: "pairing-head" }, [backBtn]) : null,
       h("h1", { text: "连接到你的 PiDeck" }),
       h("p", {
         text: "先在电脑上打开：设置 → Web 服务 → 局域网 Web 服务（保持令牌鉴权开启），再扫描/复制那里的链接。",
@@ -484,9 +502,11 @@ function renderPairing(options: { link?: string; error?: string } = {}): void {
       ]),
       statusEl,
       h("p", {
-        text: isDev
-          ? "开发模式：地址留空时走 Vite 代理（同源），避免 WebView/浏览器的 CORS 预检限制。"
-          : "令牌会保存在本机，仅用于访问你自己的 PiDeck。",
+        text: canGoBack
+          ? `这是在追加设备：连接成功后会和已连接的 ${endpoints.length} 台设备一起显示，不会断开它们。`
+          : isDev
+            ? "开发模式：地址留空时走 Vite 代理（同源），避免 WebView/浏览器的 CORS 预检限制。"
+            : "令牌会保存在本机，仅用于访问你自己的 PiDeck。",
       }),
     ]),
   );
@@ -1639,6 +1659,9 @@ async function openSession(sessionId: string): Promise<void> {
   });
   channel.start();
   startContextPolling(sessionId);
+  // 历史清单按「设备 + 会话」读，切会话时要换成这一份
+  loadTodoHistoryFor(sessionId);
+  renderTodoHistory();
   startTodoPolling(sessionId);
   startSubagentPolling(sessionId);
 
@@ -1851,6 +1874,7 @@ function stopTodoPolling(): void {
   }
   todoPollSession = null;
   todoView = null;
+  todoHistory = [];
   renderTodoStrip();
 }
 
@@ -1858,13 +1882,92 @@ function stopTodoPolling(): void {
  * 拉一次任务清单。
  * 服务端没有清单时返回 null，条带整体隐藏（不占高度）。
  */
+/* ---------------------------- 待办历史 ---------------------------- */
+
+/** 当前会话的历史清单（按设备+会话作用域持久化） */
+let todoHistory: TodoHistoryEntry[] = [];
+
+function todoScope(sessionId: string): string {
+  return epKey(sessionId);
+}
+
+function loadTodoHistoryFor(sessionId: string): void {
+  todoHistory = loadTodoHistory(todoScope(sessionId));
+}
+
+/** 把当前清单快照写进历史（同一 planId 就地更新进度）。 */
+function rememberTodo(view: TodoView | null): void {
+  if (!view) return;
+  const now = Date.now();
+  todoHistory = mergeTodoHistory(todoHistory, view, now);
+  saveTodoHistory(todoScope(activeSessionId ?? ""), todoHistory);
+}
+
+/**
+ * 发出新提问前调用：
+ * 把这一轮留下的清单归入历史，然后清掉输入框上方的清单条。
+ *
+ * 为什么在发送时清：服务端在下一轮开始前仍会返回旧清单，只靠轮询撤不掉，
+ * 用户就会看到「已完成的任务清单」一直挂在输入框上方。
+ */
+function archiveTodoBeforeSend(sessionId: string | null): void {
+  if (!sessionId) return;
+  rememberTodo(todoView);
+  todoView = null;
+  renderTodoStrip();
+  renderTodoHistory();
+}
+
+/** 右侧工作区「待办」Tab：当前会话的全部历史清单，最新的在前。 */
+function renderTodoHistoryTab(content: HTMLElement): void {
+  if (todoHistory.length === 0) {
+    content.append(
+      h("p", {
+        class: "ws-empty",
+        text: "还没有历史待办清单。agent 每列一次任务清单都会记在这里；发出新提问后，上一份会归档。",
+      }),
+    );
+    return;
+  }
+
+  const list = h("div", { class: "todo-history" });
+  for (const entry of todoHistory) {
+    const head = h("div", { class: "todo-history-head" }, [
+      h("span", { class: "todo-history-progress", text: historyProgressLabel(entry) }),
+      h("span", { class: "todo-history-time", text: historyTimeLabel(entry) }),
+      ...(entry.finished ? [h("span", { class: "todo-history-badge", text: "已完成" })] : []),
+    ]);
+
+    const items = h("ul", { class: "todo-history-items" });
+    for (const item of entry.items) {
+      items.append(
+        h("li", { class: `todo-history-item is-${item.status}` }, [
+          h("span", { class: "todo-history-mark", text: item.status === "completed" ? "✓" : item.status === "in_progress" ? "▶" : "○" }),
+          h("span", { class: "todo-history-text", text: item.text }),
+        ]),
+      );
+    }
+
+    list.append(h("section", { class: "todo-history-entry" }, [head, items]));
+  }
+  content.append(list);
+}
+
+/** 侧栏/工作区里的「历史待办清单」列表。 */
+function renderTodoHistory(): void {
+  if (!refs) return;
+  refs.workspacePanel.dataset.todoHistory = todoHistory.length > 0 ? "1" : "0";
+}
+
 async function refreshTodo(sessionId: string): Promise<void> {
   if (!runtime || sessionId !== activeSessionId) return;
   try {
     const raw = await runtime.client.getTodo(sessionId);
     if (sessionId !== activeSessionId) return;
     todoView = parseSessionTodo(raw);
+    rememberTodo(todoView);
     renderTodoStrip();
+    renderTodoHistory();
   } catch {
     /* 运行时没起 / 会话太老没有清单：保持现状 */
   }
@@ -2360,6 +2463,9 @@ async function send(): Promise<void> {
     const current = channel;
     if (!current) return;
 
+    // 发出新提问 = 上一轮结束：把当前清单归入历史，并从输入框上方撤掉
+    archiveTodoBeforeSend(activeSessionId);
+
     // 发送前就先拉起后台看护：用户常常发完立刻上滑回桌面，
     // 等 SSE 把 running 推下来再启动，可能已经来不及（App 一旦被冻结就启动不了前台服务）
     kickRunWatch(activeSessionId);
@@ -2475,7 +2581,7 @@ async function ensureRuntimeTarget(sessionId: string, timeoutMs = 15_000): Promi
 /* 右侧工作区抽屉（Git / 文件）                                         */
 /* ------------------------------------------------------------------ */
 
-type WorkspaceTab = "git" | "files";
+type WorkspaceTab = "git" | "files" | "todos";
 
 let workspaceTab: WorkspaceTab = "git";
 let workspaceOpen = false;
@@ -2546,6 +2652,11 @@ async function renderWorkspacePanel(): Promise<void> {
     class: `ws-tab${workspaceTab === "files" ? " is-active" : ""}`,
     text: "文件",
   });
+  const todosTab = h("button", {
+    class: `ws-tab${workspaceTab === "todos" ? " is-active" : ""}`,
+    text: todoHistory.length > 0 ? `待办 ${todoHistory.length}` : "待办",
+    title: "当前会话的历史待办清单",
+  });
   gitTab.addEventListener("click", () => {
     if (workspaceTab === "git") return;
     workspaceTab = "git";
@@ -2556,10 +2667,21 @@ async function renderWorkspacePanel(): Promise<void> {
     workspaceTab = "files";
     void renderWorkspacePanel();
   });
-  panel.append(h("div", { class: "ws-tabs" }, [gitTab, filesTab]));
+  todosTab.addEventListener("click", () => {
+    if (workspaceTab === "todos") return;
+    workspaceTab = "todos";
+    void renderWorkspacePanel();
+  });
+  panel.append(h("div", { class: "ws-tabs" }, [gitTab, filesTab, todosTab]));
 
   const content = h("div", { class: "ws-content" });
   panel.append(content);
+
+  // 待办历史不依赖项目路径（服务端不保留旧计划，数据全在本机）
+  if (workspaceTab === "todos") {
+    renderTodoHistoryTab(content);
+    return;
+  }
 
   if (!projectId) {
     content.append(h("p", { class: "ws-empty", text: "没有可用项目" }));

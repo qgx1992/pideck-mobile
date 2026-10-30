@@ -161,6 +161,28 @@ button {
   margin: 0;
 }
 
+/* 「添加设备」进来时的返回入口 */
+.pairing-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: -6px;
+}
+
+.pairing-back {
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.pairing-back:active {
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+}
+
 .pairing p {
   margin: 0;
   color: var(--text-dim);
@@ -3657,4 +3679,91 @@ body.barcode-scanner-active .scan-overlay {
 
 .settings-fold-body {
   padding: 0 0 4px 14px;
+}
+
+/* ---------------------------- 历史待办清单（右侧工作区「待办」Tab） ---------------------------- */
+
+.todo-history {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 0 12px;
+}
+
+.todo-history-entry {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 8px 10px;
+}
+
+.todo-history-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.todo-history-progress {
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.todo-history-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.todo-history-badge {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--ok);
+  border: 1px solid color-mix(in oklab, var(--ok) 45%, var(--border));
+  border-radius: 6px;
+  padding: 1px 5px;
+}
+
+.todo-history-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.todo-history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.todo-history-mark {
+  flex: none;
+  width: 12px;
+  color: var(--text-dim);
+}
+
+.todo-history-item.is-completed .todo-history-mark {
+  color: var(--ok);
+}
+
+.todo-history-item.is-in_progress .todo-history-mark {
+  color: var(--accent);
+}
+
+.todo-history-item.is-completed .todo-history-text {
+  color: var(--text-dim);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklab, var(--text-dim) 55%, transparent);
+}
+
+.todo-history-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

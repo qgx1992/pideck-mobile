@@ -9,6 +9,7 @@ import { h, clear } from "./dom.ts";
 import { createChevron, setChevronExpanded } from "./chevron.ts";
 import { todoProgressLabel, todoTitle } from "./todo-model.ts";
 import type { TodoView } from "./todo-model.ts";
+import { shouldShowTodoStrip } from "./todo-history-model.ts";
 
 export interface TodoStrip {
   el: HTMLElement;
@@ -70,7 +71,8 @@ export function createTodoStrip(): TodoStrip {
   return {
     el,
     update: (view, options = {}) => {
-      if (!view) {
+      // 全部完成就不再挂在输入框上方（历史里能查到）
+      if (view === null || !shouldShowTodoStrip(view)) {
         el.classList.add("is-hidden");
         el.classList.remove("has-active", "is-all-done");
         clear(list);

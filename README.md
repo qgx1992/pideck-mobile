@@ -16,7 +16,7 @@
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
 | `src/` | 协议与状态核心 + 探针 CLI（**56 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（Vite + Capacitor，**429 条测试**） | `cd app && npm run dev` / `npm run apk` |
+| `app/` | 手机客户端（Vite + Capacitor，**438 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
@@ -106,12 +106,15 @@ docs/issue-*.md             已提交给上游的两个缺陷草稿
 - **运行中排队 / 插话**：运行中且有内容时，输入框右下角「历史」左侧出现「排队」/
   「插话」按钮：点一下按当前模式发送（主按钮此时是「停止」），长按切换模式并弹提示。
   两种模式分别对应 `followUp`（等这轮结束）和 `steer`（立刻插进当前轮改方向）
-- 任务清单：读 `GET /api/sessions/:id/todo`，显示进度与「进行中」，可折叠
+- 任务清单：读 `GET /api/sessions/:id/todo`，显示进度与「进行中」，可折叠；
+  **全部完成时自动从输入框上方撤掉**，并在右侧工作区「待办」Tab 里留档
 - **子代理活动条**：读 `GET /api/sessions/:id/subagents`，显示类型/描述/状态与结果，5s 轮询
 - 发送与停止合并为一个按钮，按会话状态切换
 
 **右侧工作区**
 - Git：分支、变更分组、提交历史
+- 待办：当前会话的历史任务清单（服务端只留最新一份，历史在客户端按「设备+会话」攒，
+  最多 30 份，全完成会标「已完成」）
 - 文件：逐层浏览、内容预览（>512 KB 不预览）、行尾 `@` 直接引用
 
 **设置页**
@@ -170,7 +173,7 @@ node src/cli/probe.ts stop --pair "..." --session <sessionId>
 
 ```bash
 npm test && npm run typecheck                 # 核心：56 条
-cd app && npm test && npm run typecheck       # 客户端：429 条
+cd app && npm test && npm run typecheck       # 客户端：438 条
 cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```
 
