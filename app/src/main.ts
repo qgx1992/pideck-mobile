@@ -151,6 +151,7 @@ import {
   mergeTodoHistory,
   planKeyOf,
   sealTodoHistory,
+  todoSignature,
 } from "./ui/todo-history-model.ts";
 import type { TodoHistoryEntry } from "./ui/todo-history-model.ts";
 import { loadTodoHistory, saveTodoHistory } from "./platform/todo-history.ts";
@@ -1667,8 +1668,7 @@ async function openSession(sessionId: string): Promise<void> {
   });
   channel.start();
   startContextPolling(sessionId);
-  // 历史清单按「设备 + 会话」读，切会话时要换成这一份
-  loadTodoHistoryFor(sessionId);
+  // 历史清单按「设备 + 会话」缓存，切会话时自动换成这一份
   renderTodoHistory();
   startTodoPolling(sessionId);
   startSubagentPolling(sessionId);
@@ -1882,7 +1882,7 @@ function stopTodoPolling(): void {
   }
   todoPollSession = null;
   todoView = null;
-  todoHistory = [];
+  // 历史按会话缓存，切会话时不清（清掉就会出现「切回去空了」）
   renderTodoStrip();
 }
 
@@ -1892,30 +1892,53 @@ function stopTodoPolling(): void {
  */
 /* ---------------------------- 待办历史 ---------------------------- */
 
-/** 当前会话的历史清单（按设备+会话作用域持久化） */
-let todoHistory: TodoHistoryEntry[] = [];
 /**
- * 已经收口的 planId（按会话记）。
+ * 待办历史按「设备 + 会话」缓存。
  *
- * 发出下一轮后，服务端在它开始前仍会返回上一轮的清单 —— 不拦住的话
- * 5 秒后清单条又冒出来，历史里那条也会被当成「还在进行」继续更新。
+ * 以前是一个全局数组，切会话时清空再靠 localStorage 重读 —— 任何写入时序问题
+ * 都会表现成「切回去历史空/时间变了」。改成按会话缓存后，切来切去不会丢东西。
  */
-const dismissedTodoPlans = new Map<string, string>();
+const todoHistoryByScope = new Map<string, TodoHistoryEntry[]>();
+
+/**
+ * 已收口的清单（按会话记）。
+ *
+ * 记的是 planId + 内容签名：服务端在下一轮开始前会继续返回上一轮那份，
+ * 只拦「完全没变」的那份；同一 planId 但内容变了说明是新的一轮，要重新显示。
+ */
+const dismissedTodoPlans = new Map<string, { planId: string; signature: string }>();
 
 function todoScope(sessionId: string): string {
   return epKey(sessionId);
 }
 
-function loadTodoHistoryFor(sessionId: string): void {
-  todoHistory = loadTodoHistory(todoScope(sessionId));
+function currentTodoScope(): string {
+  return todoScope(activeSessionId ?? "");
+}
+
+function historyFor(scope: string): TodoHistoryEntry[] {
+  const cached = todoHistoryByScope.get(scope);
+  if (cached) return cached;
+  const loaded = loadTodoHistory(scope);
+  todoHistoryByScope.set(scope, loaded);
+  return loaded;
+}
+
+function setHistory(scope: string, entries: TodoHistoryEntry[]): void {
+  todoHistoryByScope.set(scope, entries);
+  saveTodoHistory(scope, entries);
+}
+
+/** 当前会话的历史（渲染用）。 */
+function currentTodoHistory(): TodoHistoryEntry[] {
+  return historyFor(currentTodoScope());
 }
 
 /** 把当前清单快照写进历史（同一 planId 就地更新进度）。 */
-function rememberTodo(view: TodoView | null): void {
+function rememberTodo(view: TodoView | null, sessionId: string): void {
   if (!view) return;
-  const now = Date.now();
-  todoHistory = mergeTodoHistory(todoHistory, view, now);
-  saveTodoHistory(todoScope(activeSessionId ?? ""), todoHistory);
+  const scope = todoScope(sessionId);
+  setHistory(scope, mergeTodoHistory(historyFor(scope), view, Date.now()));
 }
 
 /**
@@ -1929,9 +1952,9 @@ function archiveTodoBeforeSend(sessionId: string | null): void {
   if (!sessionId) return;
   const view = todoView;
   if (view) {
-    todoHistory = sealTodoHistory(todoHistory, view, Date.now());
-    saveTodoHistory(todoScope(sessionId), todoHistory);
-    dismissedTodoPlans.set(sessionId, planKeyOf(view));
+    const scope = todoScope(sessionId);
+    setHistory(scope, sealTodoHistory(historyFor(scope), view, Date.now()));
+    dismissedTodoPlans.set(scope, { planId: planKeyOf(view), signature: todoSignature(view) });
   }
   todoView = null;
   renderTodoStrip();
@@ -1940,7 +1963,8 @@ function archiveTodoBeforeSend(sessionId: string | null): void {
 
 /** 右侧工作区「待办」Tab：当前会话的全部历史清单，最新的在前。 */
 function renderTodoHistoryTab(content: HTMLElement): void {
-  if (todoHistory.length === 0) {
+  const entries = currentTodoHistory();
+  if (entries.length === 0) {
     content.append(
       h("p", {
         class: "ws-empty",
@@ -1952,7 +1976,7 @@ function renderTodoHistoryTab(content: HTMLElement): void {
 
   const list = h("div", { class: "todo-history" });
   // 最新的默认展开，其余收起：历史多了以后一屏全是条目没法扫
-  todoHistory.forEach((entry, index) => {
+  entries.forEach((entry, index) => {
     const chevron = createChevron(index === 0, 12);
     const items = h("ul", { class: "todo-history-items" });
     for (const item of entry.items) {
@@ -1985,10 +2009,16 @@ function renderTodoHistoryTab(content: HTMLElement): void {
   content.append(list);
 }
 
-/** 侧栏/工作区里的「历史待办清单」列表。 */
+/**
+ * 待办历史变化后的收尾。
+ *
+ * 关键：工作区抽屉正开着「待办」Tab 时必须跟着重绘，
+ * 否则切会话后看到的还是上一个会话的残留 DOM（用户报的「切回去记录不对」）。
+ */
 function renderTodoHistory(): void {
   if (!refs) return;
-  refs.workspacePanel.dataset.todoHistory = todoHistory.length > 0 ? "1" : "0";
+  refs.workspacePanel.dataset.todoHistory = currentTodoHistory().length > 0 ? "1" : "0";
+  if (workspaceOpen && workspaceTab === "todos") void renderWorkspacePanel();
 }
 
 async function refreshTodo(sessionId: string): Promise<void> {
@@ -1997,16 +2027,21 @@ async function refreshTodo(sessionId: string): Promise<void> {
     const raw = await runtime.client.getTodo(sessionId);
     if (sessionId !== activeSessionId) return;
     const view = parseSessionTodo(raw);
-    const dismissed = dismissedTodoPlans.get(sessionId);
-    if (view && dismissed && planKeyOf(view) === dismissed) {
-      // 上一轮已收口的计划，服务端还在返回：不显示、也不改写历史
+    const scope = todoScope(sessionId);
+    const dismissed = dismissedTodoPlans.get(scope);
+
+    // 完全没变的那份旧清单 → 继续隐藏（下一轮还没真正开始）
+    if (view && dismissed && planKeyOf(view) === dismissed.planId && todoSignature(view) === dismissed.signature) {
       todoView = null;
       renderTodoStrip();
       renderTodoHistory();
       return;
     }
+    // planId 相同但内容变了 = 新的一轮复用同名计划，解除屏蔽
+    if (view && dismissed) dismissedTodoPlans.delete(scope);
+
     todoView = view;
-    rememberTodo(view);
+    rememberTodo(view, sessionId);
     renderTodoStrip();
     renderTodoHistory();
   } catch {
@@ -2693,9 +2728,10 @@ async function renderWorkspacePanel(): Promise<void> {
     class: `ws-tab${workspaceTab === "files" ? " is-active" : ""}`,
     text: "文件",
   });
+  const todoCount = currentTodoHistory().length;
   const todosTab = h("button", {
     class: `ws-tab${workspaceTab === "todos" ? " is-active" : ""}`,
-    text: todoHistory.length > 0 ? `待办 ${todoHistory.length}` : "待办",
+    text: todoCount > 0 ? `待办 ${todoCount}` : "待办",
     title: "当前会话的历史待办清单",
   });
   gitTab.addEventListener("click", () => {

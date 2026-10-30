@@ -41,6 +41,16 @@ export function planKeyOf(view: TodoView): string {
   return view.items.map((item) => `${item.id}:${item.text}`).join("|").slice(0, 200) || "unknown";
 }
 
+/**
+ * 清单内容签名。
+ *
+ * 用来区分「服务端还在返回上一轮那份旧清单」和「同一 planId 但已经是新内容」:
+ * 前者要继续隐藏，后者要当成新的一轮重新显示并记账。
+ */
+export function todoSignature(view: TodoView): string {
+  return view.items.map((item) => `${item.id}:${item.status}:${item.text}`).join("|");
+}
+
 function entryIdOf(planId: string, firstSeenAt: number): string {
   return `${planId}@${firstSeenAt}`;
 }

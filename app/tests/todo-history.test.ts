@@ -19,6 +19,7 @@ const {
   planKeyOf,
   sealTodoHistory,
   shouldShowTodoStrip,
+  todoSignature,
 } = await import("../src/ui/todo-history-model.ts");
 
 const view = (planId: string, statuses: string[]) => ({
@@ -148,4 +149,93 @@ test("状态与进度文案", () => {
   const stamp = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 5).getTime();
   assert.match(historyTimeLabel({ firstSeenAt: stamp } as never), /^09:05$/);
   assert.equal(historyTimeLabel({ firstSeenAt: 0 } as never), "");
+});
+
+/**
+ * 用户反馈（切会话后）：
+ *   - 切回去记录时间会变（= 被当成新记录重新记账）
+ *   - 历史变空或只剩一条
+ *
+ * 根因是 main.ts 里用单一数组 + 切会话清空，这里用一个「按会话缓存」的模型
+ * 模拟同样的操作序列，确保来回切不会改时间、不会丢条目。
+ */
+test("切会话再切回来：历史与首次触发时间都不变", () => {
+  const now = [1_000];
+  const clock = () => now[0];
+  /** 模拟 main.ts 的按会话缓存 */
+  const cache = new Map<string, ReturnType<typeof mergeTodoHistory>>();
+
+  const open = (sessionId: string) => {
+    // 切会话：不清缓存，只按需读
+    if (!cache.has(sessionId)) cache.set(sessionId, []);
+    return cache.get(sessionId)!;
+  };
+  const poll = (sessionId: string, view: never) => {
+    const next = mergeTodoHistory(open(sessionId), view, clock());
+    cache.set(sessionId, next);
+    return next;
+  };
+
+  // A 里触发一份清单
+  now[0] = 1_000;
+  const first = poll("A", view("8", ["pending", "pending"]) as never);
+  assert.equal(first[0]!.firstSeenAt, 1_000);
+
+  // 切到 B：B 没有任何清单
+  now[0] = 5_000;
+  assert.deepEqual(open("B"), []);
+
+  // 切回 A 并再轮询一次同一份清单
+  now[0] = 9_000;
+  const back = poll("A", view("8", ["pending", "pending"]) as never);
+  assert.equal(back.length, 1, "不能多出一条");
+  assert.equal(back[0]!.firstSeenAt, 1_000, "首次触发时间不能变");
+  assert.equal(historyTimeLabel(back[0]!), historyTimeLabel(first[0]!), "Tab 上显示的时间不能变");
+});
+
+test("两个会话各自独立，互不覆盖", () => {
+  const cache = new Map<string, ReturnType<typeof mergeTodoHistory>>();
+  const poll = (sessionId: string, v: never, at: number) => {
+    const next = mergeTodoHistory(cache.get(sessionId) ?? [], v, at);
+    cache.set(sessionId, next);
+  };
+  poll("A", view("1", ["pending"]) as never, 1_000);
+  poll("B", view("2", ["completed"]) as never, 2_000);
+  poll("A", view("1", ["completed"]) as never, 3_000);
+
+  const a = cache.get("A")!;
+  const b = cache.get("B")!;
+  assert.equal(a.length, 1);
+  assert.equal(b.length, 1);
+  assert.equal(a[0]!.planId, "1");
+  assert.equal(b[0]!.planId, "2");
+  assert.equal(a[0]!.firstSeenAt, 1_000);
+  assert.equal(b[0]!.firstSeenAt, 2_000);
+});
+
+/**
+ * 「已收口」不能只按 planId 屏蔽：服务端下一轮可能复用同一个 planId，
+ * 只要内容变了就得重新显示并新记一条。
+ */
+test("同 planId 但内容变了 → 解除屏蔽并新增一条", () => {
+  let history = mergeTodoHistory([], view("8", ["pending"]) as never, 1_000);
+  history = sealTodoHistory(history, view("8", ["pending"]) as never, 2_000);
+  assert.equal(history.length, 1);
+
+  // 下一轮同样 planId=8，但内容换了一批
+  const nextRound = mergeTodoHistory(history, view("8", ["pending", "pending", "pending"]) as never, 3_000);
+  assert.equal(nextRound.length, 2, "复用 planId 也要新增一条");
+  assert.equal(nextRound[0]!.firstSeenAt, 3_000);
+  assert.equal(nextRound[0]!.sealed, false);
+});
+
+test("内容签名：状态或条目变化都会变，完全没变则相同", () => {
+  const a = todoSignature(view("8", ["pending", "pending"]) as never);
+  const same = todoSignature(view("8", ["pending", "pending"]) as never);
+  const advanced = todoSignature(view("8", ["completed", "pending"]) as never);
+  const longer = todoSignature(view("8", ["pending", "pending", "pending"]) as never);
+
+  assert.equal(a, same, "同一份清单签名必须一致（用来拦「服务端还在返回旧清单」）");
+  assert.notEqual(a, advanced, "进度变化要能区分");
+  assert.notEqual(a, longer, "条目变化要能区分");
 });
