@@ -498,6 +498,53 @@ body.barcode-scanner-active .scan-overlay {
   padding: 2px 8px 12px;
 }
 
+/* ---------------------------- 侧栏分段（活动 / 聊天 / 项目） ---------------------------- */
+
+.side-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 0 12px 8px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.side-tab {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 6px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.side-tab.is-active {
+  background: var(--bg-elev);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+
+/* 扁平列表（活动 / 聊天 / 搜索结果） */
+.flat-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0 6px;
+}
+
+.flat-title {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 8px 6px 4px;
+}
+
 .sidebar-foot {
   display: flex;
   gap: 6px;

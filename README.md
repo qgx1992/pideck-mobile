@@ -16,7 +16,7 @@
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
 | `src/` | 协议与状态核心 + 探针 CLI（**56 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（Vite + Capacitor，**367 条测试**） | `cd app && npm run dev` / `npm run apk` |
+| `app/` | 手机客户端（Vite + Capacitor，**382 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
@@ -62,6 +62,11 @@ docs/issue-*.md             已提交给上游的两个缺陷草稿
 - 也可以直接粘贴链接，或手填地址 + 令牌；最近连接的机器可一键切回
 
 **侧栏**
+- 顶部分三段（对齐桌面端）：**活动** / **聊天** / **项目**，选择会记住
+  - 活动：上半区是还活着的运行时绑定的会话（在跑的带脉冲点），下半区是最近 10 个会话
+  - 聊天：只显示内置 Chat 项目的会话（内置 Chat 不再占「项目」的位置）
+  - 项目：工作区项目分组 + 组内会话
+- 搜索忽略分段：直接给一张跨项目的扁平清单（行上带项目名）
 - 项目分组 + 组内会话，按 `updatedAt` 倒序
 - 默认只显示最近 6 个，其余折叠；展开/收起是显式意图，优先于自动展开
 - 运行中的会话有绿色呼吸条与圆点；分组折叠时项目头也会显示
@@ -146,7 +151,7 @@ node src/cli/probe.ts stop --pair "..." --session <sessionId>
 
 ```bash
 npm test && npm run typecheck                 # 核心：56 条
-cd app && npm test && npm run typecheck       # 客户端：367 条
+cd app && npm test && npm run typecheck       # 客户端：382 条
 cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```
 

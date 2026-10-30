@@ -44,7 +44,18 @@ import { actionsForRole, confirmTextFor } from "./ui/message-actions-model.ts";
 import type { MessageAction } from "./ui/message-actions-model.ts";
 import { branchNodes, shortBranchTitle, shouldShowBranchBar } from "./ui/branch-model.ts";
 import { buildSidebarGroups, projectLabel, resolveExpandedProjects } from "./ui/sidebar-model.ts";
-import { renderProjectGroup } from "./ui/sidebar-view.ts";
+import { renderFlatSection, renderProjectGroup } from "./ui/sidebar-view.ts";
+import {
+  ACTIVITY_RECENT_LIMIT,
+  SIDEBAR_TABS,
+  buildActivityView,
+  chatSessions,
+  searchSessions,
+  tabCounts,
+  workspaceProjects,
+} from "./ui/sidebar-tabs-model.ts";
+import type { SidebarTab } from "./ui/sidebar-tabs-model.ts";
+import { loadSidebarTab, saveSidebarTab } from "./platform/ui-prefs.ts";
 import { buildHeaderView } from "./ui/header-model.ts";
 import { buildMentionView, isDirectory, joinPath, mentionText } from "./ui/mention-model.ts";
 import { collectJumpTargets, filterJumpTargets, roleLabel } from "./ui/history-jump-model.ts";
@@ -475,6 +486,8 @@ interface MainRefs {
   main: HTMLElement;
   body: HTMLElement;
   sidebarScroll: HTMLElement;
+  /** 侧栏分段按钮容器 */
+  sideTabs: HTMLElement;
   chatRoot: HTMLElement;
   /** 分支家族条（fork 过的会话才显示） */
   branchBar: HTMLElement;
@@ -526,6 +539,8 @@ function renderMain(): void {
   });
 
   const sidebarScroll = h("div", { class: "sidebar-scroll" });
+  /** 活动 / 聊天 / 项目 分段（对齐桌面端侧栏顶部） */
+  const sideTabs = h("div", { class: "side-tabs" });
   const themeBtn = h("button", { class: "side-foot-btn", text: "外观" });
   const pairBtn = h("button", { class: "side-foot-btn", text: "连接" });
   const hideBtn = h("button", { class: "side-foot-btn", text: "收起" });
@@ -533,6 +548,7 @@ function renderMain(): void {
   const sidebar = h("aside", { class: "sidebar" }, [
     h("div", { class: "sidebar-top" }, [brand, newSessionBtn]),
     searchInput,
+    sideTabs,
     sidebarScroll,
     h("div", { class: "sidebar-foot" }, [themeBtn, pairBtn, hideBtn]),
   ]);
@@ -635,6 +651,7 @@ function renderMain(): void {
     main,
     body,
     sidebarScroll,
+    sideTabs,
     chatRoot,
     branchBar,
     composer,
@@ -1001,18 +1018,8 @@ function isSessionsExpanded(projectId: string, state: PiDeckState): boolean {
 
 function renderSidebar(state: PiDeckState): void {
   if (!refs || !runtime) return;
-  const groups = buildSidebarGroups(state, sidebarQuery, collapsedProjects);
-
+  renderSideTabs(state);
   clear(refs.sidebarScroll);
-  if (groups.length === 0) {
-    refs.sidebarScroll.append(
-      h("p", {
-        class: "side-empty",
-        text: sidebarQuery.trim() ? "没有匹配的会话" : "还没有项目，请先在桌面端添加目录",
-      }),
-    );
-    return;
-  }
 
   const runningSessionIds = new Set(
     state.runtimes.filter((r) => r.status === "running").map((r) => r.sessionId),
@@ -1035,7 +1042,99 @@ function renderSidebar(state: PiDeckState): void {
       onToggleSessions: toggleSessionsExpanded,
     },
   };
+
+  // 搜索时忽略分段：窄屏上按项目分组反而难扫，直接给一张扁平清单
+  const query = sidebarQuery.trim();
+  if (query) {
+    const section = renderFlatSection(searchSessions(state, query), ctx, { empty: "没有匹配的会话" });
+    if (section) refs.sidebarScroll.append(section);
+    return;
+  }
+
+  if (sidebarTab === "active") {
+    const view = buildActivityView(state);
+    const live = renderFlatSection(view.live, ctx, {
+      title: "运行中",
+      hideWhenEmpty: true,
+      preview: 6,
+      expanded: flatExpanded.has("active-live"),
+      onToggle: () => toggleFlat("active-live"),
+    });
+    if (live) refs.sidebarScroll.append(live);
+
+    const recent = renderFlatSection(view.recent, ctx, {
+      title: "最近会话",
+      preview: ACTIVITY_RECENT_LIMIT,
+      empty: "还没有会话；发一条消息就会出现在这里",
+      expanded: flatExpanded.has("active-recent"),
+      onToggle: () => toggleFlat("active-recent"),
+    });
+    if (recent) refs.sidebarScroll.append(recent);
+    return;
+  }
+
+  if (sidebarTab === "chats") {
+    const rows = chatSessions(state).map((session) => ({ session }));
+    const section = renderFlatSection(rows, ctx, {
+      preview: 12,
+      empty: "没有聊天会话（桌面端没有启用内置 Chat 项目）",
+      expanded: flatExpanded.has("chats"),
+      onToggle: () => toggleFlat("chats"),
+    });
+    if (section) refs.sidebarScroll.append(section);
+    return;
+  }
+
+  // 项目分段：内置 Chat 归到「聊天」，这里只列工作区项目
+  const groups = buildSidebarGroups(
+    { projects: workspaceProjects(state.projects), sessions: state.sessions },
+    "",
+    collapsedProjects,
+  );
+  if (groups.length === 0) {
+    refs.sidebarScroll.append(
+      h("p", { class: "side-empty", text: "还没有项目，请先在桌面端添加目录" }),
+    );
+    return;
+  }
   refs.sidebarScroll.append(...groups.map((group) => renderProjectGroup(group, ctx)));
+}
+
+/* ---------------------------- 侧栏分段 ---------------------------- */
+
+/** 侧栏当前分段；用户选过就记住，下次打开还在同一段 */
+let sidebarTab: SidebarTab = loadSidebarTab() ?? "projects";
+/** 扁平列表（活动 / 聊天）的「展开其余」状态 */
+const flatExpanded = new Set<string>();
+
+function toggleFlat(key: string): void {
+  if (flatExpanded.has(key)) flatExpanded.delete(key);
+  else flatExpanded.add(key);
+  if (runtime) renderSidebar(runtime.store.state);
+}
+
+function renderSideTabs(state: PiDeckState): void {
+  if (!refs) return;
+  clear(refs.sideTabs);
+  const counts = tabCounts(state);
+  for (const tab of SIDEBAR_TABS) {
+    const active = sidebarTab === tab.id;
+    const count = counts[tab.id];
+    refs.sideTabs.append(
+      h("button", {
+        class: `side-tab${active ? " is-active" : ""}`,
+        text: tab.label,
+        title: count > 0 ? `${tab.label}（${count}）` : tab.label,
+        "aria-label": count > 0 ? `${tab.label}，${count} 项` : tab.label,
+        onclick: () => {
+          if (sidebarTab === tab.id) return;
+          sidebarTab = tab.id;
+          saveSidebarTab(sidebarTab);
+          if (runtime) renderSidebar(runtime.store.state);
+        },
+      }),
+    );
+  }
 }
 
 function renderComposerState(): void {

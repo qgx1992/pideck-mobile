@@ -126,14 +126,14 @@ export function renderSessionRow(
   session: SessionSummary,
   isActive: boolean,
   handlers: Pick<SidebarViewHandlers, "onOpenSession" | "onSessionMenu">,
-  options: { running?: boolean } = {},
+  options: { running?: boolean; projectLabel?: string } = {},
 ): HTMLElement {
   const isRunning = options.running === true;
   const backend = typeof session.backend === "string" ? session.backend : "";
   const badge = BACKEND_BADGE[backend] ?? "";
   const isDsh = backend === "dsh";
 
-  const meta = [fmtTime(session.updatedAt)].filter(Boolean).join(" · ");
+  const meta = [options.projectLabel ?? "", fmtTime(session.updatedAt)].filter(Boolean).join(" · ");
 
   const nameRow = h("span", { class: "sname-row" }, [
     h("span", { class: "sname", text: session.title || "未命名会话" }),
@@ -161,4 +161,78 @@ export function renderSessionRow(
   });
 
   return row;
+}
+
+export interface FlatSectionRow {
+  session: SessionSummary;
+  projectLabel?: string;
+  running?: boolean;
+}
+
+export interface FlatSectionOptions {
+  /** 区块标题（不传就不画标题） */
+  title?: string;
+  /** 没有数据时的文案 */
+  empty?: string;
+  /** 超过多少条折叠，默认全部显示 */
+  preview?: number;
+  /** 当前是否已展开（配合 onToggle） */
+  expanded?: boolean;
+  onToggle?: () => void;
+  /** 没有数据时是否整块隐藏（活动区上半区就该这样） */
+  hideWhenEmpty?: boolean;
+}
+
+/**
+ * 扁平会话列表（活动 / 聊天 / 搜索结果共用）。
+ *
+ * 与项目分组不同，这里没有「项目头」，行上带项目名；
+ * 跨项目列表看不出消息从哪来是最容易踩的坑。
+ */
+export function renderFlatSection(
+  rows: readonly FlatSectionRow[],
+  ctx: SidebarViewContext,
+  options: FlatSectionOptions = {},
+): HTMLElement | null {
+  const { handlers } = ctx;
+  if (rows.length === 0 && options.hideWhenEmpty) return null;
+
+  const children: Array<HTMLElement | null> = [];
+  if (options.title) children.push(h("div", { class: "flat-title", text: options.title }));
+
+  if (rows.length === 0) {
+    children.push(h("p", { class: "group-empty", text: options.empty ?? "暂无会话" }));
+  } else {
+    const preview = options.preview ?? rows.length;
+    const overflow = rows.length > preview;
+    const visible = overflow && !options.expanded ? rows.slice(0, preview) : rows;
+    for (const row of visible) {
+      children.push(
+        renderSessionRow(row.session, row.session.id === ctx.activeSessionId, handlers, {
+          running: row.running === true || ctx.runningSessionIds?.has(row.session.id) === true,
+          ...(row.projectLabel ? { projectLabel: row.projectLabel } : {}),
+        }),
+      );
+    }
+    if (overflow && options.onToggle) {
+      const hidden = rows.length - preview;
+      const expanded = options.expanded === true;
+      children.push(
+        h(
+          "button",
+          {
+            class: `sessions-more${expanded ? " is-expanded" : ""}`,
+            title: expanded ? "收起多余的会话" : `展开其余 ${hidden} 个会话`,
+            onclick: (event: MouseEvent) => {
+              event.stopPropagation();
+              options.onToggle?.();
+            },
+          },
+          [createChevron(expanded, 12), h("span", { text: expanded ? "收起" : `展开其余 ${hidden} 个` })],
+        ),
+      );
+    }
+  }
+
+  return h("section", { class: "flat-section" }, children);
 }
