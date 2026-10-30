@@ -126,7 +126,7 @@ export function renderSessionRow(
   session: SessionSummary,
   isActive: boolean,
   handlers: Pick<SidebarViewHandlers, "onOpenSession" | "onSessionMenu">,
-  options: { running?: boolean; projectLabel?: string } = {},
+  options: { running?: boolean; projectLabel?: string; endpointLabel?: string } = {},
 ): HTMLElement {
   const isRunning = options.running === true;
   const backend = typeof session.backend === "string" ? session.backend : "";
@@ -137,6 +137,7 @@ export function renderSessionRow(
 
   const nameRow = h("span", { class: "sname-row" }, [
     h("span", { class: "sname", text: session.title || "未命名会话" }),
+    ...(options.endpointLabel ? [h("span", { class: "sbadge sbadge--device", text: options.endpointLabel })] : []),
     ...(badge ? [h("span", { class: `sbadge sbadge--${backend}`, text: badge })] : []),
   ]);
 
@@ -166,6 +167,7 @@ export function renderSessionRow(
 export interface FlatSectionRow {
   session: SessionSummary;
   projectLabel?: string;
+  endpointLabel?: string;
   running?: boolean;
 }
 
@@ -211,6 +213,7 @@ export function renderFlatSection(
         renderSessionRow(row.session, row.session.id === ctx.activeSessionId, handlers, {
           running: row.running === true || ctx.runningSessionIds?.has(row.session.id) === true,
           ...(row.projectLabel ? { projectLabel: row.projectLabel } : {}),
+          ...(row.endpointLabel ? { endpointLabel: row.endpointLabel } : {}),
         }),
       );
     }

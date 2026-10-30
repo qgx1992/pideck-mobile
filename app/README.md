@@ -14,11 +14,11 @@ app/
 ├─ src/
 │  ├─ main.ts            接线：配对/主界面/发送/停止/通知/返回键/后台恢复
 │  ├─ platform/          fetch 分流、主题、安全区、导航栏、本地通知、后台看护、返回键、扫码
-│  ├─ ui/                侧栏、对话、Markdown、语法高亮、ask 卡片、工作区、模型选择、
-│  │                     上下文用量、任务清单、抽屉手势
+│  ├─ ui/                侧栏（活动/聊天/项目、多设备聚合）、对话、Markdown、语法高亮、
+│  │                     ask 卡片、工作区、模型选择、上下文用量、任务清单、抽屉手势
 │  └─ ...
 ├─ scripts/              APK 构建、图标生成、smoke-ui（真数据）、verify-send（mock 链路）
-└─ tests/                node:test + jsdom，384 条
+└─ tests/                node:test + jsdom，394 条
 ```
 
 ## 本地开发（浏览器里就能用）
@@ -227,3 +227,8 @@ Vite 的 `build.sourcemap: true` 会把 `.map` 一起打进 APK（约 1 MB），
 9. **编辑/删除/重发/分叉只在本机接口形状上验证过**：`edit-message` / `delete-message` /
    `prepare-resend` / `fork` 的返回体在文档里没固定，客户端做了宽松取值（`text`/`prefill`/
    `sessionId` 等），拿不到就退到本地行为。真机上请先拿一个不重要的话试一遍。
+10. **多设备的后台通知只覆盖一台**：原生 `RunWatchService` 是单端点，所以多台同时连时
+    只给「运行中会话最多的那台」发通知，其余设备在后台跑完不会弹。彻底解决要把原生服务
+    改成多路订阅（P4，未做）。前台时所有设备的通知都正常。
+11. **多设备的身份靠 origin 判定**：`/api/health` 不返回设备 id，同一台电脑用局域网 IP
+    和 Tailscale 域名访问会被当成两台设备。需要上游补 `deviceId` 才能真正合并。

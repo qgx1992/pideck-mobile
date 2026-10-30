@@ -149,3 +149,120 @@ export function tabCounts(state: Pick<PiDeckState, "projects" | "sessions" | "ru
     projects: workspaceProjects(state.projects).length,
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* 多端点（一机连多台）聚合                                            */
+/* ------------------------------------------------------------------ */
+
+/** 一个已连接端点的最小状态面。 */
+export interface EndpointState {
+  id: string;
+  label: string;
+  state: Pick<PiDeckState, "projects" | "sessions" | "runtimes"> & {
+    pendingUiRequests?: PiDeckState["pendingUiRequests"];
+  };
+}
+
+export interface EndpointTag {
+  endpointId: string;
+  endpointLabel: string;
+}
+
+export interface MultiActivityRow extends ActivityRow, EndpointTag {}
+
+export interface MultiActivityView {
+  live: MultiActivityRow[];
+  recent: MultiActivityRow[];
+}
+
+/**
+ * 设备间时钟可能差几分钟，未来时间戳会把某台机器的会话永远顶在最上面。
+ * 这里把超过「现在 + 1 分钟」的时间压回去，宁可排错也不让它霸榜。
+ */
+const CLOCK_SKEW_MS = 60_000;
+
+function sortAt(session: SessionSummary, now: number): number {
+  return Math.min(session.updatedAt ?? 0, now + CLOCK_SKEW_MS);
+}
+
+/** 跨设备的「活动」分段：活着的运行时 + 跨设备取最近若干条。 */
+export function buildActivityViewMulti(
+  endpoints: readonly EndpointState[],
+  limit: number = ACTIVITY_RECENT_LIMIT,
+  now: number = Date.now(),
+): MultiActivityView {
+  const live: MultiActivityRow[] = [];
+  const rest: MultiActivityRow[] = [];
+
+  for (const endpoint of endpoints) {
+    const tag = { endpointId: endpoint.id, endpointLabel: endpoint.label };
+    const view = buildActivityView(endpoint.state, Number.MAX_SAFE_INTEGER);
+    for (const row of view.live) live.push({ ...row, ...tag });
+    for (const row of view.recent) rest.push({ ...row, ...tag });
+  }
+
+  const byRecent = (left: MultiActivityRow, right: MultiActivityRow): number =>
+    sortAt(right.session, now) - sortAt(left.session, now);
+
+  live.sort(byRecent);
+  rest.sort(byRecent);
+  return { live, recent: rest.slice(0, Math.max(0, limit)) };
+}
+
+/** 跨设备的「聊天」分段：各端内置 Chat 项目的会话。 */
+export function chatSessionsMulti(
+  endpoints: readonly EndpointState[],
+  now: number = Date.now(),
+): Array<{ session: SessionSummary } & EndpointTag> {
+  const rows: Array<{ session: SessionSummary } & EndpointTag> = [];
+  for (const endpoint of endpoints) {
+    for (const session of chatSessions(endpoint.state)) {
+      rows.push({ session, endpointId: endpoint.id, endpointLabel: endpoint.label });
+    }
+  }
+  return rows.sort((left, right) => sortAt(right.session, now) - sortAt(left.session, now));
+}
+
+/** 跨设备搜索：标题或项目名命中，行上带设备名与项目名。 */
+export function searchSessionsMulti(
+  endpoints: readonly EndpointState[],
+  query: string,
+  now: number = Date.now(),
+): Array<FlatSessionRow & EndpointTag> {
+  const rows: Array<FlatSessionRow & EndpointTag> = [];
+  for (const endpoint of endpoints) {
+    for (const row of searchSessions(endpoint.state, query)) {
+      rows.push({ ...row, endpointId: endpoint.id, endpointLabel: endpoint.label });
+    }
+  }
+  return rows.sort((left, right) => sortAt(right.session, now) - sortAt(left.session, now));
+}
+
+/** 「项目」分段：多设备时按设备分块，单设备时直接就是原来的一套。 */
+export function endpointCatalogs(endpoints: readonly EndpointState[]): Array<{
+  endpointId: string;
+  endpointLabel: string;
+  projects: Project[];
+  sessions: SessionSummary[];
+  running: number;
+}> {
+  return endpoints.map((endpoint) => {
+    const runningIds = new Set(
+      endpoint.state.runtimes
+        .filter((runtime) => typeof runtime.status === "string" && runtime.status === "running")
+        .map((runtime) => runtime.sessionId),
+    );
+    return {
+      endpointId: endpoint.id,
+      endpointLabel: endpoint.label,
+      projects: workspaceProjects(endpoint.state.projects),
+      sessions: endpoint.state.sessions,
+      running: runningIds.size,
+    };
+  });
+}
+
+/** 某个端点上的待答卡片数量（设备选择器上的红点）。 */
+export function pendingCount(endpoint: EndpointState): number {
+  return endpoint.state.pendingUiRequests?.length ?? 0;
+}

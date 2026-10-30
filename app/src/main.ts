@@ -21,8 +21,11 @@ import {
 import {
   savePairing,
   loadPairing,
+  ensureMultiEndpointDefaults,
   clearPairing,
   listPairings,
+  listEnabledPairings,
+  setPairingEnabled,
   forgetPairing,
   renamePairing,
   pairingLabel,
@@ -49,12 +52,16 @@ import {
   ACTIVITY_RECENT_LIMIT,
   SIDEBAR_TABS,
   buildActivityView,
-  chatSessions,
+  buildActivityViewMulti,
+  chatSessionsMulti,
+  endpointCatalogs,
   searchSessions,
+  searchSessionsMulti,
   tabCounts,
   workspaceProjects,
 } from "./ui/sidebar-tabs-model.ts";
-import type { SidebarTab } from "./ui/sidebar-tabs-model.ts";
+import type { EndpointState, SidebarTab } from "./ui/sidebar-tabs-model.ts";
+import { dedupeEndpoints, describeEndpointCap, endpointIdOf, endpointLabelOf, MAX_LIVE_ENDPOINTS } from "./ui/endpoint-model.ts";
 import { loadSidebarTab, saveSidebarTab } from "./platform/ui-prefs.ts";
 import { buildHeaderView } from "./ui/header-model.ts";
 import { buildMentionView, isDirectory, joinPath, mentionText } from "./ui/mention-model.ts";
@@ -164,12 +171,36 @@ const appFetch = createAppFetch();
 const isDev = import.meta.env.DEV;
 
 interface Runtime {
+  /** 归一化后的 endpoint id（origin），所有按端点的缓存都用它做前缀 */
+  id: string;
+  /** 显示名（备注名 > host:port） */
+  label: string;
   client: PiDeckClient;
   store: StateStore;
   pairing: { baseUrl: string; token: string; label?: string };
 }
 
+/** 活跃端点（界面、会话通道、header 都看它） */
 let runtime: Runtime | null = null;
+/** 所有已连接的端点（含活跃）—— 每条都常驻一条 /api/events */
+let endpoints: Runtime[] = [];
+/** 每台设备上次打开的会话，切回来时落回原处 */
+const lastSessionByEndpoint = new Map<string, string>();
+
+/**
+ * 端点作用域 key。
+ *
+ * 草稿 / 图片 / 学到的模型偏好 / todo 折叠 / 通知去重 这些缓存都按会话 id 存，
+ * 而两台机器上的会话 id 是各自生成的 —— 不前缀就会串台。
+ */
+function epKey(id: string): string {
+  return `${runtime?.id ?? "local"}::${id}`;
+}
+
+/** 额度缓存要按「设备 + 供应商」，否则两台的 deepseek 会显示成同一个余额 */
+function usageKey(provider: string): string {
+  return `${runtime?.id ?? "local"}::${provider}`;
+}
 let channel: SessionChannel | null = null;
 let activeSessionId: string | null = null;
 let activeProjectId: string | null = null;
@@ -179,10 +210,10 @@ let lastRunStatus: string = "idle";
 let sessionHistory: WireMessage[] = [];
 /** 每个会话各自的输入框草稿：切走时保存，切回来恢复，避免内容串会话 */
 const sessionDrafts = new Map<string, string>();
-/** 上一次的运行时快照，用来检测「跑完了」 */
-let previousRuntimes: RuntimeSnapshot[] = [];
-/** 上一次的待答卡片快照，用来检测「AI 新提问」 */
-let previousPending: PendingSnapshot[] = [];
+/** 上一次的运行时快照（按端点分开）：用来检测「跑完了」 */
+const previousRuntimesByEndpoint = new Map<string, RuntimeSnapshot[]>();
+/** 上一次的待答卡片快照（按端点分开）：用来检测「AI 新提问」 */
+const previousPendingByEndpoint = new Map<string, PendingSnapshot[]>();
 /**
  * 运行中发消息的行为：排队（默认）或插话。
  * 跨会话保留：用户选了插话，切到别的会话还在跑时应该还是插话。
@@ -209,7 +240,7 @@ let disposers: Array<() => void> = [];
 /* 侧栏视图状态（项目分组 / 折叠 / 搜索）                                */
 /* ------------------------------------------------------------------ */
 
-const COLLAPSED_KEY = ["pideck", "app", "collapsed"].join("-");
+const COLLAPSED_KEY = ["pideck", "app", "collapsed", "v2"].join("-");
 let collapsedProjects = new Set<string>(loadCollapsedProjects());
 let sidebarQuery = "";
 /**
@@ -445,35 +476,153 @@ function renderPairing(options: { link?: string; error?: string } = {}): void {
 /* ------------------------------------------------------------------ */
 
 async function connect(pairing: { baseUrl: string; token: string; label?: string }): Promise<void> {
-  const baseUrl = pairing.baseUrl || (isDev ? window.location.origin : "");
+  // 配对新设备 = 把它加进「同时连接」的集合，而不是把其它设备踢掉
+  const existing = listEnabledPairings().map((item) => ({ ...item, savedAt: item.savedAt || Date.now() }));
+  const incoming: SavedPairing = {
+    baseUrl: pairing.baseUrl,
+    token: pairing.token,
+    savedAt: Date.now(),
+    ...(pairing.label ? { label: pairing.label } : {}),
+  };
+  let list = dedupeEndpoints([...existing, incoming]);
+  if (list.length > MAX_LIVE_ENDPOINTS) {
+    const trimmed = list.filter((item) => endpointIdOf(item.baseUrl) !== endpointIdOf(incoming.baseUrl));
+    trimmed.sort((a, b) => (b.lastUsedAt ?? b.savedAt) - (a.lastUsedAt ?? a.savedAt));
+    list = dedupeEndpoints([...trimmed.slice(0, MAX_LIVE_ENDPOINTS - 1), incoming]);
+    toast(`同时最多保持 ${MAX_LIVE_ENDPOINTS} 台实时连接，已自动停用最久未用的那台`);
+  }
+  await connectAll(list, { activeBaseUrl: pairing.baseUrl });
+}
+
+/** 单台设备的握手超时：多台吋一台关机不能把启动拖成 20s×N。 */
+const ENDPOINT_HANDSHAKE_TIMEOUT_MS = 6_000;
+
+function buildStore(client: PiDeckClient): StateStore {
+  return new StateStore({
+    client,
+    onStatus: (status) => {
+      updateConnectionDot(status);
+      renderDeviceChip();
+    },
+    onError: (error) => {
+      if (!isAuthError(error)) console.warn("[pideck]", describeError(error));
+    },
+  });
+}
+
+/** 建一个端点的 client/store（不 start，不渲染）。 */
+async function buildEndpoint(item: SavedPairing): Promise<Runtime> {
+  const baseUrl = item.baseUrl || (isDev ? window.location.origin : "");
   if (!baseUrl) throw new Error("缺少服务器地址");
 
-  const client = new PiDeckClient({ baseUrl, token: pairing.token, fetchImpl: appFetch });
+  const client = new PiDeckClient({
+    baseUrl,
+    token: item.token,
+    fetchImpl: appFetch,
+    timeoutMs: ENDPOINT_HANDSHAKE_TIMEOUT_MS,
+  });
   const health = await client.health();
   if (health.service !== "PiDeck") {
     throw new Error(`对面不是 PiDeck（返回 service=${health.service}），检查地址是否填错`);
   }
 
-  const store = new StateStore({
-    client,
-    onStatus: (status) => updateConnectionDot(status),
-    onError: (error) => {
-      if (!isAuthError(error)) console.warn("[pideck]", describeError(error));
-    },
-  });
-
+  const store = buildStore(client);
   await store.refresh();
 
   savePairing({
-    baseUrl: pairing.baseUrl,
-    token: pairing.token,
+    baseUrl: item.baseUrl,
+    token: item.token,
     savedAt: Date.now(),
-    ...(pairing.label ? { label: pairing.label } : {}),
+    ...(item.label ? { label: item.label } : {}),
   });
-  runtime = { client, store, pairing };
-  store.start();
+
+  return {
+    id: endpointIdOf(baseUrl),
+    label: endpointLabelOf({ baseUrl, label: item.label }),
+    client,
+    store,
+    pairing: { baseUrl: item.baseUrl, token: item.token, ...(item.label ? { label: item.label } : {}) },
+  };
+}
+
+/**
+ * 连接（或重建）全部端点。
+ *
+ * 关键点：
+ *   - 先停掉旧的 store（以前切连接时旧 SSE 一直在后台重连）
+ *   - 健康检查并发、单台超时 6s：5 台里有一台关机不能把启动拖死
+ *   - 一台失败不影响其他台；全部失败才抛错（配对页用）
+ */
+async function connectAll(
+  pairings: readonly SavedPairing[],
+  options: { activeBaseUrl?: string } = {},
+): Promise<void> {
+  const unique = dedupeEndpoints(pairings.map((item) => ({ ...item, id: endpointIdOf(item.baseUrl) })));
+  if (unique.length === 0) throw new Error("缺少服务器地址");
+
+  // 重建前先全部停掉：以前切连接时旧 SSE 会在后台一直重连
+  for (const endpoint of endpoints) endpoint.store.stop();
+  endpoints = [];
+  runtime = null;
+
+  const settled = await Promise.allSettled(unique.map((item) => buildEndpoint(item)));
+  const built: Runtime[] = [];
+  const failures: unknown[] = [];
+  for (const result of settled) {
+    if (result.status === "fulfilled") built.push(result.value);
+    else failures.push(result.reason);
+  }
+  if (built.length === 0) {
+    throw failures[0] instanceof Error ? failures[0] : new Error(String(failures[0] ?? "连接失败"));
+  }
+
+  endpoints = built;
+  const wanted = options.activeBaseUrl ? endpointIdOf(options.activeBaseUrl) : "";
+  runtime = built.find((endpoint) => endpoint.id === wanted) ?? built[0]!;
+  for (const endpoint of built) endpoint.store.start();
+
+  savePairing({ baseUrl: runtime.pairing.baseUrl, token: runtime.pairing.token, savedAt: Date.now(), ...(runtime.pairing.label ? { label: runtime.pairing.label } : {}) });
+
+  if (built.length > 1) {
+    const cap = describeEndpointCap(built.length);
+    if (cap) toast(cap);
+  }
+  if (failures.length > 0) {
+    toast(`${failures.length} 台设备没连上：${describeError(failures[0])}`);
+  }
 
   renderMain();
+}
+
+/** 切到另一台已连接的设备：不重建 store，只换活跃端点。 */
+function activateEndpoint(id: string, options: { restore?: boolean } = {}): void {
+  const next = endpoints.find((endpoint) => endpoint.id === id);
+  if (!next || next === runtime) return;
+  const previous = runtime;
+  if (previous && activeSessionId) lastSessionByEndpoint.set(previous.id, activeSessionId);
+
+  runtime = next;
+  next.store.start();
+  savePairing({ baseUrl: next.pairing.baseUrl, token: next.pairing.token, savedAt: Date.now(), ...(next.pairing.label ? { label: next.pairing.label } : {}) });
+  closeSheet();
+  renderMain();
+
+  if (options.restore === false) return;
+  const remembered = lastSessionByEndpoint.get(next.id);
+  const state = next.store.state;
+  const exists = remembered ? state.sessions.some((session) => session.id === remembered) : false;
+  if (remembered && exists) void openSession(remembered);
+}
+
+/** 断开全部端点：每台 store 都要停，否则会留下后台 SSE 重连循环。 */
+function disconnectAll(): void {
+  for (const endpoint of endpoints) endpoint.store.stop();
+  endpoints = [];
+  runtime = null;
+  activeSessionId = null;
+  activeProjectId = null;
+  channel?.close();
+  channel = null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -490,6 +639,8 @@ interface MainRefs {
   sidebarScroll: HTMLElement;
   /** 侧栏分段按钮容器 */
   sideTabs: HTMLElement;
+  /** 顶栏的设备切换 chip（只有多台设备时可见） */
+  deviceBtn: HTMLButtonElement;
   chatRoot: HTMLElement;
   /** 分支家族条（fork 过的会话才显示） */
   branchBar: HTMLElement;
@@ -560,12 +711,14 @@ function renderMain(): void {
   const headerSub = h("div", { class: "sub", text: "" });
   const menuBtn = h("button", { class: "icon-btn", title: "项目与会话", text: "☰" });
   const workspaceBtn = h("button", { class: "icon-btn", title: "工作区（Git / 文件）", text: "▤" });
+  const deviceBtn = h("button", { class: "device-chip is-hidden", title: "切换设备" });
   const header = h("header", { class: "header" }, [
     menuBtn,
     h("div", { class: "header-text" }, [
       h("div", { class: "title-row" }, [headerTitle, headerMeta]),
       headerSub,
     ]),
+    deviceBtn,
     workspaceBtn,
   ]);
 
@@ -617,13 +770,13 @@ function renderMain(): void {
   // 记住用户手动折叠的选择（优先于「有进行中就自动展开」）
   todoStrip.el.querySelector(".todo-head")?.addEventListener("click", () => {
     if (!activeSessionId) return;
-    const current = todoCollapsed.get(activeSessionId) ?? !shouldAutoExpand(todoView);
-    todoCollapsed.set(activeSessionId, !current);
+    const current = todoCollapsed.get(epKey(activeSessionId)) ?? !shouldAutoExpand(todoView);
+    todoCollapsed.set(epKey(activeSessionId), !current);
   });
   subagentStrip.el.querySelector(".subagent-head")?.addEventListener("click", () => {
     if (!activeSessionId) return;
-    const current = subagentCollapsed.get(activeSessionId) ?? false;
-    subagentCollapsed.set(activeSessionId, !current);
+    const current = subagentCollapsed.get(epKey(activeSessionId)) ?? false;
+    subagentCollapsed.set(epKey(activeSessionId), !current);
   });
   const composerEl = h("div", { class: "composer" }, [
     subagentStrip.el,
@@ -658,6 +811,7 @@ function renderMain(): void {
     body,
     sidebarScroll,
     sideTabs,
+    deviceBtn,
     chatRoot,
     branchBar,
     composer,
@@ -757,6 +911,7 @@ function renderMain(): void {
   pairBtn.addEventListener("click", () => openConnectionSheet());
   newSessionBtn.addEventListener("click", () => void createSession());
   workspaceBtn.addEventListener("click", () => toggleWorkspacePanel());
+  deviceBtn.addEventListener("click", () => openEndpointSheet());
   wsScrim.addEventListener("click", () => closeWorkspacePanel());
   historyFab.addEventListener("click", () => openSentHistorySheet());
   mentionBtn.addEventListener("click", () => void openMentionSheet());
@@ -805,8 +960,8 @@ function renderMain(): void {
     renderComposerState();
     if (activeSessionId) {
       const text = composer.value;
-      if (text.trim()) sessionDrafts.set(activeSessionId, text);
-      else sessionDrafts.delete(activeSessionId);
+      if (text.trim()) sessionDrafts.set(epKey(activeSessionId), text);
+      else sessionDrafts.delete(epKey(activeSessionId));
     }
   });
 
@@ -836,8 +991,8 @@ function renderMain(): void {
   });
 
   // 通知：建渠道、要权限、监听点击跳转
-  previousRuntimes = [];
-  previousPending = [];
+  previousRuntimesByEndpoint.clear();
+  previousPendingByEndpoint.clear();
   void ensureTaskChannel();
   if (isTaskNotifyEnabled()) {
     void ensureNotificationPermission().then((granted) => {
@@ -851,13 +1006,26 @@ function renderMain(): void {
 
   const unsubscribe = store.subscribe((state) => {
     if (!runtime) return;
-    detectCompletedRuns(state);
+    detectCompletedRuns(runtime.id, state);
     renderSidebar(state);
     renderHeader(state);
     if (activeSessionId) restorePending(activeSessionId);
     else chatView?.setPending([]);
   });
   disposers.push(unsubscribe);
+
+  // 非活跃端的状态变化也要重画侧栏（聚合视图靠它），顺带跑一遍「跑完了」检测
+  for (const endpoint of endpoints) {
+    if (endpoint === runtime) continue;
+    disposers.push(
+      endpoint.store.subscribe(() => {
+        if (!runtime) return;
+        detectCompletedRuns(endpoint.id, endpoint.store.state);
+        renderSidebar(runtime.store.state);
+        renderDeviceChip();
+      }),
+    );
+  }
 
   const statusUnsub = store.onStatus((status) => {
     updateConnectionDot(status);
@@ -904,7 +1072,7 @@ function autosize(el: HTMLTextAreaElement): void {
 const sessionImages = new Map<string, PendingImage[]>();
 
 function imageKey(): string {
-  return activeSessionId ?? "";
+  return `${runtime?.id ?? "local"}::${activeSessionId ?? ""}`;
 }
 
 function currentImages(): PendingImage[] {
@@ -969,7 +1137,7 @@ async function addImageFiles(files: readonly File[]): Promise<void> {
 
 function renderHeader(state: PiDeckState): void {
   if (!refs || !runtime) return;
-  const learned = activeSessionId ? learnedPrefs.get(activeSessionId) : undefined;
+  const learned = activeSessionId ? learnedPrefs.get(epKey(activeSessionId)) : undefined;
   const view = buildHeaderView(state, activeSessionId, activeProjectId, learned);
 
   if (refs.headerTitle.textContent !== view.title) refs.headerTitle.textContent = view.title;
@@ -1026,41 +1194,52 @@ function isSessionsExpanded(projectId: string, state: PiDeckState): boolean {
 function renderSidebar(state: PiDeckState): void {
   if (!refs || !runtime) return;
   renderSideTabs(state);
+  renderDeviceChip();
   clear(refs.sidebarScroll);
 
-  const runningSessionIds = new Set(
-    state.runtimes.filter((r) => r.status === "running").map((r) => r.sessionId),
-  );
+  const states = endpointStates();
+  const multi = states.length > 1;
 
-  // 用户手动展开的项目 + 「当前会话被截断时」的临时展开（不写回手动集合）
-  const expandedForRender = resolveExpandedProjects(state, expandedSessions, activeSessionId);
+  /** 在指定端点执行动作：不是当前活跃端就先切过去 */
+  const onEndpoint = (endpointId: string, action: () => void): void => {
+    if (runtime?.id !== endpointId) activateEndpoint(endpointId, { restore: false });
+    if (runtime?.id === endpointId) action();
+  };
 
-  const ctx = {
-    activeSessionId,
-    activeProjectId,
-    expandedProjects: expandedForRender,
-    runningSessionIds,
-    handlers: {
-      onToggleProject: toggleProject,
-      onOpenSession: (id: string) => void openSession(id),
-      onCreateSession: (id: string) => void createSession(id),
-      onSessionMenu: (id: string) => openSessionMenu(id),
-      onProjectMenu: (id: string) => openProjectMenu(id),
-      onToggleSessions: toggleSessionsExpanded,
-    },
+  const makeCtx = (endpoint: EndpointState | null) => {
+    const ownState = endpoint ? endpoint.state : state;
+    const isActive = !endpoint || endpoint.id === runtime?.id;
+    const run = endpoint?.id ?? runtime?.id ?? "";
+    return {
+      activeSessionId: isActive ? activeSessionId : null,
+      activeProjectId: isActive ? activeProjectId : null,
+      expandedProjects: resolveExpandedProjects(ownState, expandedSessions, isActive ? activeSessionId : null),
+      runningSessionIds: new Set(
+        ownState.runtimes.filter((item) => item.status === "running").map((item) => item.sessionId),
+      ),
+      handlers: {
+        onToggleProject: (projectId: string) => toggleProject(projectId),
+        onOpenSession: (sessionId: string) => onEndpoint(run, () => void openSession(sessionId)),
+        onCreateSession: (projectId: string) => onEndpoint(run, () => void createSession(projectId)),
+        onSessionMenu: (sessionId: string) => onEndpoint(run, () => openSessionMenu(sessionId)),
+        onProjectMenu: (projectId: string) => onEndpoint(run, () => openProjectMenu(projectId)),
+        onToggleSessions: (projectId: string) => toggleSessionsExpanded(projectId),
+      },
+    };
   };
 
   // 搜索时忽略分段：窄屏上按项目分组反而难扫，直接给一张扁平清单
   const query = sidebarQuery.trim();
   if (query) {
-    const section = renderFlatSection(searchSessions(state, query), ctx, { empty: "没有匹配的会话" });
+    const rows = multi ? searchSessionsMulti(states, query) : searchSessions(state, query);
+    const section = renderFlatSection(rows, makeCtx(null), { empty: "没有匹配的会话" });
     if (section) refs.sidebarScroll.append(section);
     return;
   }
 
   if (sidebarTab === "active") {
-    const view = buildActivityView(state);
-    const live = renderFlatSection(view.live, ctx, {
+    const view = multi ? buildActivityViewMulti(states) : buildActivityView(state);
+    const live = renderFlatSection(view.live, makeCtx(null), {
       title: "运行中",
       hideWhenEmpty: true,
       preview: 6,
@@ -1069,7 +1248,7 @@ function renderSidebar(state: PiDeckState): void {
     });
     if (live) refs.sidebarScroll.append(live);
 
-    const recent = renderFlatSection(view.recent, ctx, {
+    const recent = renderFlatSection(view.recent, makeCtx(null), {
       title: "最近会话",
       preview: ACTIVITY_RECENT_LIMIT,
       empty: "还没有会话；发一条消息就会出现在这里",
@@ -1081,8 +1260,10 @@ function renderSidebar(state: PiDeckState): void {
   }
 
   if (sidebarTab === "chats") {
-    const rows = chatSessions(state).map((session) => ({ session }));
-    const section = renderFlatSection(rows, ctx, {
+    const rows = multi
+      ? chatSessionsMulti(states)
+      : chatSessionsMulti([{ id: runtime.id, label: runtime.label, state }]);
+    const section = renderFlatSection(rows, makeCtx(null), {
       preview: 12,
       empty: "没有聊天会话（桌面端没有启用内置 Chat 项目）",
       expanded: flatExpanded.has("chats"),
@@ -1092,19 +1273,41 @@ function renderSidebar(state: PiDeckState): void {
     return;
   }
 
-  // 项目分段：内置 Chat 归到「聊天」，这里只列工作区项目
-  const groups = buildSidebarGroups(
-    { projects: workspaceProjects(state.projects), sessions: state.sessions },
-    "",
-    collapsedProjects,
-  );
-  if (groups.length === 0) {
+  // 项目分段：内置 Chat 归到「聊天」；多设备时按设备分块
+  const catalogs = multi
+    ? endpointCatalogs(states)
+    : [{ endpointId: runtime.id, endpointLabel: runtime.label, projects: workspaceProjects(state.projects), sessions: state.sessions, running: 0 }];
+
+  let rendered = 0;
+  for (const catalog of catalogs) {
+    const groups = buildSidebarGroups(
+      { projects: catalog.projects, sessions: catalog.sessions },
+      "",
+      collapsedProjects,
+    );
+    if (groups.length === 0) continue;
+    rendered += groups.length;
+
+    if (multi) {
+      refs.sidebarScroll.append(
+        h("div", { class: `device-head${catalog.endpointId === runtime?.id ? " is-active" : ""}` }, [
+          h("span", { class: "device-head-name", text: catalog.endpointLabel }),
+          h("span", { class: "device-head-count", text: String(catalog.projects.length) }),
+          ...(catalog.running > 0 ? [h("span", { class: "pulse-dot pulse-dot--sm" })] : []),
+        ]),
+      );
+    }
+
+    const endpointState = states.find((item) => item.id === catalog.endpointId) ?? null;
+    const endpointCtx = makeCtx(endpointState);
+    refs.sidebarScroll.append(...groups.map((group) => renderProjectGroup(group, endpointCtx)));
+  }
+
+  if (rendered === 0) {
     refs.sidebarScroll.append(
       h("p", { class: "side-empty", text: "还没有项目，请先在桌面端添加目录" }),
     );
-    return;
   }
-  refs.sidebarScroll.append(...groups.map((group) => renderProjectGroup(group, ctx)));
 }
 
 /* ---------------------------- 侧栏分段 ---------------------------- */
@@ -1126,10 +1329,18 @@ function toggleFlat(key: string): void {
 function renderSideTabs(state: PiDeckState): void {
   if (!refs) return;
   clear(refs.sideTabs);
-  const counts = tabCounts(state);
+  // 计数直接算聚合后的数量（多设备时就是全部设备加起来）
+  const states = endpointStates();
+  const counts = states.length > 1 ? null : tabCounts(state);
+  const multiActivity = states.length > 1 ? buildActivityViewMulti(states) : null;
+  const merged: Record<SidebarTab, number> = counts ?? {
+    active: (multiActivity?.live.length ?? 0) + (multiActivity?.recent.length ?? 0),
+    chats: chatSessionsMulti(states).length,
+    projects: endpointCatalogs(states).reduce((sum, catalog) => sum + catalog.projects.length, 0),
+  };
   for (const tab of SIDEBAR_TABS) {
     const active = sidebarTab === tab.id;
-    const count = counts[tab.id];
+    const count = merged[tab.id];
     refs.sideTabs.append(
       h("button", {
         class: `side-tab${active ? " is-active" : ""}`,
@@ -1147,11 +1358,102 @@ function renderSideTabs(state: PiDeckState): void {
   }
 }
 
+/* ---------------------------- 多设备 ---------------------------- */
+
+/** 给聚合视图用的端点快照（非活跃端也用各自 store 的最新 state）。 */
+function endpointStates(): EndpointState[] {
+  return endpoints.map((endpoint) => ({
+    id: endpoint.id,
+    label: endpoint.label,
+    state: endpoint.store.state,
+  }));
+}
+
+function runningsOn(endpoint: Runtime): number {
+  return endpoint.store.state.runtimes.filter((item) => item.status === "running").length;
+}
+
+/** 其它设备上的待答卡片总数（提醒用户切过去看）。 */
+function pendingOnOthers(): number {
+  let total = 0;
+  for (const endpoint of endpoints) {
+    if (endpoint === runtime) continue;
+    total += endpoint.store.state.pendingUiRequests.length;
+  }
+  return total;
+}
+
+/** 顶栏设备 chip：多台设备时才出现，带运行中圆点与「别处有待答」提示。 */
+function renderDeviceChip(): void {
+  if (!refs) return;
+  const multiple = endpoints.length > 1;
+  refs.deviceBtn.classList.toggle("is-hidden", !multiple);
+  if (!multiple || !runtime) return;
+
+  const running = endpoints.reduce((sum, endpoint) => sum + runningsOn(endpoint), 0);
+  clear(refs.deviceBtn);
+  refs.deviceBtn.append(h("span", { class: "device-name", text: runtime.label }));
+  if (running > 0) refs.deviceBtn.append(h("span", { class: "pulse-dot pulse-dot--sm" }));
+  if (pendingOnOthers() > 0) refs.deviceBtn.append(h("span", { class: "device-pending", title: "别的设备有待答提问" }));
+  refs.deviceBtn.title = `${endpoints.length} 台设备 · ${running} 个会话运行中（点一下切换）`;
+}
+
+function openEndpointSheet(): void {
+  if (endpoints.length === 0) return;
+  openSheet(`设备（${endpoints.length}）`, (sheet) => {
+    const cap = describeEndpointCap(endpoints.length);
+    if (cap) sheet.append(h("p", { class: "sheet-note", text: cap }));
+
+    for (const endpoint of endpoints) {
+      const isCurrent = endpoint === runtime;
+      const running = runningsOn(endpoint);
+      const pending = endpoint.store.state.pendingUiRequests.length;
+      const row = h(
+        "button",
+        { class: `sheet-item sheet-item--two sheet-conn${isCurrent ? " is-active" : ""}` },
+        [
+          h("span", { class: "conn-name", text: endpoint.label }),
+          h("span", { class: "conn-url", text: endpoint.pairing.baseUrl }),
+          h("span", { class: "conn-badges" }, [
+            ...(running > 0 ? [h("span", { class: "conn-badge conn-badge--run", text: `${running} 运行中` })] : []),
+            ...(pending > 0 ? [h("span", { class: "conn-badge conn-badge--ask", text: `${pending} 待答` })] : []),
+            ...(isCurrent ? [h("span", { class: "conn-badge", text: "当前" })] : []),
+          ]),
+        ],
+      );
+      attachPressable(row, {
+        onTap: () => activateEndpoint(endpoint.id),
+        onLongPress: () => openPairingMenu(
+          {
+            baseUrl: endpoint.pairing.baseUrl,
+            token: endpoint.pairing.token,
+            savedAt: Date.now(),
+            ...(endpoint.pairing.label ? { label: endpoint.pairing.label } : {}),
+          },
+          isCurrent,
+        ),
+      });
+      sheet.append(row);
+    }
+
+    sheet.append(
+      h("button", {
+        class: "sheet-item sheet-item--primary",
+        text: "＋ 添加设备",
+        onclick: () => {
+          closeSheet();
+          renderPairing();
+        },
+      }),
+    );
+  });
+}
+
 function renderComposerState(): void {
   if (!refs || !runtime) return;
   const session = activeSessionId ? runtime.store.session(activeSessionId) : undefined;
 
-  const prefs = resolveSessionPrefs(session, activeSessionId ? learnedPrefs.get(activeSessionId) : undefined);
+  const prefs = resolveSessionPrefs(session, activeSessionId ? learnedPrefs.get(epKey(activeSessionId)) : undefined);
   refs.modelBtn.textContent = modelChipLabel(prefs, 18);
   refs.modelBtn.title = modelChipTitle(prefs);
   refs.modelBtn.classList.toggle("chip--muted", prefs.placeholder);
@@ -1226,8 +1528,8 @@ async function openSession(sessionId: string): Promise<void> {
   // 先把当前会话没发出去的内容存起来，再切走（否则会带到下一个会话）
   if (activeSessionId && refs) {
     const pendingText = refs.composer.value;
-    if (pendingText.trim()) sessionDrafts.set(activeSessionId, pendingText);
-    else sessionDrafts.delete(activeSessionId);
+    if (pendingText.trim()) sessionDrafts.set(epKey(activeSessionId), pendingText);
+    else sessionDrafts.delete(epKey(activeSessionId));
   }
 
   channel?.close();
@@ -1243,7 +1545,7 @@ async function openSession(sessionId: string): Promise<void> {
 
   // 恢复这个会话自己的草稿（没有就清空，不能留着上一个会话的内容）
   if (refs) {
-    refs.composer.value = sessionDrafts.get(sessionId) ?? "";
+    refs.composer.value = sessionDrafts.get(epKey(sessionId)) ?? "";
     autosize(refs.composer);
     renderAttachments();
     renderPrimaryButton();
@@ -1284,7 +1586,7 @@ async function openSession(sessionId: string): Promise<void> {
         if (runtime) renderHeader(runtime.store.state);
         // 一轮结束：把流式区收掉，并重拉历史，让消息进入正式历史
         if (previous === "running" && isSettled(c.reducer.status)) {
-          runOutcome.set(sessionId, c.reducer.status);
+          runOutcome.set(epKey(sessionId), c.reducer.status);
           void settleRun(sessionId);
           void refreshTodo(sessionId);
         }
@@ -1331,20 +1633,27 @@ async function openSession(sessionId: string): Promise<void> {
  * 注意边界：Android 冻结后台 WebView 后收不到 SSE，也就发不出通知；
  * 真正的离线推送需要服务端通道，PiDeck 目前没有。
  */
-function detectCompletedRuns(state: PiDeckState): void {
+function detectCompletedRuns(endpointId: string, state: PiDeckState): void {
+  const previousRuntimes = previousRuntimesByEndpoint.get(endpointId) ?? [];
+  const previousPending = previousPendingByEndpoint.get(endpointId) ?? [];
+  const endpointLabel = endpoints.find((item) => item.id === endpointId)?.label ?? endpointId;
+  /** 多设备时通知上标设备名，否则分辨不出是哪台跑完了 */
+  const prefix = endpoints.length > 1 ? `【${endpointLabel}】` : "";
+
   const next: RuntimeSnapshot[] = state.runtimes.map((item) => ({
     sessionId: item.sessionId,
     status: String(item.status ?? ""),
   }));
 
   const completed = diffCompletedRuns(previousRuntimes, next);
-  previousRuntimes = next;
+  previousRuntimesByEndpoint.set(endpointId, next);
 
   // 有会话在跑就拉起后台看护（必须在 App 还可见时启动，见 run-watch.ts 的说明）
-  syncRunWatch(next);
+  // 多设备时只有一台能当看护源（原生服务单端点），这里统一挑「真正在跑的那台」
+  syncRunWatchForActiveRunner();
 
   // 活跃会话刚拿到运行时（比如刚发出第一条消息）→ 补学一次模型偏好
-  if (activeSessionId && !learnedPrefs.has(activeSessionId)) {
+  if (activeSessionId && !learnedPrefs.has(epKey(activeSessionId))) {
     void learnRuntimePrefs(activeSessionId);
   }
 
@@ -1357,11 +1666,11 @@ function detectCompletedRuns(state: PiDeckState): void {
     title: item.title,
   }));
   const newAsks = diffNewPendingRequests(previousPending, nextPending);
-  previousPending = nextPending;
+  previousPendingByEndpoint.set(endpointId, nextPending);
 
   for (const ask of newAsks) {
     // 后台服务已经发过这条了
-    if (notifiedAsksByService.delete(ask.sessionId)) continue;
+    if (notifiedAsksByService.delete(epKey(ask.sessionId))) continue;
     // 正在看这个会话时不打扰（卡片就在眼前）
     if (!hidden && ask.sessionId === activeSessionId) continue;
     // App 在后台且看护服务在跑 → 交给原生发（我们随时可能被冻结）
@@ -1370,7 +1679,7 @@ function detectCompletedRuns(state: PiDeckState): void {
     void notifyTaskFinished({
       sessionId: ask.sessionId,
       title: askNotificationTitle(),
-      body: askNotificationBody(ask, session?.title),
+      body: prefix + askNotificationBody(ask, session?.title),
     });
   }
 
@@ -1378,8 +1687,8 @@ function detectCompletedRuns(state: PiDeckState): void {
 
   for (const run of completed) {
     // 后台服务已经发过这条了，回到前台别再弹一次
-    if (notifiedByService.has(run.sessionId)) {
-      notifiedByService.delete(run.sessionId);
+    if (notifiedByService.has(epKey(run.sessionId))) {
+      notifiedByService.delete(epKey(run.sessionId));
       continue;
     }
     const session = state.sessions.find((item) => item.id === run.sessionId);
@@ -1389,14 +1698,14 @@ function detectCompletedRuns(state: PiDeckState): void {
     if (hidden && isRunWatchActive()) continue;
 
     // reducer 的结局更准（能区分用户主动停止），没有就用 state 里的状态
-    const endedAs = runOutcome.get(run.sessionId) ?? run.endedAs;
-    runOutcome.delete(run.sessionId);
+    const endedAs = runOutcome.get(epKey(run.sessionId)) ?? run.endedAs;
+    runOutcome.delete(epKey(run.sessionId));
     if (!shouldNotifyEnd(endedAs)) continue;
 
     void notifyTaskFinished({
       sessionId: run.sessionId,
       title: completionTitle(endedAs),
-      body: completionBody(session?.title, endedAs),
+      body: prefix + completionBody(session?.title, endedAs),
     });
   }
 }
@@ -1415,8 +1724,8 @@ async function resumeAfterBackground(): Promise<void> {
 
   // 后台服务替我们发过的通知，记下来别重复弹
   const notified = splitNotifiedKeys(await consumeNotifiedKeys());
-  for (const id of notified.runs) notifiedByService.add(id);
-  for (const id of notified.asks) notifiedAsksByService.add(id);
+  for (const id of notified.runs) notifiedByService.add(epKey(id));
+  for (const id of notified.asks) notifiedAsksByService.add(epKey(id));
 
   await runtime.store.refresh().catch(() => undefined);
 
@@ -1461,7 +1770,7 @@ const learningPrefs = new Set<string>();
 
 async function learnRuntimePrefs(sessionId: string, force = false): Promise<void> {
   if (!runtime) return;
-  if (!force && learnedPrefs.has(sessionId)) return;
+  if (!force && learnedPrefs.has(epKey(sessionId))) return;
   if (learningPrefs.has(sessionId)) return;
   const target = runtime.store.targetOf(sessionId);
   if (!target) return;
@@ -1482,7 +1791,7 @@ async function learnRuntimePrefs(sessionId: string, force = false): Promise<void
     };
     if (!next.provider && !next.modelId && !next.modelName) return;
 
-    learnedPrefs.set(sessionId, next);
+    learnedPrefs.set(epKey(sessionId), next);
     if (sessionId === activeSessionId) {
       renderComposerState();
       renderHeader(runtime.store.state);
@@ -1812,7 +2121,7 @@ function buildUsageSection(sessionId: string, usage: ContextUsage | null): HTMLE
   const btn = h("button", { class: "btn usage-refresh", text: "查询额度" });
   box.append(body, btn);
 
-  const cached = usageCache.get(provider);
+  const cached = usageCache.get(usageKey(provider));
   renderUsageBody(body, cached?.view ?? null, false);
 
   let lastAt = cached?.at ?? 0;
@@ -1830,7 +2139,7 @@ function buildUsageSection(sessionId: string, usage: ContextUsage | null): HTMLE
       try {
         const raw = await runtime.client.getProviderUsage(provider, backendOf(sessionId));
         const view = buildUsageView(raw, provider);
-        usageCache.set(provider, { view, at: Date.now() });
+        usageCache.set(usageKey(provider), { view, at: Date.now() });
         renderUsageBody(body, view, false);
       } catch (error) {
         renderUsageBody(body, { available: false, provider, lines: [], hint: describeError(error) }, false);
@@ -1891,18 +2200,34 @@ function kickRunWatch(sessionId: string | null): void {
  * 只在「确实有会话在跑」时启动：前台服务会显示一条常驻通知，
  * 没事的时候不该占着。停止则无条件（幂等）。
  */
-function syncRunWatch(runtimes: readonly RuntimeSnapshot[]): void {
-  if (!runtime) return;
-  if (!shouldStartRunWatch(runtimes)) {
+/**
+ * 后台看护只支持一个端点（原生 RunWatchService 守一条 /api/events）。
+ * 所以挑「运行中会话最多的那台」当看护源，而不是无脑用活跃端 ——
+ * 否则用户停在没跑东西的设备上时，另一台跑完根本不会通知。
+ */
+function syncRunWatchForActiveRunner(): void {
+  const candidates = endpoints.length > 0 ? endpoints : runtime ? [runtime] : [];
+  if (candidates.length === 0) return;
+
+  const runningOn = (endpoint: Runtime): RuntimeSnapshot[] =>
+    endpoint.store.state.runtimes
+      .filter((item) => String(item.status ?? "") === "running")
+      .map((item) => ({ sessionId: item.sessionId, status: "running" }));
+
+  const scored = candidates
+    .map((endpoint) => ({ endpoint, runtimes: runningOn(endpoint) }))
+    .sort((left, right) => right.runtimes.length - left.runtimes.length);
+  const best = scored[0];
+  if (!best || !shouldStartRunWatch(best.runtimes)) {
     void stopRunWatch();
     return;
   }
   if (isRunWatchActive()) return;
 
   void startRunWatch({
-    baseUrl: runtime.client.baseUrl,
-    token: runtime.client.token,
-    titles: collectRunWatchTitles(runtimes, (sessionId) => runtime?.store.session(sessionId)),
+    baseUrl: best.endpoint.client.baseUrl,
+    token: best.endpoint.client.token,
+    titles: collectRunWatchTitles(best.runtimes, (sessionId) => best.endpoint.store.session(sessionId)),
   });
 }
 
@@ -1980,7 +2305,7 @@ async function send(): Promise<void> {
   refs.composer.value = "";
   autosize(refs.composer);
   renderPrimaryButton();
-  if (activeSessionId) sessionDrafts.delete(activeSessionId);
+  if (activeSessionId) sessionDrafts.delete(epKey(activeSessionId));
 
   try {
     if (!activeSessionId) {
@@ -2791,11 +3116,10 @@ function openConnectionSheet(): void {
     sheet.append(
       h("button", {
         class: "sheet-item sheet-item--primary",
-        text: "＋ 添加新连接",
+        text: "＋ 添加设备",
         onclick: () => {
+          // 不主动停 store：其它设备还要继续实时跑，配对完成后 connect() 会合并进去
           closeSheet();
-          runtime?.store.stop();
-          runtime = null;
           renderPairing();
         },
       }),
@@ -2805,12 +3129,11 @@ function openConnectionSheet(): void {
       sheet.append(
         h("button", {
           class: "sheet-item",
-          text: "断开当前连接",
+          text: "断开全部连接",
           onclick: () => {
             closeSheet();
             clearPairing();
-            runtime?.store.stop();
-            runtime = null;
+            disconnectAll();
             renderPairing();
           },
         }),
@@ -2851,11 +3174,21 @@ function openPairingMenu(item: SavedPairing, isCurrent: boolean): void {
       }),
       h("button", {
         class: "sheet-item",
+        text: item.enabled === false ? "加入同时连接" : "不再同时连接",
+        onclick: () => {
+          const next = item.enabled === false;
+          setPairingEnabled(item.baseUrl, next);
+          toast(next ? "已加入同时连接（重开 App 生效）" : "已取消同时连接（重开 App 生效）");
+          closeSheet();
+          openConnectionSheet();
+        },
+      }),
+      h("button", {
+        class: "sheet-item",
         text: "更新令牌 / 重新配对",
         onclick: () => {
           closeSheet();
-          runtime?.store.stop();
-          runtime = null;
+          disconnectAll();
           renderPairing({ link: `${item.baseUrl}/?token=${encodeURIComponent(item.token)}` });
         },
       }),
@@ -2875,8 +3208,25 @@ function openPairingMenu(item: SavedPairing, isCurrent: boolean): void {
 }
 
 async function switchToPairing(item: SavedPairing): Promise<void> {
+  const id = endpointIdOf(item.baseUrl);
+  // 已经在连着 → 只换活跃端，不重连（否则 5 台切一下就重建 5 条 SSE）
+  if (endpoints.some((endpoint) => endpoint.id === id)) {
+    activateEndpoint(id);
+    return;
+  }
   try {
-    await connect({ baseUrl: item.baseUrl, token: item.token, label: item.label });
+    // 没连着 → 把它加进「同时连接」的集合里重建（手上的其它台不会掉）
+    const next = dedupeEndpoints([
+      ...endpoints.map((endpoint) => ({
+        baseUrl: endpoint.pairing.baseUrl,
+        token: endpoint.pairing.token,
+        savedAt: Date.now(),
+        ...(endpoint.pairing.label ? { label: endpoint.pairing.label } : {}),
+      })),
+      { ...item, enabled: true },
+    ]);
+    setPairingEnabled(item.baseUrl, true);
+    await connectAll(next, { activeBaseUrl: item.baseUrl });
     closeSheet();
   } catch (error) {
     toast(`连接失败：${describeError(error)}`);
@@ -3000,7 +3350,7 @@ async function applyModel(provider: string, modelId: string, modelName: string):
   try {
     const target = await ensureRuntimeTarget(sessionId);
     await runtime.client.setModel(sessionId, target, { provider, modelId, modelName });
-    learnedPrefs.set(sessionId, { ...(learnedPrefs.get(sessionId) ?? {}), provider, modelId, modelName });
+    learnedPrefs.set(epKey(sessionId), { ...(learnedPrefs.get(epKey(sessionId)) ?? {}), provider, modelId, modelName });
     await runtime.store.refresh();
     renderComposerState();
     renderHeader(runtime.store.state);
@@ -3061,7 +3411,7 @@ async function applyThinking(level: string): Promise<void> {
   try {
     const target = await ensureRuntimeTarget(sessionId);
     await runtime.client.setThinking(sessionId, target, level);
-    learnedPrefs.set(sessionId, { ...(learnedPrefs.get(sessionId) ?? {}), thinkingLevel: level });
+    learnedPrefs.set(epKey(sessionId), { ...(learnedPrefs.get(epKey(sessionId)) ?? {}), thinkingLevel: level });
     await runtime.store.refresh();
     renderComposerState();
     renderHeader(runtime.store.state);
@@ -3482,17 +3832,26 @@ function confirmRemoveProject(projectId: string): void {
 function bootstrap(): void {
   // 万一某个初始化分支挂住，启动动画也必须自己收掉（否则界面被挡死）
   armSplashWatchdog();
+  // 首次跑多端版本：只让当前这台参与同时连接，其余等用户主动开
+  ensureMultiEndpointDefaults();
 
   const saved = loadPairing();
-  if (!saved) {
+  // 同时连接的是「启用的那几台」；一台都没启用就退回单台（兼容老数据）
+  const enabled = listEnabledPairings();
+  const list = enabled.length > 0 ? enabled : saved ? [saved] : [];
+
+  if (list.length === 0) {
     renderPairing();
     return;
   }
-  setSplashHint("正在连接 PiDeck…");
-  void connect(saved).then(
+  setSplashHint(list.length > 1 ? `正在连接 ${list.length} 台设备…` : "正在连接 PiDeck…");
+  void connectAll(list, { activeBaseUrl: saved?.baseUrl }).then(
     () => hideSplash(),
     (error: unknown) => {
-      renderPairing({ link: saved.baseUrl ? `${saved.baseUrl}/?token=${saved.token}` : "", error: describeError(error) });
+      renderPairing({
+        link: saved?.baseUrl ? `${saved.baseUrl}/?token=${encodeURIComponent(saved.token)}` : "",
+        error: describeError(error),
+      });
     },
   );
 }

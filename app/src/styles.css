@@ -875,6 +875,19 @@ body.barcode-scanner-active .scan-overlay {
   border: 1px solid color-mix(in oklab, #a06bff 42%, transparent);
 }
 
+/* 设备徽章：一机连多台时标出会话属于哪台 */
+.sbadge--device {
+  max-width: 30vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+}
+
 /* DSH 会话整行淡蓝底，和 pi 会话在列表里一眼分开 */
 .session--dsh {
   background: var(--bg-elev);
@@ -939,6 +952,86 @@ body.barcode-scanner-active .scan-overlay {
 
 .header .icon-btn {
   display: none;
+}
+
+/* ---------------------------- 多设备 ---------------------------- */
+
+/* 顶栏设备 chip：只有多台设备时才出现 */
+.device-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 34vw;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.device-chip .device-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 别的设备有待答提问：右上角红点 */
+.device-chip .device-pending {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+/* 侧栏「项目」分段里的设备分组头 */
+.device-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px 4px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.device-head.is-active {
+  color: var(--text);
+}
+
+.device-head-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-head-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+/* 设备列表里的状态徽章 */
+.conn-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.conn-badge--run {
+  color: var(--ok);
+  border-color: color-mix(in oklab, var(--ok) 45%, var(--border));
+}
+
+.conn-badge--ask {
+  color: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 45%, var(--border));
 }
 
 /* ---------------------------- 分支家族条 ---------------------------- */

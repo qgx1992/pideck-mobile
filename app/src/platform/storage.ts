@@ -12,6 +12,11 @@ export interface SavedPairing {
   lastUsedAt?: number;
   /** 用户可改的备注名，例如「家里台式机」 */
   label?: string;
+  /**
+   * 是否加入「同时连接」。默认 true；用户可以把不常用的设备静默掉，
+   * 免得每条都常驻一条 SSE 白耗电。
+   */
+  enabled?: boolean;
 }
 
 const KEY = ["pideck", "pairing", "v1"].join("-");
@@ -29,6 +34,7 @@ function sanitize(raw: unknown): SavedPairing | null {
     savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
     ...(typeof parsed.lastUsedAt === "number" ? { lastUsedAt: parsed.lastUsedAt } : {}),
     ...(typeof parsed.label === "string" && parsed.label.trim() ? { label: parsed.label.trim() } : {}),
+    ...(typeof parsed.enabled === "boolean" ? { enabled: parsed.enabled } : {}),
   };
 }
 
@@ -83,6 +89,42 @@ function writeHistory(list: SavedPairing[]): void {
 /** 历史连接，按最近使用倒序。 */
 export function listPairings(): SavedPairing[] {
   return readHistory().sort((a, b) => (b.lastUsedAt ?? b.savedAt) - (a.lastUsedAt ?? a.savedAt));
+}
+
+/**
+ * 老用户升级过来：历史上所有配对都是「随时可切」，并不是「同时连接」。
+ * 第一次跑多端版本时，只把当前生效的那台设为启用，其余等用户主动开 ——
+ * 否则手里存了 5 台机器的人会在升级后凭空多出 5 条 SSE。
+ */
+export function ensureMultiEndpointDefaults(): void {
+  try {
+    const migratedKey = ["pideck", "multi", "migrated", "v1"].join("-");
+    if (localStorage.getItem(migratedKey)) return;
+    const active = loadPairing();
+    const list = readHistory();
+    if (list.length > 0) {
+      writeHistory(
+        list.map((item) => ({ ...item, enabled: active ? item.baseUrl === active.baseUrl : false })),
+      );
+    }
+    localStorage.setItem(migratedKey, "1");
+  } catch {
+    /* 隐私模式写不进去，就当没迁移过 */
+  }
+}
+
+/** 参与「同时连接」的设备（未标记过的默认算启用）。 */
+export function listEnabledPairings(): SavedPairing[] {
+  return listPairings().filter((item) => item.enabled !== false);
+}
+
+/** 开/关某台设备的「同时连接」。关掉不等于遗忘，仍留在列表里可单点切换。 */
+export function setPairingEnabled(baseUrl: string, enabled: boolean): void {
+  const list = readHistory();
+  const index = list.findIndex((item) => item.baseUrl === baseUrl);
+  if (index < 0) return;
+  list[index] = { ...list[index]!, enabled };
+  writeHistory(list);
 }
 
 /**

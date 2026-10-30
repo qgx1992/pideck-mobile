@@ -16,7 +16,7 @@
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
 | `src/` | 协议与状态核心 + 探针 CLI（**56 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（Vite + Capacitor，**384 条测试**） | `cd app && npm run dev` / `npm run apk` |
+| `app/` | 手机客户端（Vite + Capacitor，**394 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
@@ -59,7 +59,15 @@ docs/issue-*.md             已提交给上游的两个缺陷草稿
   （华为等）退到 App 内自绘取景框 + 自带 ML Kit 模型
 - 从相册/截图选一张二维码图解码（纯 JS，不需要相机权限）
 - 扫码结果会清洗：去引号/零宽字符/多行说明/整串 URL 编码，再交给协议层校验
-- 也可以直接粘贴链接，或手填地址 + 令牌；最近连接的机器可一键切回
+- 也可以直接粘贴链接，或手填地址 + 令牌
+- **一机连多台**（最多 5 台同时实时）：每台独立 `PiDeckClient` + `StateStore`，
+  各自常驻一条 `/api/events`；顶栏设备 chip 切换，带运行中圆点与「别处有待答」红点
+  - 侧栏「活动」把多台的运行中/最近会话混排，行上带设备徽章
+  - 「项目」按设备分块，「聊天」合并各端的 Chat 会话
+  - 点另一台设备上的会话会自动切过去再打开
+  - 每台记住上次打开的会话；`usageCache` / 草稿 / 图片 / 模型偏好等 10 处缓存
+    都按 `endpoint::id` 作用域，两台同 id 会话不会串台
+  - 后台看护（原生单端点）自动挑「运行中会话最多的那台」当通知源
 
 **侧栏**
 - 顶部分三段（对齐桌面端）：**活动** / **聊天** / **项目**，选择会记住
@@ -152,7 +160,7 @@ node src/cli/probe.ts stop --pair "..." --session <sessionId>
 
 ```bash
 npm test && npm run typecheck                 # 核心：56 条
-cd app && npm test && npm run typecheck       # 客户端：384 条
+cd app && npm test && npm run typecheck       # 客户端：394 条
 cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```
 
