@@ -135,6 +135,7 @@ import {
   resolveSessionPrefs,
 } from "./ui/session-prefs.ts";
 import { countModels, filterModelSections } from "./ui/model-picker.ts";
+import { createChevron, setChevronExpanded } from "./ui/chevron.ts";
 import { createTodoStrip } from "./ui/todo-strip.ts";
 import { createSubagentStrip } from "./ui/subagent-strip.ts";
 import { normalizeSubagents } from "./ui/subagent-model.ts";
@@ -143,7 +144,14 @@ import { USAGE_REFRESH_COOLDOWN_MS, buildUsageView, formatResetAt } from "./ui/p
 import type { UsageView } from "./ui/provider-usage-model.ts";
 import { parseSessionTodo, shouldAutoExpand } from "./ui/todo-model.ts";
 import type { TodoView } from "./ui/todo-model.ts";
-import { historyProgressLabel, historyTimeLabel, mergeTodoHistory } from "./ui/todo-history-model.ts";
+import {
+  historyProgressLabel,
+  historyStatusLabel,
+  historyTimeLabel,
+  mergeTodoHistory,
+  planKeyOf,
+  sealTodoHistory,
+} from "./ui/todo-history-model.ts";
 import type { TodoHistoryEntry } from "./ui/todo-history-model.ts";
 import { loadTodoHistory, saveTodoHistory } from "./platform/todo-history.ts";
 import {
@@ -1886,6 +1894,13 @@ function stopTodoPolling(): void {
 
 /** 当前会话的历史清单（按设备+会话作用域持久化） */
 let todoHistory: TodoHistoryEntry[] = [];
+/**
+ * 已经收口的 planId（按会话记）。
+ *
+ * 发出下一轮后，服务端在它开始前仍会返回上一轮的清单 —— 不拦住的话
+ * 5 秒后清单条又冒出来，历史里那条也会被当成「还在进行」继续更新。
+ */
+const dismissedTodoPlans = new Map<string, string>();
 
 function todoScope(sessionId: string): string {
   return epKey(sessionId);
@@ -1904,15 +1919,20 @@ function rememberTodo(view: TodoView | null): void {
 }
 
 /**
- * 发出新提问前调用：
- * 把这一轮留下的清单归入历史，然后清掉输入框上方的清单条。
+ * 发出新提问前调用：把这一轮的清单**收口**，并记下它的 planId，
+ * 让服务端继续返回旧清单时也不再显示、不再更新那条历史。
  *
- * 为什么在发送时清：服务端在下一轮开始前仍会返回旧清单，只靠轮询撤不掉，
- * 用户就会看到「已完成的任务清单」一直挂在输入框上方。
+ * 注意：已完成**不是**结束条件 —— 用户明确要求「完成也要留到下一轮」，
+ * 所以只有这里（真正发出下一轮）才撤条带。
  */
 function archiveTodoBeforeSend(sessionId: string | null): void {
   if (!sessionId) return;
-  rememberTodo(todoView);
+  const view = todoView;
+  if (view) {
+    todoHistory = sealTodoHistory(todoHistory, view, Date.now());
+    saveTodoHistory(todoScope(sessionId), todoHistory);
+    dismissedTodoPlans.set(sessionId, planKeyOf(view));
+  }
   todoView = null;
   renderTodoStrip();
   renderTodoHistory();
@@ -1931,25 +1951,37 @@ function renderTodoHistoryTab(content: HTMLElement): void {
   }
 
   const list = h("div", { class: "todo-history" });
-  for (const entry of todoHistory) {
-    const head = h("div", { class: "todo-history-head" }, [
-      h("span", { class: "todo-history-progress", text: historyProgressLabel(entry) }),
-      h("span", { class: "todo-history-time", text: historyTimeLabel(entry) }),
-      ...(entry.finished ? [h("span", { class: "todo-history-badge", text: "已完成" })] : []),
-    ]);
-
+  // 最新的默认展开，其余收起：历史多了以后一屏全是条目没法扫
+  todoHistory.forEach((entry, index) => {
+    const chevron = createChevron(index === 0, 12);
     const items = h("ul", { class: "todo-history-items" });
     for (const item of entry.items) {
       items.append(
         h("li", { class: `todo-history-item is-${item.status}` }, [
-          h("span", { class: "todo-history-mark", text: item.status === "completed" ? "✓" : item.status === "in_progress" ? "▶" : "○" }),
+          h("span", {
+            class: "todo-history-mark",
+            text: item.status === "completed" ? "✓" : item.status === "in_progress" ? "▶" : "○",
+          }),
           h("span", { class: "todo-history-text", text: item.text }),
         ]),
       );
     }
 
-    list.append(h("section", { class: "todo-history-entry" }, [head, items]));
-  }
+    const head = h("summary", { class: "todo-history-head" }, [
+      chevron,
+      h("span", { class: "todo-history-progress", text: historyProgressLabel(entry) }),
+      h("span", { class: "todo-history-time", text: historyTimeLabel(entry) }),
+      h("span", {
+        class: `todo-history-badge${entry.finished ? " is-done" : " is-active"}${entry.sealed ? " is-sealed" : ""}`,
+        text: historyStatusLabel(entry),
+      }),
+    ]);
+
+    const section = h("details", { class: "todo-history-entry" }, [head, items]);
+    if (index === 0) section.setAttribute("open", "");
+    section.addEventListener("toggle", () => setChevronExpanded(chevron, section.hasAttribute("open")));
+    list.append(section);
+  });
   content.append(list);
 }
 
@@ -1964,8 +1996,17 @@ async function refreshTodo(sessionId: string): Promise<void> {
   try {
     const raw = await runtime.client.getTodo(sessionId);
     if (sessionId !== activeSessionId) return;
-    todoView = parseSessionTodo(raw);
-    rememberTodo(todoView);
+    const view = parseSessionTodo(raw);
+    const dismissed = dismissedTodoPlans.get(sessionId);
+    if (view && dismissed && planKeyOf(view) === dismissed) {
+      // 上一轮已收口的计划，服务端还在返回：不显示、也不改写历史
+      todoView = null;
+      renderTodoStrip();
+      renderTodoHistory();
+      return;
+    }
+    todoView = view;
+    rememberTodo(view);
     renderTodoStrip();
     renderTodoHistory();
   } catch {
