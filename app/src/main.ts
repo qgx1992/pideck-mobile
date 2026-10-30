@@ -1102,8 +1102,11 @@ function renderSidebar(state: PiDeckState): void {
 
 /* ---------------------------- 侧栏分段 ---------------------------- */
 
-/** 侧栏当前分段；用户选过就记住，下次打开还在同一段 */
-let sidebarTab: SidebarTab = loadSidebarTab() ?? "projects";
+/**
+ * 侧栏当前分段；用户选过就记住，下次打开还在同一段。
+ * 首次打开默认落在「活动」：与桌面端一致，先看运行中的任务和最近会话。
+ */
+let sidebarTab: SidebarTab = loadSidebarTab() ?? "active";
 /** 扁平列表（活动 / 聊天）的「展开其余」状态 */
 const flatExpanded = new Set<string>();
 
