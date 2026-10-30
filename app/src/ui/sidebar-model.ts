@@ -121,3 +121,42 @@ export function resolveExpandedProjects(
   if (position >= preview) result.add(active.projectId);
   return result;
 }
+
+/* ------------------------------------------------------------------ */
+/* 新建会话前的「选择工作区」                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 工作区选择器的排序：内置 Chat 置顶，其余按「最近有会话更新的时间」倒序，
+ * 再按名字。手机上新建会话时最可能选的就是刚才在用的那个项目。
+ */
+export function sortProjectsForPicker(
+  projects: readonly Project[],
+  sessions: readonly SessionSummary[],
+): Project[] {
+  const lastActive = new Map<string, number>();
+  for (const session of sessions) {
+    const at = session.updatedAt ?? 0;
+    if (at > (lastActive.get(session.projectId) ?? 0)) lastActive.set(session.projectId, at);
+  }
+
+  return [...projects].sort((left, right) => {
+    const leftChat = left.kind === "chat" ? 0 : 1;
+    const rightChat = right.kind === "chat" ? 0 : 1;
+    if (leftChat !== rightChat) return leftChat - rightChat;
+
+    const byTime = (lastActive.get(right.id) ?? 0) - (lastActive.get(left.id) ?? 0);
+    if (byTime !== 0) return byTime;
+
+    return (projectLabel(left) ?? left.id).localeCompare(projectLabel(right) ?? right.id, "zh-CN");
+  });
+}
+
+/** projectId → 会话数（选择器上的次要信息）。 */
+export function sessionCountByProject(sessions: readonly SessionSummary[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const session of sessions) {
+    counts.set(session.projectId, (counts.get(session.projectId) ?? 0) + 1);
+  }
+  return counts;
+}

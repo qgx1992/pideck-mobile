@@ -700,6 +700,49 @@ export class PiDeckClient {
   listExtensions() {
     return this.requestJson<unknown>("/api/extensions");
   }
+
+  /**
+   * 开关一个技能。
+   *
+   * 宿主绝对路径不下发，所以用 `name + sourceId` 定位（已对照 WebWorkspaceRoutes 核实）：
+   * sourceId ∈ pi-global | agents-global | pideck-global | project-pi | project-agents。
+   */
+  async toggleSkill(input: { name: string; sourceId: string; enabled: boolean }): Promise<unknown> {
+    const response = await this.requestJson<{ skill?: unknown }>("/api/skills/toggle", {
+      method: "POST",
+      body: { name: input.name, sourceId: input.sourceId, enabled: input.enabled },
+    });
+    return response.skill;
+  }
+
+  /**
+   * 开关一个扩展。
+   *
+   * scope 必须是 user|project|unknown；scope=project 时必须带 projectId，
+   * 否则服务端要一路走到写原生配置才失败（客户端只能看到 500）。
+   */
+  async toggleExtension(input: {
+    source: string;
+    enabled: boolean;
+    scope: "user" | "project" | "unknown";
+    projectId?: string;
+  }): Promise<void> {
+    await this.requestJson<{ ok: boolean }>("/api/extensions/toggle", {
+      method: "POST",
+      body: {
+        source: input.source,
+        enabled: input.enabled,
+        scope: input.scope,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+      },
+    });
+  }
+
+  /** DSH 后端插件（只读列表：安装/卸载需要来源信息，手机上不做）。 */
+  async listDshPlugins(): Promise<unknown> {
+    const response = await this.requestJson<{ plugins?: unknown }>("/api/dsh/plugins");
+    return response.plugins ?? [];
+  }
 }
 
 /* -------------------------------------------------------------------- */

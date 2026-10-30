@@ -13,6 +13,8 @@ import { App } from "@capacitor/app";
 
 /** 当前打开的层，按「从上到下」的顺序判断该收谁。 */
 export interface BackLayers {
+  /** 全屏设置页（盖住整个界面，优先级最高） */
+  settingsOpen?: boolean;
   /** 底部面板 / 弹窗（选模型、跳转历史、确认框…） */
   sheetOpen: boolean;
   /** 右侧「工作区」抽屉 */
@@ -21,13 +23,20 @@ export interface BackLayers {
   sidebarOpen: boolean;
 }
 
-export type BackIntent = "close-sheet" | "close-workspace" | "close-sidebar" | "leave";
+export type BackIntent =
+  | "close-settings"
+  | "close-sheet"
+  | "close-workspace"
+  | "close-sidebar"
+  | "leave";
 
 /**
  * 决定这次返回该做什么：只关最上面那一层，一次只退一步。
  * 什么都没开才算「要离开」。
  */
 export function resolveBackIntent(layers: BackLayers): BackIntent {
+  // 设置页是全屏覆盖，盖在最上面，所以最先关
+  if (layers.settingsOpen) return "close-settings";
   if (layers.sheetOpen) return "close-sheet";
   if (layers.workspaceOpen) return "close-workspace";
   if (layers.sidebarOpen) return "close-sidebar";

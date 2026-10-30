@@ -18,7 +18,7 @@ app/
 │  │                     ask 卡片、工作区、模型选择、上下文用量、任务清单、抽屉手势
 │  └─ ...
 ├─ scripts/              APK 构建、图标生成、smoke-ui（真数据）、verify-send（mock 链路）
-└─ tests/                node:test + jsdom，394 条
+└─ tests/                node:test + jsdom，429 条
 ```
 
 ## 本地开发（浏览器里就能用）
@@ -230,5 +230,8 @@ Vite 的 `build.sourcemap: true` 会把 `.map` 一起打进 APK（约 1 MB），
 10. **多设备的后台通知只覆盖一台**：原生 `RunWatchService` 是单端点，所以多台同时连时
     只给「运行中会话最多的那台」发通知，其余设备在后台跑完不会弹。彻底解决要把原生服务
     改成多路订阅（P4，未做）。前台时所有设备的通知都正常。
-11. **多设备的身份靠 origin 判定**：`/api/health` 不返回设备 id，同一台电脑用局域网 IP
+11. **设置页只能读不能写**：桌面端的 pi 配置管理走 Electron IPC，`WebApiRoutes` /
+    `WebWorkspaceRoutes` 里没有任何写配置的路由。设置页只做「本地设置 + 只读概况 +
+    有接口的开关（技能/扩展/额度）」，改密钥、模型目录、Git/终端/代理仍需回桌面端。
+12. **多设备的身份靠 origin 判定**：`/api/health` 不返回设备 id，同一台电脑用局域网 IP
     和 Tailscale 域名访问会被当成两台设备。需要上游补 `deviceId` 才能真正合并。

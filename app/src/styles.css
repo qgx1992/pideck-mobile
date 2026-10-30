@@ -1604,26 +1604,77 @@ body.barcode-scanner-active .scan-overlay {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  padding: 0 24px 36px;
+  gap: 14px;
+  padding: 0 20px 36px;
   text-align: center;
+}
+
+/* 图标外面一圈淡色圆底（对齐桌面端首屏引导） */
+.empty-state-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  margin-bottom: 4px;
 }
 
 .empty-state-icon {
   color: var(--accent);
-  opacity: 0.85;
-  /* 图标外面一圈很淡的光晕，避免在深色底上显得孤零零 */
+  opacity: 0.9;
   filter: drop-shadow(0 6px 18px color-mix(in oklab, var(--accent) 35%, transparent));
+}
+
+.empty-state-title {
+  margin: 0;
+  font-size: 23px;
+  line-height: 1.3;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -0.01em;
 }
 
 /* 文案尽量两行排完，不要出现「新建一 / 个。」这种断法 */
 .empty-state-text {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.8;
+  font-size: 13.5px;
+  line-height: 1.7;
   color: var(--text-dim);
-  max-width: 17em;
+  max-width: 20em;
   text-wrap: balance;
+}
+
+/* 三条快捷提示词：点一下只回填输入框，不直接发 */
+.empty-state-suggestions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  width: 100%;
+  max-width: 320px;
+}
+
+.suggestion-chip {
+  max-width: 100%;
+  border: 1px solid transparent;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestion-chip:active {
+  background: color-mix(in oklab, var(--accent) 12%, var(--bg-elev));
+  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  color: var(--text);
 }
 
 .error-card {
@@ -3345,4 +3396,265 @@ body.barcode-scanner-active .scan-overlay {
 
 .run-status[data-status="running"] .run-stat--streaming {
   color: var(--text);
+}
+
+/* ---------------------------- 设置页（全屏） ---------------------------- */
+
+.settings-page {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: calc(10px + var(--safe-top)) 12px 10px;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-back {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1;
+  padding: 0;
+}
+
+.settings-title {
+  flex: 1;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.settings-refresh {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: calc(28px + var(--safe-bottom));
+}
+
+.settings-section {
+  padding: 12px 14px 0;
+}
+
+.settings-section-title {
+  margin: 0 0 2px;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 0;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.settings-row:last-child {
+  border-bottom: none;
+}
+
+.settings-row--action:active {
+  opacity: 0.65;
+}
+
+.settings-row--action.is-active .settings-row-label {
+  color: var(--accent);
+}
+
+.settings-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.settings-row--switch:disabled {
+  opacity: 0.45;
+}
+
+.settings-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-row-label {
+  font-size: 14px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-row-sub {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.settings-row-value {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 开关：纯 CSS 圆钮，不引组件库 */
+.settings-switch {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: 25px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.settings-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+
+.settings-switch.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.settings-switch.is-on::after {
+  transform: translateX(17px);
+  background: #fff;
+}
+
+/* 主题三选一 */
+.settings-choice {
+  display: flex;
+  gap: 6px;
+}
+
+.settings-choice-item {
+  flex: 1;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 7px 0;
+  font-size: 12.5px;
+}
+
+.settings-choice-item.is-active {
+  color: var(--text);
+  font-weight: 600;
+  background: color-mix(in oklab, var(--accent) 16%, var(--bg));
+  border-color: color-mix(in oklab, var(--accent) 48%, var(--border));
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 0 2px;
+}
+
+.settings-action {
+  flex: 1;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-action--danger {
+  color: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 42%, var(--border));
+}
+
+.settings-note {
+  margin: 6px 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.settings-note--error {
+  color: var(--danger);
+}
+
+/* 可折叠分组（技能按来源、扩展、模型列表） */
+.settings-fold {
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-fold-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.settings-fold-title {
+  flex: 1;
+  text-align: left;
+  color: var(--text);
+}
+
+.settings-fold-count {
+  flex: none;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-fold-body {
+  padding: 0 0 4px 14px;
 }

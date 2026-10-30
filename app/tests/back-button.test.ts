@@ -48,3 +48,14 @@ test("超过确认窗口后又回到只提示", () => {
 test("刚好卡在窗口边界算退出", () => {
   assert.equal(resolveLeaveAction(1_000, 1_000 + LEAVE_CONFIRM_MS), "exit");
 });
+
+test("设置页盖在最上面，返回键先关它", () => {
+  assert.equal(
+    resolveBackIntent({ settingsOpen: true, sheetOpen: true, workspaceOpen: true, sidebarOpen: true }),
+    "close-settings",
+  );
+});
+
+test("没开设置页时行为不变", () => {
+  assert.equal(resolveBackIntent({ ...none, settingsOpen: false, sheetOpen: true }), "close-sheet");
+});

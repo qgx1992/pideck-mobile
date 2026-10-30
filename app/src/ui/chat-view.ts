@@ -113,19 +113,45 @@ export class ChatView {
   }
 
   /**
-   * 首屏空态：居中图标 + 一句引导。
+   * 首屏空态：居中图标 + 标题 + 一句引导 + 若干快捷提示词。
    * 和 setEmpty 分开，是因为「还没有会话」值得一个正式的引导位，
    * 而「这个会话没有消息」只是提示一行字。
+   *
+   * 快捷提示词点一下只回填到输入框（不直接发），用户还能改。
    */
-  setEmptyState(text: string): void {
+  setEmptyState(
+    text: string,
+    options: {
+      title?: string;
+      suggestions?: readonly string[];
+      onSuggestion?: (prompt: string) => void;
+    } = {},
+  ): void {
     clear(this.historyEl);
     this.historyEl.classList.add("is-empty-state");
-    this.historyEl.append(
-      h("div", { class: "empty-state" }, [
-        emptyStateIcon(),
-        h("p", { class: "empty-state-text", text }),
-      ]),
-    );
+
+    const children: Array<HTMLElement | null> = [
+      h("div", { class: "empty-state-badge" }, [emptyStateIcon()]),
+      h("h2", { class: "empty-state-title", text: options.title ?? "开始使用你的 PiDeck" }),
+      h("p", { class: "empty-state-text", text }),
+    ];
+
+    if (options.suggestions && options.suggestions.length > 0) {
+      const list = h("div", { class: "empty-state-suggestions" });
+      for (const prompt of options.suggestions) {
+        list.append(
+          h("button", {
+            class: "suggestion-chip",
+            text: prompt,
+            title: "填入输入框",
+            onclick: () => options.onSuggestion?.(prompt),
+          }),
+        );
+      }
+      children.push(list);
+    }
+
+    this.historyEl.append(h("div", { class: "empty-state" }, children));
   }
 
   /** 当前是否已经渲染出内容（用于区分「首次加载失败」和「静默刷新失败」）。 */

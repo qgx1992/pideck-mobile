@@ -6,6 +6,7 @@ export interface Props {
   class?: string;
   text?: string;
   title?: string;
+  role?: string;
   "aria-label"?: string;
   "aria-hidden"?: string;
   type?: string;

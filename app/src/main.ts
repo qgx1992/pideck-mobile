@@ -39,6 +39,7 @@ import { decodeQrFromImageFile, scanQrFromCamera } from "./platform/qr-scan.ts";
 import type { ScanOutcome } from "./platform/qr-scan.ts";
 import { describeScanMiss, pickScannedLink } from "./ui/pairing-scan-model.ts";
 import { initTheme, setThemeMode, getThemeMode, themeLabel, THEME_MODES, onThemeChange } from "./platform/theme.ts";
+import type { ThemeMode } from "./platform/theme.ts";
 import { initSafeArea } from "./platform/safe-area.ts";
 import { sleep } from "./platform/sleep.ts";
 import { ChatView } from "./ui/chat-view.ts";
@@ -46,7 +47,25 @@ import { messageText } from "./ui/chat-view.ts";
 import { actionsForRole, confirmTextFor } from "./ui/message-actions-model.ts";
 import type { MessageAction } from "./ui/message-actions-model.ts";
 import { branchNodes, shortBranchTitle, shouldShowBranchBar } from "./ui/branch-model.ts";
-import { buildSidebarGroups, projectLabel, resolveExpandedProjects } from "./ui/sidebar-model.ts";
+import {
+  buildSidebarGroups,
+  projectLabel,
+  resolveExpandedProjects,
+  sessionCountByProject,
+  sortProjectsForPicker,
+} from "./ui/sidebar-model.ts";
+import { createSettingsPage } from "./ui/settings-view.ts";
+import type { SettingsData, SettingsPage } from "./ui/settings-view.ts";
+import {
+  applyExtensionToggle,
+  applySkillToggle,
+  normalizeDshPlugins,
+  normalizeExtensions,
+  normalizeModels,
+  normalizeSkills,
+} from "./ui/settings-model.ts";
+import type { DshPluginRow, ExtensionRow, ModelRow, SkillSection } from "./ui/settings-model.ts";
+import { emptyStateSubtitle, emptyStateTitle, suggestionContext, suggestionsFor } from "./ui/empty-suggestions.ts";
 import { renderFlatSection, renderProjectGroup } from "./ui/sidebar-view.ts";
 import {
   ACTIVITY_RECENT_LIMIT,
@@ -169,6 +188,10 @@ onThemeChange(() => {
 });
 const appFetch = createAppFetch();
 const isDev = import.meta.env.DEV;
+
+/** 构建时由 vite define 注入（见 vite.config.ts），避免和 package.json 漂移 */
+declare const __APP_VERSION__: string;
+const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";
 
 interface Runtime {
   /** 归一化后的 endpoint id（origin），所有按端点的缓存都用它做前缀 */
@@ -680,7 +703,13 @@ function renderMain(): void {
 
   const dot = h("span", { class: "dot" });
   const brand = h("div", { class: "brand" }, [dot, h("span", { class: "brand-name", text: "PiDeck" })]);
-  const newSessionBtn = h("button", { class: "icon-btn", title: "新建会话", text: "+" });
+  const settingsBtn = h("button", {
+    class: "icon-btn",
+    title: "设置",
+    "aria-label": "设置",
+  });
+  settingsBtn.append(gearIcon());
+  const newSessionBtn = h("button", { class: "icon-btn", title: "新建会话（先选工作区）", text: "+" });
 
   const searchInput = h("input", {
     class: "sidebar-search",
@@ -697,7 +726,7 @@ function renderMain(): void {
   const hideBtn = h("button", { class: "side-foot-btn", text: "收起" });
 
   const sidebar = h("aside", { class: "sidebar" }, [
-    h("div", { class: "sidebar-top" }, [brand, newSessionBtn]),
+    h("div", { class: "sidebar-top" }, [brand, settingsBtn, newSessionBtn]),
     searchInput,
     sideTabs,
     sidebarScroll,
@@ -800,7 +829,7 @@ function renderMain(): void {
     },
     onMessageAction: (messageId, role) => openMessageActions(messageId, role),
   });
-  chatView.setEmptyState("选择左侧会话，或直接输入消息新建一个。");
+  renderEmptyState(null);
 
   refs = {
     headerTitle,
@@ -839,13 +868,16 @@ function renderMain(): void {
   // Android 返回键 / 侧滑返回：先收最上层界面，别直接退到桌面
   void attachBackButton({
     readLayers: () => ({
+      // 全屏设置页优先级最高：它盖住了抽屉和面板
+      settingsOpen: settingsPage !== null,
       // 底部面板都存在 .sheet-backdrop 里，直接看 DOM 最准（面板可能由别处打开）
       sheetOpen: document.querySelector(".sheet-backdrop") !== null,
       workspaceOpen: refs?.hostBody?.classList.contains("show-workspace") ?? false,
       sidebarOpen: refs?.hostBody?.classList.contains("show-sidebar") ?? false,
     }),
     onIntent: (intent) => {
-      if (intent === "close-sheet") closeSheet();
+      if (intent === "close-settings") closeSettings();
+      else if (intent === "close-sheet") closeSheet();
       else if (intent === "close-workspace") closeWorkspacePanel();
       else closeDrawer();
     },
@@ -909,7 +941,8 @@ function renderMain(): void {
   hideBtn.addEventListener("click", () => main.classList.toggle("sidebar-hidden"));
   themeBtn.addEventListener("click", () => openThemeSheet());
   pairBtn.addEventListener("click", () => openConnectionSheet());
-  newSessionBtn.addEventListener("click", () => void createSession());
+  newSessionBtn.addEventListener("click", () => openWorkspacePicker());
+  settingsBtn.addEventListener("click", () => openSettings());
   workspaceBtn.addEventListener("click", () => toggleWorkspacePanel());
   deviceBtn.addEventListener("click", () => openEndpointSheet());
   wsScrim.addEventListener("click", () => closeWorkspacePanel());
@@ -2265,6 +2298,12 @@ async function reloadHistory(sessionId: string): Promise<void> {
   try {
     const page = await runtime.client.getMessages(sessionId);
     if (sessionId === activeSessionId) sessionHistory = page.messages;
+    if (page.messages.length === 0) {
+      // 空会话：给引导页（标题 + 三条提示词）。
+      // 已经有内容时不要把画面清掉 —— 这多半是落盘延迟或回放还没到。
+      if (!chatView.hasContent()) renderEmptyState(sessionId);
+      return;
+    }
     chatView.setHistory(page.messages);
   } catch (error) {
     // 已经有内容时不要拿错误卡把历史顶掉，只提示一下
@@ -3624,6 +3663,264 @@ async function applyMessageAction(action: MessageAction, messageId: string, text
   }
 }
 
+/* ---------------------------- 设置页 ---------------------------- */
+
+let settingsPage: SettingsPage | null = null;
+let settingsModels: ModelRow[] = [];
+let settingsSkills: SkillSection[] = [];
+let settingsExtensions: ExtensionRow[] = [];
+let settingsDshPlugins: DshPluginRow[] = [];
+let settingsLoading = false;
+let settingsError: string | undefined;
+
+/** 齿轮图标（lucide settings），与 chevron 一样内联 SVG，避免字体差异。 */
+function gearIcon(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "18");
+  svg.setAttribute("height", "18");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  for (const d of [
+    "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+    "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z",
+  ]) {
+    const pathEl = document.createElementNS(ns, "path");
+    pathEl.setAttribute("d", d);
+    svg.append(pathEl);
+  }
+  return svg;
+}
+
+/** 空态：按会话所属项目类型给不同的三条提示词（Chat 里不该出现「审查未提交的改动」）。 */
+function renderEmptyState(sessionId: string | null): void {
+  if (!chatView) return;
+  const session = sessionId ? runtime?.store.session(sessionId) : undefined;
+  const project = session ? runtime?.store.projects().find((item) => item.id === session.projectId) : undefined;
+  const context = suggestionContext(project);
+  chatView.setEmptyState(emptyStateSubtitle(context), {
+    title: emptyStateTitle(),
+    suggestions: suggestionsFor(context),
+    onSuggestion: (prompt) => {
+      if (!refs) return;
+      refs.composer.value = prompt;
+      autosize(refs.composer);
+      renderComposerState();
+      refs.composer.focus();
+    },
+  });
+}
+
+/** 新建会话前先选工作区：Chat 置顶，其余按最近使用时间。 */
+function openWorkspacePicker(): void {
+  if (!runtime) return;
+  const state = runtime.store.state;
+  const projects = sortProjectsForPicker(state.projects ?? [], state.sessions ?? []);
+  if (projects.length === 0) {
+    toast("没有可用项目：请先在桌面端添加项目目录");
+    return;
+  }
+  const counts = sessionCountByProject(state.sessions ?? []);
+
+  openSheet("选择工作区", (sheet) => {
+    for (const project of projects) {
+      const label = projectLabel(project) ?? project.id;
+      const isChat = project.kind === "chat";
+      const count = counts.get(project.id) ?? 0;
+      sheet.append(
+        h(
+          "button",
+          {
+            class: "sheet-item sheet-item--two",
+            onclick: () => {
+              closeSheet();
+              void createSession(project.id);
+            },
+          },
+          [
+            h("span", { class: "conn-name", text: isChat ? label + "（内置）" : label }),
+            h("span", {
+              class: "conn-url",
+              text: (isChat ? "内置聊天" : (project.path ?? project.id)) + " · " + count + " 个会话",
+            }),
+          ],
+        ),
+      );
+    }
+  });
+}
+
+function settingsData(): SettingsData {
+  return {
+    theme: {
+      mode: getThemeMode(),
+      options: THEME_MODES.map((mode) => ({ value: mode, label: themeLabel(mode) })),
+    },
+    notify: { enabled: isTaskNotifyEnabled() },
+    connection: {
+      serviceUrl: runtime?.pairing.baseUrl ?? "",
+      token: runtime?.pairing.token ?? "",
+      status: runtime?.store.getStatus() ?? "closed",
+      version: APP_VERSION,
+    },
+    devices: endpoints.map((endpoint) => ({
+      id: endpoint.id,
+      label: endpoint.label,
+      url: endpoint.pairing.baseUrl,
+      active: endpoint === runtime,
+      running: runningsOn(endpoint),
+      pending: endpoint.store.state.pendingUiRequests.length,
+      enabled: true,
+    })),
+    models: settingsModels,
+    skills: settingsSkills,
+    extensions: settingsExtensions,
+    dshPlugins: settingsDshPlugins,
+    loading: settingsLoading,
+    ...(settingsError ? { loadError: settingsError } : {}),
+  };
+}
+
+function renderSettings(): void {
+  if (!settingsPage) return;
+  settingsPage.update(settingsData());
+}
+
+/**
+ * 拉一遍 pi 概况。
+ *
+ * 四个接口互不依赖，用 allSettled：旧版 PiDeck 可能没有 /api/skills 或 /api/dsh/plugins，
+ * 一个失败不该让整页空白。
+ */
+async function refreshSettings(): Promise<void> {
+  if (!runtime) return;
+  const client = runtime.client;
+  settingsLoading = true;
+  settingsError = undefined;
+  renderSettings();
+
+  const [models, skills, extensions, plugins] = await Promise.allSettled([
+    client.listModels(true),
+    client.listSkills(),
+    client.listExtensions(),
+    client.listDshPlugins(),
+  ]);
+
+  settingsModels = models.status === "fulfilled" ? normalizeModels(models.value) : [];
+  settingsSkills = skills.status === "fulfilled" ? normalizeSkills(skills.value) : [];
+  settingsExtensions = extensions.status === "fulfilled" ? normalizeExtensions(extensions.value) : [];
+  settingsDshPlugins = plugins.status === "fulfilled" ? normalizeDshPlugins(plugins.value) : [];
+
+  const failures = [models, skills, extensions].filter((result) => result.status === "rejected");
+  const firstFailure = failures[0];
+  settingsError =
+    firstFailure && firstFailure.status === "rejected"
+      ? "部分数据读取失败：" + describeError(firstFailure.reason)
+      : undefined;
+
+  settingsLoading = false;
+  renderSettings();
+}
+
+function openSettings(): void {
+  if (!runtime) return;
+  closeSheet();
+  settingsPage?.destroy();
+
+  const page = createSettingsPage({
+    onClose: () => closeSettings(),
+    onTheme: (mode) => {
+      setThemeMode(mode as ThemeMode);
+      renderSettings();
+    },
+    onToggleNotify: (enabled) => {
+      setTaskNotifyEnabled(enabled);
+      renderSettings();
+      if (enabled) {
+        void ensureNotificationPermission().then((granted) => {
+          if (!granted) toast("通知权限未授予，任务完成提醒不会弹出");
+        });
+      }
+    },
+    onDeviceActivate: (id) => {
+      activateEndpoint(id);
+      renderSettings();
+    },
+    onDeviceMenu: (id) => {
+      const endpoint = endpoints.find((item) => item.id === id);
+      if (!endpoint) return;
+      openPairingMenu(
+        {
+          baseUrl: endpoint.pairing.baseUrl,
+          token: endpoint.pairing.token,
+          savedAt: Date.now(),
+          ...(endpoint.pairing.label ? { label: endpoint.pairing.label } : {}),
+        },
+        endpoint === runtime,
+      );
+    },
+    onAddDevice: () => {
+      closeSettings();
+      renderPairing();
+    },
+    onDisconnect: () => {
+      closeSettings();
+      clearPairing();
+      disconnectAll();
+      renderPairing();
+    },
+    onToggleSkill: (section, name, enabled) => {
+      void (async () => {
+        if (!runtime) return;
+        try {
+          await runtime.client.toggleSkill({ name, sourceId: section.sourceId, enabled });
+          settingsSkills = applySkillToggle(settingsSkills, section.sourceId + "::" + name, enabled);
+          renderSettings();
+        } catch (error) {
+          toast("技能开关失败：" + describeError(error));
+        }
+      })();
+    },
+    onToggleExtension: (extension, enabled) => {
+      void (async () => {
+        if (!runtime) return;
+        try {
+          await runtime.client.toggleExtension({
+            source: extension.source,
+            enabled,
+            scope: extension.scope,
+            ...(extension.projectId ? { projectId: extension.projectId } : {}),
+          });
+          settingsExtensions = applyExtensionToggle(settingsExtensions, extension.key, enabled);
+          renderSettings();
+        } catch (error) {
+          toast("扩展开关失败：" + describeError(error));
+        }
+      })();
+    },
+    onOpenUsage: () => {
+      closeSettings();
+      openContextSheet();
+    },
+    onRefresh: () => void refreshSettings(),
+  });
+
+  settingsPage = page;
+  document.body.append(page.el);
+  renderSettings();
+  void refreshSettings();
+}
+
+function closeSettings(): void {
+  settingsPage?.destroy();
+  settingsPage = null;
+}
+
 function openSheet(title: string, build: (sheet: HTMLElement) => void): void {
   closeSheet();
   // 工作区抽屉的遮罩铺满全屏，会吃掉后续的触摸事件；弹菜单前先收起来
@@ -3734,7 +4031,7 @@ async function runSessionAction(
       channel = null;
       activeSessionId = null;
       chatView?.clear();
-      chatView?.setEmptyState("选择左侧会话，或直接输入消息新建一个。");
+      renderEmptyState(null);
     }
     await runtime.store.refresh();
     renderSidebar(runtime.store.state);
