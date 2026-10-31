@@ -1,5 +1,5 @@
 /**
- * 子代理活动条（贴在输入框上方，对齐 Web 端 WebSessionStrips 的子代理部分）。
+ * 子代理活动条（钉在顶栏下方，对齐 Web 端 WebSessionStrips 的子代理部分）。
  *
  * 数据来自 pi-subagents 插件：/api/sessions/:id/subagents 返回
  * { id, type, description, status, result?, error?, toolUses?, tokens? }。

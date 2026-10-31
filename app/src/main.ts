@@ -864,17 +864,17 @@ function renderMain(): void {
   });
   subagentStrip.el.querySelector(".subagent-head")?.addEventListener("click", () => {
     if (!activeSessionId) return;
-    const current = subagentCollapsed.get(epKey(activeSessionId)) ?? false;
+    const current = subagentCollapsed.get(epKey(activeSessionId)) ?? true;
     subagentCollapsed.set(epKey(activeSessionId), !current);
   });
   const composerEl = h("div", { class: "composer" }, [
-    subagentStrip.el,
     todoStrip.el,
     attachmentsEl,
     composerInput,
     h("div", { class: "composer-row" }, [chips, primaryBtn]),
   ]);
-  const chat = h("section", { class: "chat" }, [header, branchBar, chatRoot, composerEl]);
+  // 子代理条钉在顶栏下方：它在滚动区之外，不占输入框的空间
+  const chat = h("section", { class: "chat" }, [header, branchBar, subagentStrip.el, chatRoot, composerEl]);
 
   // 右侧「工作区」抽屉（对齐 Web 端 workspaceDrawer：Git / 文件 两个 Tab）
   const wsPanel = h("aside", { class: "workspace-panel" });
@@ -2282,8 +2282,8 @@ function startSubagentPolling(sessionId: string): void {
 function renderSubagentStrip(): void {
   if (!refs) return;
   const sessionId = activeSessionId;
-  const remembered = sessionId ? subagentCollapsed.get(sessionId) : undefined;
-  const collapsed = remembered ?? false;
+  const remembered = sessionId ? subagentCollapsed.get(epKey(sessionId)) : undefined;
+  const collapsed = remembered ?? true;
   refs.subagentStrip.update(subagentView, { collapsed });
 }
 

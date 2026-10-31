@@ -3164,11 +3164,13 @@ body.barcode-scanner-active .scan-overlay {
 /* ---------------------------- 子代理活动条 ---------------------------- */
 
 .subagent-strip {
+  flex: none;
+  /* 钉在顶栏（/分支条）下方，左右缩进对齐 .branch-bar 的 10px */
+  margin: 8px 10px 2px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg);
   overflow: hidden;
-  margin-bottom: 2px;
 }
 
 .subagent-head {

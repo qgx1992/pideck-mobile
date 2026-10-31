@@ -1,8 +1,9 @@
 /**
- * 子代理活动条（贴在输入框上方，任务清单条之上）。
+ * 子代理活动条（钉在顶栏下方，滚动区之上）。
  *
  * 与任务清单同一套交互：头部可折叠、条目只读、没有数据就整条隐藏。
- * 有子代理在跑时头部带呼吸点，跟会话运行中的视觉语言保持一致。
+ * 默认收起，只留一行头部（跟 Web 端一致）——有子代理在跑也不自动展开，
+ * 否则一次派几个子代理就会把消息区顶掉半屏。要展开是用户自己点。
  */
 
 import { h, clear } from "./dom.ts";
@@ -56,6 +57,7 @@ export function createSubagentStrip(): SubagentStrip {
     setChevronExpanded(chevron, !collapsed);
     list.style.display = collapsed ? "none" : "";
   };
+  applyCollapsed(true); // 默认收起，跟 Web 端一致
   head.addEventListener("click", () => applyCollapsed(!collapsed));
 
   return {
