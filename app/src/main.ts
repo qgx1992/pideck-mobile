@@ -67,13 +67,14 @@ import {
 import type { DshPluginRow, ExtensionRow, ModelRow, SkillSection } from "./ui/settings-model.ts";
 import { emptyStateSubtitle, emptyStateTitle, suggestionContext, suggestionsFor } from "./ui/empty-suggestions.ts";
 import {
-  emptyPromptsHint,
-  PROMPT_PAGE_SIZE,
-  type PromptDbState,
-  normalizePrompts,
-  promptSubtitle,
-} from "./ui/prompt-library-model.ts";
-import type { PromptItem } from "./ui/prompt-library-model.ts";
+  filterPromptEntries,
+  importedPrompts,
+  promptCommandSource,
+  promptInsertText,
+  PROMPT_EMPTY_HINT,
+  PROMPT_NO_RUNTIME_HINT,
+} from "./ui/prompt-picker-model.ts";
+import type { PromptEntry } from "./ui/prompt-picker-model.ts";
 import { buildPlanSubmission } from "./ui/plan-mode.ts";
 import { renderFlatSection, renderProjectGroup } from "./ui/sidebar-view.ts";
 import {
@@ -823,7 +824,7 @@ function renderMain(): void {
   });
   // @ / 放在输入框内部左下角，历史按钮固定在右下角
   // （输入框底部预留一条整宽的空白带，左右按钮都落在带子里，不会压到文字）
-  const promptBtn = h("button", { class: "chip chip--icon", title: "提示词库", "aria-label": "提示词库" });
+  const promptBtn = h("button", { class: "chip chip--icon", title: "提示词", "aria-label": "提示词" });
   promptBtn.append(bookmarkIcon());
   // 计划模式：一次性，发完自动关（桌面端同规则）
   const planBtn = h("button", {
@@ -1023,7 +1024,7 @@ function renderMain(): void {
       toast(sendModeSwitchToast(sendMode));
     },
   });
-  promptBtn.addEventListener("click", () => void openPromptLibrarySheet());
+  promptBtn.addEventListener("click", () => void openPromptPicker());
   planBtn.addEventListener("click", () => {
     planModeOn = !planModeOn;
     renderComposerState();
@@ -3269,9 +3270,10 @@ async function openMentionSheet(): Promise<void> {
 /**
  * 斜线命令面板。
  *
- * 之前是「等两个网络请求都回来才弹面板」，其中 /api/prompts 还要跨域且服务端
+ * 之前是「等网络请求回来才弹面板」，其中 /api/prompts 还要跨域且服务端
  * 不带 CORS 头，浏览器要等预检/超时，所以点一下卡好几秒。
- * 现在：先用内置命令立刻弹出，再异步补齐运行时命令与提示词。
+ * 现在：先用内置命令立刻弹出，再异步补齐运行时命令（里面已含提示词模板）。
+ * /api/prompts 是中文商店库，与输入框的模板无关，这里不再拉它。
  */
 async function openSlashSheet(): Promise<void> {
   if (!runtime) return;
@@ -3331,22 +3333,12 @@ async function openSlashSheet(): Promise<void> {
   // 立刻弹出（只有内置命令，零等待）
   render("");
 
-  // 后台补齐：运行时命令 + 提示词库，哪个先回就先刷新
+  // 后台补齐运行时命令（提示词模板也在里面：source=prompt 的那些）
   const patch = async (): Promise<void> => {
-    const [runtimeCommands, prompts] = await Promise.all([
-      activeSessionId && target
-        ? client.listRuntimeCommands(activeSessionId, target).catch(() => [])
-        : Promise.resolve([]),
-      client
-        .listPrompts()
-        .then((body) => {
-          const list = (body as { prompts?: unknown[] })?.prompts;
-          return Array.isArray(list) ? list : [];
-        })
-        .catch(() => []),
-    ]);
+    const runtimeCommands =
+      activeSessionId && target ? await client.listRuntimeCommands(activeSessionId, target).catch(() => []) : [];
 
-    all = mergeSlashItems({ runtime: runtimeCommands, prompts, builtin: BUILTIN_SLASH });
+    all = mergeSlashItems({ runtime: runtimeCommands, builtin: BUILTIN_SLASH });
     // 面板可能已被关掉
     if (!document.querySelector(".sheet-backdrop")) return;
     render(query);
@@ -3986,7 +3978,7 @@ async function applyMessageAction(action: MessageAction, messageId: string, text
   }
 }
 
-/** 书签图标（提示词库），与齿轮同一套内联 SVG 写法。 */
+/** 书签图标（提示词面板），与齿轮同一套内联 SVG 写法。 */
 function bookmarkIcon(): SVGSVGElement {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
@@ -4005,164 +3997,107 @@ function bookmarkIcon(): SVGSVGElement {
   return svg;
 }
 
-/* ---------------------------- 提示词库 ---------------------------- */
+/* ---------------------------- 提示词 ---------------------------- */
 
 /**
- * 提示词库面板。
+ * 「提示词」面板：列出**已导入**的提示词模板（`/runtime/commands` 里 source=prompt 的条目）。
  *
- * 与桌面端同一个库（`/api/prompts`）：列表只有摘要，选中后再按 slug 拉正文填进输入框。
- * 搜索与分类都在本地过滤 —— 手机上每敲一个字都打一次接口不值得。
+ * 数据只走运行时命令表：模板是 pi 从 `~/.pi/agent/prompts`、`<项目>/.pi/prompts`、npm 包
+ * 与内置目录里加载出来的，名字就是输入框里敲的 `/名字`。选中后插 `/名字 `，正文由 pi
+ * 在发送时展开（与电脑端输入框一致）—— Web API 没有「读模板正文」的路由，
+ * `/api/prompts` 是另一套中文商店库，不是这里要的东西。
  */
-async function openPromptLibrarySheet(): Promise<void> {
+async function openPromptPicker(): Promise<void> {
   if (!runtime) return;
-  const client = runtime.client;
-  const sessionId = activeSessionId;
+  const { client, store } = runtime;
 
+  // 模板与具体会话无关：当前会话没有运行实例时借一个（否则新建会话首次打开永远是空的）
+  const sourceSession = promptCommandSource(store.state.runtimes, activeSessionId);
   let query = "";
-  let category = "";
-  let items: PromptItem[] = [];
-  let categories: Array<{ slug: string; name: string; count: number }> = [];
-  let dbState: PromptDbState | undefined;
+  let entries: PromptEntry[] = [];
   /** 递增序号：快速输入时只认最新一次请求的结果 */
   let seq = 0;
   let debounce: ReturnType<typeof setTimeout> | undefined;
 
-  const chipsWrap = h("div", { class: "prompt-cats" });
   const listWrap = h("div", { class: "prompt-list" });
 
   const retryButton = (): HTMLElement =>
     h("button", { class: "sheet-item", text: "重试", onclick: () => void load() });
 
+  const note = (text: string): void => {
+    if (!listWrap.isConnected) return;
+    listWrap.replaceChildren(h("p", { class: "sheet-note", text }));
+  };
+
   /** 只重画列表，不动搜索框 —— 中文输入法组字时重建 input 会丢字。 */
   const paintList = (): void => {
     if (!listWrap.isConnected) return;
     listWrap.replaceChildren();
-    if (items.length === 0) {
-      listWrap.append(h("p", { class: "sheet-note", text: emptyPromptsHint(dbState) }), retryButton());
+    const filtered = filterPromptEntries(entries, query);
+    if (filtered.length === 0) {
+      listWrap.append(
+        h("p", { class: "sheet-note", text: entries.length === 0 ? PROMPT_EMPTY_HINT : "没有匹配的提示词" }),
+      );
+      if (entries.length === 0) listWrap.append(retryButton());
       return;
     }
-    for (const item of items) {
+    for (const entry of filtered) {
       listWrap.append(
         h(
           "button",
           {
             class: "sheet-item sheet-item--two",
-            onclick: () => void pickPrompt(item, sessionId),
+            onclick: () => {
+              closeSheet();
+              insertAtCursor(promptInsertText(entry));
+              toast(`已插入 /${entry.name}`);
+            },
           },
           [
-            h("span", { class: "conn-name", text: item.title }),
-            h("span", { class: "conn-url", text: promptSubtitle(item) || item.description || " " }),
+            h("span", { class: "conn-name", text: `/${entry.name}` }),
+            h("span", { class: "conn-url", text: entry.description || " " }),
           ],
         ),
       );
     }
-    if (items.length >= PROMPT_PAGE_SIZE) {
-      listWrap.append(
-        h("p", { class: "sheet-note", text: `只显示前 ${PROMPT_PAGE_SIZE} 条，用搜索缩小范围` }),
-      );
-    }
   };
 
-  const paintChips = (): void => {
-    if (!chipsWrap.isConnected) return;
-    chipsWrap.replaceChildren();
-    if (categories.length === 0) return;
-    chipsWrap.append(
-      h("button", {
-        class: `prompt-cat${category === "" ? " is-active" : ""}`,
-        text: "全部",
-        onclick: () => {
-          category = "";
-          paintChips();
-          void load();
-        },
-      }),
-    );
-    for (const item of categories.slice(0, 12)) {
-      chipsWrap.append(
-        h("button", {
-          class: `prompt-cat${category === item.slug ? " is-active" : ""}`,
-          text: item.name,
-          title: `${item.name}（${item.count}）`,
-          onclick: () => {
-            category = category === item.slug ? "" : item.slug;
-            paintChips();
-            void load();
-          },
-        }),
-      );
-    }
-  };
-
-  /** 搜索与分类都打服务端：库有四千多条，本地只拿到一页会漏。 */
-  async function load(): Promise<void> {
+  const load = async (): Promise<void> => {
     const mine = ++seq;
-    if (listWrap.isConnected) {
-      listWrap.replaceChildren(h("p", { class: "sheet-note", text: "正在读取提示词…" }));
+    const target = sourceSession ? store.targetOf(sourceSession) : undefined;
+    if (!sourceSession || !target) {
+      note(PROMPT_NO_RUNTIME_HINT);
+      return;
     }
     try {
-      const raw = await client.listPrompts({
-        ...(query.trim() ? { search: query.trim() } : {}),
-        ...(category ? { category } : {}),
-        pageSize: PROMPT_PAGE_SIZE,
-      });
+      const commands = await client.listRuntimeCommands(sourceSession, target);
       if (mine !== seq) return;
-      const parsed = normalizePrompts(raw);
-      items = parsed.items;
-      // 带 search/category 时也照常返回分类栏；万一老版本没返回就保留上一次的
-      if (parsed.categories.length > 0) categories = parsed.categories;
-      dbState = parsed.dbState;
-      paintChips();
+      entries = importedPrompts(commands);
       paintList();
     } catch (error) {
       if (mine !== seq) return;
-      items = [];
-      dbState = undefined;
-      if (listWrap.isConnected) {
-        listWrap.replaceChildren(
-          h("p", { class: "sheet-note", text: `读取失败：${describeError(error)}` }),
-          retryButton(),
-        );
-      }
+      note(`读取提示词失败：${describeError(error)}`);
+      listWrap.append(retryButton());
     }
-  }
+  };
 
   const search = h("input", {
     class: "sheet-input",
     type: "search",
-    placeholder: "搜索标题 / 描述 / 标签…",
+    placeholder: "搜索提示词…",
   });
   search.addEventListener("input", () => {
     query = search.value;
     if (debounce) clearTimeout(debounce);
-    // 防抖：边打字边发请求既费流量也容易被自己的旧响应覆盖
-    debounce = setTimeout(() => void load(), 300);
+    // 纯本地过滤，防抖只为少重画几十个 DOM 节点
+    debounce = setTimeout(paintList, 120);
   });
 
-  openSheet("提示词库", (sheet) => {
-    sheet.append(search, chipsWrap, listWrap);
+  openSheet("提示词", (sheet) => {
+    sheet.append(search, listWrap);
+    note("正在读取提示词…");
   });
   await load();
-}
-
-/** 选中一条 → 拉正文 → 插到输入框光标处。 */
-async function pickPrompt(item: PromptItem, sessionId: string | null): Promise<void> {
-  if (!runtime) return;
-  try {
-    const content = await runtime.client.getPromptContent(item.slug, item.category);
-    closeSheet();
-    if (!content.trim()) {
-      toast("这条提示词没有正文");
-      return;
-    }
-    insertAtCursor(content.trim());
-    toast("已插入输入框");
-  } catch (error) {
-    toast(`读取提示词失败：${describeError(error)}`);
-  }
-  if (sessionId && sessionId === activeSessionId && refs) {
-    sessionDrafts.set(epKey(sessionId), refs.composer.value);
-  }
 }
 
 /* ---------------------------- 设置页 ---------------------------- */

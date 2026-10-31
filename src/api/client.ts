@@ -692,7 +692,10 @@ export class PiDeckClient {
     return this.requestJson<unknown>("/api/git/diff", { query: { projectId, path } });
   }
   /**
-   * 提示词库列表（与桌面端同一个库）。
+   * 中文提示词商店库（XuePrompt，与桌面端「设置 → 提示词库」同源）。
+   *
+   * 注意别和输入框的 `/模板名` 混淆：那是 pi 从 `~/.pi/agent/prompts` 加载的模板，
+   * 出现在 `/runtime/commands` 的 `source: "prompt"` 条目里，Web 侧没有读正文的路由。
    *
    * 支持 search / category / 分页；返回 `{ categories, prompts, total? }`，
    * 其中每条只有摘要，正文要再调 `getPromptContent()`。
