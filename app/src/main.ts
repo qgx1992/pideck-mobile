@@ -154,6 +154,7 @@ import { USAGE_REFRESH_COOLDOWN_MS, buildUsageView, formatResetAt } from "./ui/p
 import type { UsageView } from "./ui/provider-usage-model.ts";
 import { parseSessionTodo, shouldAutoExpand } from "./ui/todo-model.ts";
 import type { TodoView } from "./ui/todo-model.ts";
+import { lastUserTimestamp } from "./ui/turn-clock.ts";
 import {
   historyProgressLabel,
   historyStatusLabel,
@@ -1676,6 +1677,11 @@ async function openSession(sessionId: string): Promise<void> {
     if (activeSessionId !== sessionId) return;
     sessionHistory = page.messages;
     chatView.setHistory(page.messages);
+    // 这个会话在别处已经跑起来了（比如桌面端发的，或者切走时发出去的那轮）：
+    // 拿最后一条提问的时间当回合起点，计时才不会从 0 开始数
+    const runningOnServer =
+      runtime?.store.state.runtimes.find((item) => item.sessionId === sessionId)?.status === "running";
+    if (runningOnServer) chatView.seedTurn(lastUserTimestamp(page.messages));
   } catch (error) {
     if (activeSessionId !== sessionId) return;
     chatView.setError(describeHistoryFailure(error, session?.backend));
@@ -2698,8 +2704,11 @@ async function send(): Promise<void> {
     kickRunWatch(activeSessionId);
 
     // 先把自己的提问显示出来，不要等服务端落盘
-    chatView?.clearLive();
+    // 运行中插话/排队时这里不能把回合计时清零 —— 同一轮还在跑，清零会让「用时」骗人
+    const continuingTurn = isRunActive();
+    chatView?.clearLive({ keepClock: continuingTurn });
     chatView?.appendLocalUser(typed || submission.message, images.map((image) => image.dataUrl));
+    if (!continuingTurn) chatView?.startTurn();
     await current.send(submission.message, {
       // 运行中才带：空闲时排队/插话都等于普通发送
       streamingBehavior: streamingBehaviorFor(isRunActive(), sendMode),

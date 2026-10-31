@@ -8,6 +8,8 @@ import { openImageLightbox } from "./image-lightbox.ts";
 import { attachPressable } from "./press.ts";
 import { perfChips } from "./perf-metrics.ts";
 import type { PerfMetrics } from "./perf-metrics.ts";
+import { turnStatusText, turnStatusTitle } from "./turn-clock.ts";
+import type { TurnSpan } from "./turn-clock.ts";
 import { createProcessGroup, isProcessBlock, summarizeProcess } from "./process-group.ts";
 import { splitThinking, stripCompleteThinking } from "./thinking-tags.ts";
 import {
@@ -40,6 +42,12 @@ export class ChatView {
   private localEcho: { text: string; el: HTMLElement } | null = null;
   /** 最近一轮的吞吐指标（首 token / 流式 / 均速） */
   private perf: PerfMetrics | null = null;
+  /** 回合计时（运行中每 100ms 刷一次，结束后定格成用时 + 完成时间） */
+  private turn: TurnSpan | null = null;
+  /** 状态行里那段时间文字（原地改，不重建节点） */
+  private headTextEl: HTMLElement | null = null;
+  private ticker: ReturnType<typeof setInterval> | null = null;
+  private lastLiveStatus = "idle";
   private stick = true;
 
   constructor(root: HTMLElement, handlers: ChatViewHandlers) {
@@ -63,11 +71,30 @@ export class ChatView {
     clear(this.liveEl);
     clear(this.pendingEl);
     this.statusEl.textContent = "";
+    this.stopTicker();
+    this.turn = null;
+    this.lastLiveStatus = "idle";
+    this.headTextEl = null;
+    this.statusEl.dataset.status = "";
+    this.statusEl.dataset.text = "";
+    this.statusEl.dataset.key = "";
     this.liveNodes.clear();
     this.liveGroups = [];
     this.liveShape = "";
     this.liveKey = "";
     this.localEcho = null;
+  }
+
+  /**
+   * 用户发出提问：回合计时从这里开始（不等第一个流式事件）。
+   *
+   * 立刻把「0.0s」画上，否则在服务端给出第一个 delta 之前，状态行还停留在上一轮的完成时间。
+   */
+  startTurn(): void {
+    this.turn = { startedAt: Date.now(), finishedAt: null };
+    this.lastLiveStatus = "running";
+    this.renderStatus("running", turnStatusText(this.turn, "running"));
+    this.startTicker();
   }
 
   /**
@@ -94,17 +121,36 @@ export class ChatView {
   }
 
   /** 清空当前轮的流式区（轮次结束后调用，避免工具卡片一直挂着）。 */
-  clearLive(): void {
+  clearLive(options: { keepClock?: boolean } = {}): void {
     clear(this.liveEl);
     this.liveNodes.clear();
     this.liveGroups = [];
     this.liveShape = "";
     this.liveKey = "";
-    this.statusEl.textContent = "";
-    this.statusEl.dataset.status = "";
-    this.statusEl.dataset.text = "";
-    this.statusEl.dataset.key = "";
     this.perf = null;
+    this.stopTicker();
+
+    // 这一行不能跟着流式区一起清掉：定格成「用时 + 完成时刻」，用户回头还能看到这轮跑了多久
+    if (this.turn) {
+      if (options.keepClock) {
+        // 同一轮还在跑（插话/排队）：计时继续走，不收口
+        if (this.turn.finishedAt === null) {
+          this.renderStatus("running", turnStatusText(this.turn, "running"));
+          this.startTicker();
+        }
+      } else {
+        this.turn.finishedAt ??= Date.now();
+        const outcome = this.lastLiveStatus === "running" ? "finished" : this.lastLiveStatus;
+        this.renderStatus(outcome, turnStatusText(this.turn, outcome));
+      }
+    } else {
+      this.statusEl.textContent = "";
+      this.statusEl.dataset.status = "";
+      this.statusEl.dataset.text = "";
+      this.statusEl.dataset.key = "";
+      this.headTextEl = null;
+    }
+    if (this.stick) this.scrollToBottom();
   }
 
   setEmpty(text: string): void {
@@ -152,6 +198,21 @@ export class ChatView {
     }
 
     this.historyEl.append(h("div", { class: "empty-state" }, children));
+  }
+
+  /**
+   * 会话在别处已经开跑了：用更早的锚点（最后一条提问的时间）当回合起点。
+   *
+   * 不这么做的话，打开一个已经跑了 3 分钟的会话会从 0.0s 开始数，看起来像刚发出。
+   * 只在还没有未结束的回合时生效。
+   */
+  seedTurn(at: number | undefined): void {
+    if (at === undefined || !Number.isFinite(at) || at <= 0) return;
+    if (this.turn && this.turn.finishedAt === null) return;
+    this.turn = { startedAt: Math.min(at, Date.now()), finishedAt: null };
+    this.lastLiveStatus = "running";
+    this.renderStatus("running", turnStatusText(this.turn, "running"));
+    this.startTicker();
   }
 
   /** 当前是否已经渲染出内容（用于区分「首次加载失败」和「静默刷新失败」）。 */
@@ -295,26 +356,67 @@ export class ChatView {
 
     this.liveShape = shape;
 
-    // 运行中要有个会动的标识：静态文字在长回答里很容易被当成「卡住了」
-    const statusText =
-      status === "running" ? "运行中…" : status === "error" ? "本轮失败" : status === "aborted" ? "已停止" : "";
-    this.renderStatus(status, statusText);
+    // 回合计时：运行中递增，结束定格成用时 + 完成时间
+    this.noteStatus(status);
+    this.renderStatus(status, turnStatusText(this.turn, status));
     this.statusEl.dataset.status = status;
     if (this.stick) this.scrollToBottom();
   }
 
-  /** 状态行：左边是状态（运行中带转圈），右边是吞吐指标。 */
+  /** 跟踪回合状态翻转，顺手起停计时器。 */
+  private noteStatus(status: string): void {
+    if (status === "running") {
+      if (!this.turn || this.turn.finishedAt !== null) this.turn = { startedAt: Date.now(), finishedAt: null };
+      this.startTicker();
+    } else if (this.lastLiveStatus === "running" && this.turn && this.turn.finishedAt === null) {
+      this.turn.finishedAt = Date.now();
+      this.stopTicker();
+    }
+    this.lastLiveStatus = status;
+  }
+
+  private startTicker(): void {
+    if (this.ticker !== null) return;
+    const id = setInterval(() => this.tickTurn(), 100);
+    // 不拖住进程：node --test 里没人回收这个定时器，会卡在用例跑完不退
+    (id as unknown as { unref?: () => void }).unref?.();
+    this.ticker = id;
+  }
+
+  private stopTicker(): void {
+    if (this.ticker === null) return;
+    clearInterval(this.ticker);
+    this.ticker = null;
+  }
+
+  /** 只换文字，不重建节点：流式区每帧都在动，状态行不能跟着重排。 */
+  private tickTurn(): void {
+    if (!this.turn || this.turn.finishedAt !== null || this.lastLiveStatus !== "running") return;
+    const text = turnStatusText(this.turn, "running");
+    if (this.statusEl.dataset.text === text) return;
+    this.statusEl.dataset.text = text;
+    if (this.headTextEl) this.headTextEl.textContent = text;
+  }
+
+  /** 状态行：左边是回合状态（运行中带转圈 + 计时），右边是吞吐指标。 */
   private renderStatus(status: string, statusText: string): void {
-    const key = `${status}|${statusText}|${JSON.stringify(this.perf)}`;
-    if (this.statusEl.dataset.key === key) return;
-    this.statusEl.dataset.key = key;
     this.statusEl.dataset.text = statusText;
+    // key 里刻意不含计时文字：计时每 100ms 变一次，变一次就重建 DOM 太浪费
+    const key = `${status}|${statusText ? 1 : 0}|${JSON.stringify(this.perf)}`;
+    if (this.statusEl.dataset.key === key) {
+      if (this.headTextEl && this.headTextEl.textContent !== statusText) this.headTextEl.textContent = statusText;
+      return;
+    }
+    this.statusEl.dataset.key = key;
+    this.headTextEl = null;
 
     clear(this.statusEl);
     if (statusText) {
       const head = h("span", { class: "run-status-head" });
       if (status === "running") head.append(h("span", { class: "run-spinner", "aria-hidden": "true" }));
-      head.append(h("span", { text: statusText }));
+      const label = h("span", { class: "run-timer", text: statusText, title: turnStatusTitle(status) });
+      head.append(label);
+      this.headTextEl = label;
       this.statusEl.append(head);
     }
 

@@ -257,13 +257,17 @@ test("历史还没落盘时保留本地占位", () => {
   assert.equal(root.querySelectorAll(".msg--local").length, 1, "服务端没有这条就继续显示");
 });
 
-test("clearLive 清空流式区与状态文案", () => {
+test("clearLive 清空流式区，状态行定格成「用时 + 完成时间」", () => {
   const { root, view } = makeView();
   view.setLive("run-1", [{ kind: "text", id: "t1", text: "流式中", done: false }], "running");
   assert.ok(root.querySelector(".live")?.textContent?.includes("流式中"));
+  // 运行中不再写「运行中…」，状态行让位给计时
+  assert.match(root.querySelector(".run-status")?.textContent ?? "", /^\d+\.\ds$/);
+
   view.clearLive();
   assert.equal(root.querySelector(".live")?.textContent, "");
-  assert.equal(root.querySelector(".run-status")?.textContent, "");
+  const status = root.querySelector(".run-status")?.textContent ?? "";
+  assert.match(status, /^用时 \d+\.\ds · \d\d:\d\d 完成$/, "轮次结束要留下计时与完成时刻");
 });
 
 test("连续 setLive 不会累积「执行过程」块（回归：每帧新建 group 却不移除旧的）", () => {

@@ -3402,6 +3402,21 @@ body.barcode-scanner-active .scan-overlay {
   flex: none;
 }
 
+/* 回合计时：等宽数字，秒数跳动时宽度不抖 */
+.run-timer {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+}
+
+.run-status[data-status="finished"] .run-timer,
+.run-status[data-status="aborted"] .run-timer {
+  color: color-mix(in oklab, var(--text-dim) 88%, var(--text));
+}
+
+.run-status[data-status="error"] .run-timer {
+  color: var(--danger);
+}
+
 .run-stats {
   display: inline-flex;
   flex-wrap: wrap;
