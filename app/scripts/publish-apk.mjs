@@ -46,13 +46,14 @@ const lines = existsSync(sumsFile)
       // 已删除的文件不该继续留在清单里；同名条目要去重
       .filter((line) => {
         if (!line) return false;
-        const name = line.split(/\s+/).pop();
+        // sha256sum 在 Windows 上会给二进制模式的文件名加 `*` 前缀，比对前要剥掉
+        const name = (line.split(/\s+/).pop() ?? "").replace(/^\*/, "");
         return name !== fileName && existsSync(path.join(targetDir, name));
       })
   : [];
 
 // 目录里还有没登记的 APK（别的项目刚发布过）→ 顺手补上
-const listed = new Set(lines.map((line) => line.split(/\s+/).pop()));
+const listed = new Set(lines.map((line) => (line.split(/\s+/).pop() ?? "").replace(/^\*/, "")));
 for (const name of readdirSync(targetDir).sort()) {
   if (!name.endsWith(".apk") || listed.has(name) || name === fileName) continue;
   lines.push(`${sha256Of(path.join(targetDir, name))}  ${name}`);
