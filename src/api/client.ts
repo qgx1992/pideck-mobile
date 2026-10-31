@@ -70,6 +70,21 @@ export interface PromptInput {
 
 export type StreamingBehavior = "steer" | "followUp";
 
+/**
+ * `/api/file-content` 能拿到的东西。
+ *
+ * 服务端只吐文本，所以「下载」这个动作只对 text 成立；其余三种要按 kind 给出说明。
+ */
+export type FileContentKind = "text" | "binary" | "truncated" | "tooLarge";
+
+export interface FileContentResult {
+  kind: FileContentKind;
+  /** kind === "text" 时是完整内容；truncated 时只有前 512KB；其余为空串 */
+  content: string;
+  /** 文件真实字节数（服务端给的 size） */
+  size: number;
+}
+
 export interface SseOptions {
   signal?: AbortSignal;
   onEvent: (event: SseEvent) => void;
@@ -679,14 +694,39 @@ export class PiDeckClient {
     }
     return [];
   }
-  /** 文件内容：{ content, size } */
-  async fileContent(projectId: string, path: string): Promise<{ content: string; size: number }> {
-    const body = await this.requestJson<{ content?: unknown; size?: unknown }>("/api/file-content", {
+  /**
+   * 文件内容。
+   *
+   * 服务端（`WebWorkspaceRoutes.fileContent`）只会吐**文本**，并且分四种情况：
+   *   - 正常：`{ content, size }`
+   *   - 二进制（扩展名黑名单或含 NUL）：`{ binary: true, size }` —— 拿不到字节
+   *   - 超过 2MB：`{ truncated: true, content(前 512KB), size }`
+   *   - 超过 2MB 且是二进制：`{ binary: true, size }`；读不到句柄：`{ tooLarge: true, size }`
+   * 所以「下载文件」只对文本成立，其余要靠 kind 判断后给出说明，不能默默存半截。
+   */
+  async fileContent(projectId: string, path: string): Promise<FileContentResult> {
+    const body = await this.requestJson<{
+      content?: unknown;
+      size?: unknown;
+      binary?: unknown;
+      truncated?: unknown;
+      tooLarge?: unknown;
+    }>("/api/file-content", {
       query: { projectId, path },
     });
+    const size = typeof body.size === "number" ? body.size : 0;
+    const kind: FileContentKind =
+      body.binary === true
+        ? "binary"
+        : body.truncated === true
+          ? "truncated"
+          : body.tooLarge === true
+            ? "tooLarge"
+            : "text";
     return {
+      kind,
       content: typeof body.content === "string" ? body.content : "",
-      size: typeof body.size === "number" ? body.size : 0,
+      size,
     };
   }
   /** Git 状态：{ repo, branch, groups } —— 形状见 ui/workspace-model.ts */

@@ -17,6 +17,7 @@ public class MainActivity extends BridgeActivity {
         // 自定义插件必须在 super.onCreate 之前注册，否则 JS 侧调用会报 "not implemented"
         registerPlugin(NavigationBarPlugin.class);
         registerPlugin(RunWatchPlugin.class);
+        registerPlugin(FileSaverPlugin.class);
         super.onCreate(savedInstanceState);
 
         // 扫码（BarcodeScanner.startScan）时相机预览铺在 WebView 之下，

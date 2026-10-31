@@ -103,6 +103,8 @@ import {
   FILE_PREVIEW_MAX_BYTES,
 } from "./ui/workspace-model.ts";
 import type { GitCommit, GitStatusView } from "./ui/workspace-model.ts";
+import { baseName, downloadBlockedReason, downloadDoneText, mimeForName } from "./ui/file-download-model.ts";
+import { saveTextFile } from "./platform/save-file.ts";
 import type { FileNode, RuntimeTarget, WireMessage } from "@core/types.ts";
 import { BUILTIN_SLASH, filterSlashItems, groupSlashItems, mergeSlashItems, slashText } from "./ui/slash-model.ts";
 import {
@@ -3063,16 +3065,20 @@ async function renderFilesTab(content: HTMLElement, projectId: string): Promise<
         ...(mentionBtn ? [mentionBtn] : []),
       ],
     );
-    row.addEventListener("click", () => {
-      if (isDir) {
-        // 只取最后一段：万一服务端 name 里带了路径，也不会让面包屑越点越长
-        const segment = node.name.split(/[\/]/).filter(Boolean).pop() ?? node.name;
-        workspaceStack = [...workspaceStack, segment];
-        workspacePreview = null;
-        void renderWorkspacePanel();
-      } else {
-        void openFilePreview(projectId, node.relativePath);
-      }
+    attachPressable(row, {
+      onTap: () => {
+        if (isDir) {
+          // 只取最后一段：万一服务端 name 里带了路径，也不会让面包屑越点越长
+          const segment = node.name.split(/[\/]/).filter(Boolean).pop() ?? node.name;
+          workspaceStack = [...workspaceStack, segment];
+          workspacePreview = null;
+          void renderWorkspacePanel();
+        } else {
+          void openFilePreview(projectId, node.relativePath);
+        }
+      },
+      // 目录的「长按」没有额外动作（想下载的是文件），所以只给文件挂菜单
+      onLongPress: isDir ? undefined : () => openFileMenu(projectId, node),
     });
     content.append(row);
   }
@@ -3108,10 +3114,70 @@ async function openFilePreview(projectId: string, path: string): Promise<void> {
   await renderWorkspacePanel();
 }
 
+/** 长按文件行弹出的菜单（目录不长按：目录用来进入）。 */
+function openFileMenu(projectId: string, node: FileNode): void {
+  openSheet(node.name, (sheet) => {
+    sheet.append(
+      h("button", {
+        class: "sheet-item sheet-item--primary",
+        text: "下载到手机",
+        onclick: () => {
+          closeSheet();
+          void downloadWorkspaceFile(projectId, node);
+        },
+      }),
+    );
+    sheet.append(
+      h("button", {
+        class: "sheet-item",
+        text: "预览内容",
+        onclick: () => {
+          closeSheet();
+          void openFilePreview(projectId, node.relativePath);
+        },
+      }),
+    );
+    sheet.append(
+      h("button", {
+        class: "sheet-item",
+        text: "引用到输入框",
+        onclick: () => {
+          closeSheet();
+          insertAtCursor(mentionText(node));
+          toast("已引用到输入框");
+        },
+      }),
+    );
+  });
+}
+
+/**
+ * 下载文件到手机。
+ *
+ * 服务端只会吐文本（二进制 / 超 2MB 有限制），所以先看 kind：
+ * 下不了就说明原因，绝不自作主张存一个半截文件。
+ */
+async function downloadWorkspaceFile(projectId: string, node: FileNode): Promise<void> {
+  if (!runtime) return;
+  const name = baseName(node.relativePath || node.name);
+  toast(`正在读取 ${name}…`);
+  try {
+    const result = await runtime.client.fileContent(projectId, node.relativePath);
+    const blocked = downloadBlockedReason(result, name);
+    if (blocked) {
+      toast(blocked);
+      return;
+    }
+    const outcome = await saveTextFile(name, mimeForName(name), result.content);
+    toast(outcome.ok ? downloadDoneText(name, outcome.location) : `保存失败：${outcome.message}`);
+  } catch (error) {
+    toast(`下载失败：${describeError(error)}`);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* 发送历史（悬浮按钮）                                                 */
 /* ------------------------------------------------------------------ */
-
 function openSentHistorySheet(): void {
   if (!runtime || !chatView) return;
   if (!activeSessionId) {
