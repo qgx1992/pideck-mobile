@@ -5,7 +5,7 @@
  * 只依赖全局 fetch、AbortController、URL、TextDecoder（后两者带降级实现）。
  */
 
-export { PiDeckClient, normalizeState, emptyState, safeParseFrame, collectRun, combineSignals } from "./api/client.ts";
+export { PiDeckClient, normalizeBaseUrl, normalizeState, emptyState, safeParseFrame, collectRun, combineSignals } from "./api/client.ts";
 export type { PiDeckClientOptions, PromptInput, SseOptions, StateResponse, RuntimeAction } from "./api/client.ts";
 
 export { ChatReducer, blocksToPlainText } from "./api/frames.ts";
@@ -37,7 +37,7 @@ export type { SessionChannelOptions, ChannelStatus } from "./session.ts";
 
 export { findTarget, requireTarget, isTargetStale, sameTarget } from "./runtime/target.ts";
 
-export { parsePairingInput, buildPairingUrl, looksLikePairingUrl } from "./pairing.ts";
-export type { PairingPayload } from "./pairing.ts";
+export { parsePairingInput, buildPairingUrl, looksLikePairingUrl, isPrivateHostname, pairingRisk } from "./pairing.ts";
+export type { PairingPayload, PairingRisk } from "./pairing.ts";
 
 export type * from "./types.ts";

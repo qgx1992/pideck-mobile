@@ -18,6 +18,7 @@ const {
   renamePairing,
   pairingLabel,
   clearPairing,
+  clearAllPairings,
 } = await import("../src/platform/storage.ts");
 
 const A = { baseUrl: "http://192.168.1.10:8765", token: "token-aaaaaaaa", savedAt: 1_000 };
@@ -112,4 +113,22 @@ test("历史里字段不完整的条目被过滤", () => {
 
 test("pairingLabel 对非法 URL 也能兜底", () => {
   assert.equal(pairingLabel({ baseUrl: "not a url", token: "t", savedAt: 0 }), "not a url");
+});
+
+test("断开全部连接：当前配对与历史令牌一起清掉", () => {
+  reset();
+  savePairing(A);
+  rememberPairing(B);
+  assert.equal(listPairings().length, 2);
+
+  clearPairing();
+  // clearPairing 只清「当前生效」，历史还在（切回其它设备的场景）
+  assert.equal(loadPairing(), null);
+  assert.equal(listPairings().length, 2);
+
+  clearAllPairings();
+  assert.equal(loadPairing(), null);
+  assert.deepEqual(listPairings(), []);
+  // localStorage 里不该再剩下任何 token 字样
+  assert.equal(JSON.stringify(dom.window.localStorage).includes(A.token), false);
 });

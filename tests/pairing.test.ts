@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPairingUrl, looksLikePairingUrl, parsePairingInput } from "../src/pairing.ts";
+import { buildPairingUrl, isPrivateHostname, looksLikePairingUrl, pairingRisk, parsePairingInput } from "../src/pairing.ts";
 import { PiDeckError } from "../src/api/errors.ts";
 
 const TOKEN = "pairing-test-token-value";
@@ -57,4 +57,42 @@ test("buildPairingUrl 与 parse 互逆", () => {
 test("looksLikePairingUrl 用于扫码预筛", () => {
   assert.equal(looksLikePairingUrl(`http://h:8765/?token=${TOKEN}`), true);
   assert.equal(looksLikePairingUrl("https://github.com/ayuayue/PiDeck"), false);
+});
+
+test("私有网段判定：局域网 / 回环 / Tailscale 都算", () => {
+  for (const host of [
+    "localhost",
+    "127.0.0.1",
+    "10.1.2.3",
+    "192.168.31.10",
+    "172.20.0.5",
+    "169.254.10.2",
+    "100.109.155.33",
+    "my-pc.local",
+    "my-pc.tailnet.ts.net",
+    "::1",
+    "fe80::1",
+  ]) {
+    assert.equal(isPrivateHostname(host), true, host);
+  }
+  for (const host of ["8.8.8.8", "example.com", "203.0.113.9", "100.63.0.1", "100.128.0.1"]) {
+    assert.equal(isPrivateHostname(host), false, host);
+  }
+});
+
+test("配对风险：局域网 http 不打扰，公网才要确认", () => {
+  assert.equal(pairingRisk({ baseUrl: "http://192.168.1.20:8765" }).needsConfirm, false);
+  assert.equal(pairingRisk({ baseUrl: "https://my-pc.tailnet.ts.net" }).needsConfirm, false);
+
+  const publicHttp = pairingRisk({ baseUrl: "http://8.8.8.8:8765" });
+  assert.equal(publicHttp.needsConfirm, true);
+  // 两条都要说清楚：地址不认识 + 明文
+  assert.equal(publicHttp.messages.length, 2);
+  assert.ok(publicHttp.messages.some((line) => line.includes("不在局域网范围内")));
+  assert.ok(publicHttp.messages.some((line) => line.includes("明文")));
+
+  // 公网但 https：只提醒地址，不吓唬明文
+  const publicHttps = pairingRisk({ baseUrl: "https://pi.example.com" });
+  assert.equal(publicHttps.needsConfirm, true);
+  assert.equal(publicHttps.messages.length, 1);
 });

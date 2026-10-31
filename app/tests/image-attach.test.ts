@@ -13,6 +13,7 @@ const {
   estimateBytes,
   fitWithin,
   formatBytes,
+  imageFileProblem,
   isImageDataUrl,
   mimeOfDataUrl,
   toImageAttachment,
@@ -99,4 +100,15 @@ test("同一张图重复出现只保留一份", () => {
 test("纯文本消息不产生图片", () => {
   assert.deepEqual(collectImageSources({ role: "assistant", text: "没有图" }), []);
   assert.deepEqual(collectImageSources({ role: "tool", parts: [{ type: "text", text: "x" }] }), []);
+});
+
+test("选图前的拦截：非图片 / 超 8MB / 不支持的格式", () => {
+  assert.equal(imageFileProblem({ type: "image/jpeg", size: 1024 }), null);
+  assert.equal(imageFileProblem({ type: "image/png", size: 8 * 1024 * 1024 }), null);
+
+  assert.match(String(imageFileProblem({ type: "application/pdf", size: 10, name: "a.pdf" })), /不是图片/);
+  assert.match(String(imageFileProblem({ type: "image/heic", size: 10 })), /不支持 HEIC/);
+  const tooBig = imageFileProblem({ type: "image/jpeg", size: 9 * 1024 * 1024 });
+  assert.match(String(tooBig), /图片太大（9\.0 MB）/);
+  assert.match(String(tooBig), /8\.0 MB/);
 });

@@ -12,6 +12,7 @@
   --accent: #4f8cff;
   --danger: #ff6b6b;
   --ok: #38c172;
+  --warning: #f0a45d;
   /* 语法高亮调色板（深色） */
   --tok-keyword: #c792ea;
   --tok-string: #a5e075;
@@ -399,6 +400,42 @@ body.barcode-scanner-active .scan-overlay {
 
 .status--ok {
   color: var(--ok);
+}
+
+/* 公网 / 明文地址的连接确认：卡片式，跟配对页同一个视觉语言 */
+.pairing-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.pairing-confirm.is-hidden {
+  display: none;
+}
+
+.pairing-confirm-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pairing-confirm-line {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.pairing-confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.pairing-confirm-actions .btn {
+  flex: 1;
 }
 
 .divider {

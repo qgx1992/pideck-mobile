@@ -13,6 +13,8 @@ import {
   StateStore,
   SessionChannel,
   parsePairingInput,
+  pairingRisk,
+  normalizeBaseUrl,
   describeError,
   isAuthError,
   type PiDeckState,
@@ -22,7 +24,7 @@ import {
   savePairing,
   loadPairing,
   ensureMultiEndpointDefaults,
-  clearPairing,
+  clearAllPairings,
   listPairings,
   listEnabledPairings,
   setPairingEnabled,
@@ -33,7 +35,7 @@ import {
 import type { SavedPairing } from "./platform/storage.ts";
 import { createAppFetch } from "./platform/fetch.ts";
 import { compressImageFile } from "./platform/image.ts";
-import { canAddImage, formatBytes, MAX_IMAGES, toImageAttachment } from "./ui/image-attach-model.ts";
+import { canAddImage, formatBytes, imageFileProblem, MAX_IMAGES, toImageAttachment } from "./ui/image-attach-model.ts";
 import type { PendingImage } from "./ui/image-attach-model.ts";
 import { decodeQrFromImageFile, scanQrFromCamera } from "./platform/qr-scan.ts";
 import type { ScanOutcome } from "./platform/qr-scan.ts";
@@ -124,7 +126,7 @@ import {
 import type { GitCommit, GitStatusView } from "./ui/workspace-model.ts";
 import { baseName, downloadBlockedReason, downloadDoneText, mimeForName } from "./ui/file-download-model.ts";
 import { dirStackOf, fileNameOf, toProjectRelative } from "./ui/file-ref-model.ts";
-import { saveTextFile } from "./platform/save-file.ts";
+import { isNativeShell, saveTextFile } from "./platform/save-file.ts";
 import type { FileNode, RuntimeTarget, WireMessage } from "@core/types.ts";
 import { BUILTIN_SLASH, filterSlashItems, groupSlashItems, mergeSlashItems, slashText } from "./ui/slash-model.ts";
 import {
@@ -396,14 +398,54 @@ function renderPairing(options: { link?: string; error?: string } = {}): void {
   });
   const tokenInput = h("input", { placeholder: "访问令牌（从链接里带也可）" });
   const statusEl = h("div", { class: "status" });
+  // 公网 / 明文地址的二次确认：扫码结果是可被伪造的，不能拿到就直连
+  const confirmEl = h("div", { class: "pairing-confirm is-hidden" });
+
+  const hideConfirm = (): void => {
+    clear(confirmEl);
+    confirmEl.className = "pairing-confirm is-hidden";
+  };
 
   const setStatus = (text: string, tone: "ok" | "error" | "" = ""): void => {
     statusEl.textContent = text;
     statusEl.className = `status${tone ? ` status--${tone}` : ""}`;
   };
 
+  /** 公网 / 明文地址的卡片式确认（不用 window.confirm，WebView 里不可控） */
+  const showConnectConfirm = (messages: readonly string[], onAccept: () => void): void => {
+    clear(confirmEl);
+    confirmEl.className = "pairing-confirm";
+    confirmEl.append(
+      h("div", { class: "pairing-confirm-title", text: "要连接这台设备吗？" }),
+      ...messages.map((text) => h("div", { class: "pairing-confirm-line", text })),
+      h("div", { class: "pairing-confirm-actions" }, [
+        h("button", {
+          class: "btn btn-ghost",
+          text: "取消",
+          onclick: () => {
+            hideConfirm();
+            setStatus("已取消，没有发出任何请求");
+          },
+        }),
+        h("button", {
+          class: "btn",
+          text: "仍然连接",
+          onclick: () => {
+            hideConfirm();
+            onAccept();
+          },
+        }),
+      ]),
+    );
+  };
+
   /** 解析链接 → 握手。链接本身坏了也要给提示，不能只挂一个未捕获的 rejection。 */
-  const attemptConnect = async (linkText: string, manualBase: string, manualToken: string): Promise<void> => {
+  const attemptConnect = async (
+    linkText: string,
+    manualBase: string,
+    manualToken: string,
+    options: { confirmed?: boolean } = {},
+  ): Promise<void> => {
     let baseUrl = "";
     let token = "";
     try {
@@ -430,6 +472,23 @@ function renderPairing(options: { link?: string; error?: string } = {}): void {
       return;
     }
 
+    // 出局域网（或者公网还走明文）先问一句：扫码结果可以被伪造
+    if (!options.confirmed) {
+      let normalized = baseUrl;
+      try {
+        normalized = normalizeBaseUrl(baseUrl);
+      } catch {
+        /* 交给下面的 connect 报具体的错 */
+      }
+      const risk = pairingRisk({ baseUrl: normalized });
+      if (risk.needsConfirm) {
+        showConnectConfirm(risk.messages, () => void attemptConnect(linkText, manualBase, manualToken, { confirmed: true }));
+        setStatus("连接前请先确认这台设备");
+        return;
+      }
+    }
+    hideConfirm();
+
     setStatus("正在握手…");
     try {
       await connect({ baseUrl, token });
@@ -437,7 +496,6 @@ function renderPairing(options: { link?: string; error?: string } = {}): void {
       setStatus(describeError(error), "error");
     }
   };
-
   const connectBtn = h("button", { class: "btn", text: "连接" });
   connectBtn.addEventListener("click", () => {
     connectBtn.disabled = true;
@@ -559,6 +617,7 @@ function renderPairing(options: { link?: string; error?: string } = {}): void {
         tokenInput,
       ]),
       statusEl,
+      confirmEl,
       h("p", {
         text: canGoBack
           ? `这是在追加设备：连接成功后会和已连接的 ${endpoints.length} 台设备一起显示，不会断开它们。`
@@ -1271,7 +1330,11 @@ function renderAttachments(): void {
 async function addImageFiles(files: readonly File[]): Promise<void> {
   const list = currentImages();
   for (const file of files) {
-    if (!file.type.startsWith("image/")) continue;
+    const problem = imageFileProblem(file);
+    if (problem) {
+      toast(problem);
+      continue;
+    }
     if (!canAddImage(list.length)) {
       toast(`最多 ${MAX_IMAGES} 张图`);
       break;
@@ -3776,8 +3839,11 @@ function openConnectionSheet(): void {
           text: "断开全部连接",
           onclick: () => {
             closeSheet();
-            clearPairing();
+            // 断开 = 真的不留痕迹：配对记录、历史令牌、后台看护一起清
+            clearAllPairings();
+            void stopRunWatch();
             disconnectAll();
+            toast("已断开，并清除了本机保存的令牌");
             renderPairing();
           },
         }),
@@ -4784,8 +4850,10 @@ function openSettings(): void {
     },
     onDisconnect: () => {
       closeSettings();
-      clearPairing();
+      clearAllPairings();
+      void stopRunWatch();
       disconnectAll();
+      toast("已断开，并清除了本机保存的令牌");
       renderPairing();
     },
     onToggleSkill: (section, name, enabled) => {
@@ -5027,11 +5095,40 @@ function exportSessionHtml(sessionId: string): void {
   if (!runtime) return;
   closeSheet();
   const { client } = runtime;
-  // 服务端提供 GET 下载端点，token 走 query（浏览器直接打开也能通过鉴权）
-  const url = `${client.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/export-html?token=${encodeURIComponent(client.token)}`;
-  const opened = window.open(url, "_system");
-  if (!opened) window.open(url, "_blank");
+  const title = findSessionTitle(sessionId);
+
+  // 浏览器 / 开发态：没有 CapacitorHttp，跨域 GET 带 Authorization 会被预检拦掉，
+  // 只能退回浏览器直接打开（token 走 query 仅此一路）。
+  if (!isNativeShell()) {
+    const url = `${client.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/export-html?token=${encodeURIComponent(client.token)}`;
+    window.open(url, "_blank");
+    toast("正在导出 HTML…");
+    return;
+  }
+
   toast("正在导出 HTML…");
+  void (async () => {
+    try {
+      // 带 Authorization 头取字节：不让 token 落到 URL / 下载记录 / 系统 Intent 里
+      const html = await client.sessionExportHtml(sessionId);
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+      const saved = await saveTextFile(`PiDeck-${safeFileStem(title)}-${stamp}.html`, "text/html", html);
+      toast(saved.ok ? `已保存到 ${saved.location}` : saved.message);
+    } catch (error) {
+      toast(describeError(error));
+    }
+  })();
+}
+
+/** 文件名里不能出现的字符统一换成短横线。 */
+function safeFileStem(value: string): string {
+  const cleaned = value.replace(/[\\/:*?"<>|\s]+/g, "-").replace(/^-+|-+$/g, "");
+  return (cleaned || "session").slice(0, 40);
+}
+
+function findSessionTitle(sessionId: string): string {
+  const session = runtime?.store.state.sessions.find((item) => item.id === sessionId);
+  return session?.title?.trim() || "session";
 }
 
 function openProjectMenu(projectId: string): void {

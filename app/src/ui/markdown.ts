@@ -32,6 +32,10 @@ export interface MarkdownOptions {
 export function isSafeHref(href: string): boolean {
   const value = href.trim();
   if (!value) return false;
+  // `//evil.com` 是协议相对 URL，浏览器会当成 `https://evil.com`；
+  // `\` 在 URL 解析里等价于 `/`，所以 `\\evil.com`、`/\evil.com` 同样要拦。
+  const head = value.slice(0, 2);
+  if (head === "//" || head === "\\\\" || head === "/\\" || head === "\\/") return false;
   if (value.startsWith("#") || value.startsWith("/") || value.startsWith("./") || value.startsWith("../")) {
     return true;
   }

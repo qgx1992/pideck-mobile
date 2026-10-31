@@ -22,6 +22,11 @@ interface FileSaverNative {
 
 const native = Capacitor.isNativePlatform() ? registerPlugin<FileSaverNative>("FileSaver") : null;
 
+/** 是否跑在原生壳里（开发/浏览器态取不到 CapacitorHttp，跨域带 Authorization 会被预检拦）。 */
+export function isNativeShell(): boolean {
+  return Capacitor.isNativePlatform();
+}
+
 export interface SaveOutcome {
   ok: boolean;
   /** 保存位置（原生给「下载/PiDeck/文件名」，浏览器给「浏览器下载」） */

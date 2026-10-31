@@ -140,6 +140,10 @@ export function normalizeBaseUrl(input: string): string {
   value = value.replace(/\/+$/, "");
   // 允许直接贴带 /?token= 的完整链接
   const url = new URL(value);
+  if (url.username || url.password) {
+    // `http://user:pass@host` 会把凭据当主机的一部分，也容易被拿来伪装成别的站点
+    throw new PiDeckError({ kind: "protocol", message: "地址里不要带用户名或密码" });
+  }
   url.search = "";
   url.hash = "";
   url.pathname = url.pathname.replace(/\/+$/, "");
@@ -292,6 +296,31 @@ export class PiDeckClient {
     if (!response.ok) throw await this.toError(response, `PiDeck 请求失败：${method} ${path}`);
     if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
+  }
+
+  /**
+   * 取纯文本响应（例如导出会话 HTML）。
+   *
+   * GET 也走 Authorization 头：这类接口的响应是文件，URL 一旦带上 token
+   * 就会被写进下载记录 / 浏览器历史 / 系统 Intent 里。
+   */
+  async requestText(path: string, options: { timeoutMs?: number; accept?: string } = {}): Promise<string> {
+    const url = this.buildUrl(path, undefined);
+    const init: RequestInit = {
+      method: "GET",
+      headers: this.headers({ accept: options.accept ?? "text/html, text/plain;q=0.9, */*;q=0.8" }, { withAuth: true }),
+    };
+    const response = await this.fetchWithTimeout(url, init, options.timeoutMs ?? this.timeoutMs);
+    if (!response.ok) throw await this.toError(response, `PiDeck 请求失败：GET ${path}`);
+    return await response.text();
+  }
+
+  /** 导出整个会话为 HTML 字符串（不带 token 的 URL + Authorization 头）。 */
+  async sessionExportHtml(sessionId: string): Promise<string> {
+    return this.requestText(`/api/sessions/${encodeURIComponent(sessionId)}/export-html`, {
+      // 大会话的导出可能几秒到几十秒，别用默认 20s
+      timeoutMs: Math.max(this.timeoutMs, 120_000),
+    });
   }
 
   /** 打开一条 SSE 流，逐事件回调；返回的 Promise 在流结束时 resolve。 */

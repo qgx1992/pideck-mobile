@@ -102,6 +102,25 @@ test("isSafeHref 白名单", () => {
   assert.equal(isSafeHref("data:text/html,x"), false);
 });
 
+test("isSafeHref 不放行协议相对地址（//evil.com 会变成 https://evil.com）", () => {
+  assert.equal(isSafeHref("//evil.com/x"), false);
+  assert.equal(isSafeHref("  //evil.com"), false);
+  // 反斜杠在 URL 解析里等价于斜杠，浏览器同样会外跳
+  assert.equal(isSafeHref("\\\\evil.com"), false);
+  assert.equal(isSafeHref("/\\evil.com"), false);
+  assert.equal(isSafeHref("\\/evil.com"), false);
+  // 正常的站内路径不受影响
+  assert.equal(isSafeHref("/a/b"), true);
+  assert.equal(isSafeHref("./a/b"), true);
+  assert.equal(isSafeHref("../a/b"), true);
+});
+
+test("协议相对地址的链接不会渲染成可点", () => {
+  const host = render("[点我](//evil.com/x)");
+  assert.equal(host.querySelectorAll("a").length, 0);
+  assert.equal(host.textContent?.includes("点我"), true);
+});
+
 test("单换行变 <br>（对齐 Web 端 remarkBreaks）", () => {
   const host = render("第一行\n第二行");
   assert.equal(host.querySelectorAll("br").length, 1);

@@ -37,13 +37,24 @@ test("端点显示名：备注 > 主机名 > id", () => {
   assert.equal(endpointLabelOf({ baseUrl: "" }), "未命名设备");
 });
 
-test("同一台机器只留一条，后来的备注名会补上", () => {
+test("同一台机器只留一条，后到的令牌赢（重新扫码就是为了换令牌）", () => {
   const list = dedupeEndpoints([
     { baseUrl: "http://10.0.0.2:8765", token: "a" },
     { baseUrl: "http://10.0.0.2:8765/", token: "b", label: "家里" },
     { baseUrl: "http://10.0.0.3:8765", token: "c" },
   ]);
   assert.equal(list.length, 2);
+  assert.equal((list[0] as { label?: string }).label, "家里");
+  assert.equal((list[0] as { token?: string }).token, "b");
+});
+
+test("重新扫码时旧令牌被新令牌覆盖，但旧备注名保留", () => {
+  const list = dedupeEndpoints([
+    { baseUrl: "http://10.0.0.2:8765", token: "old", label: "家里" },
+    { baseUrl: "http://10.0.0.2:8765", token: "fresh" },
+  ]);
+  assert.equal(list.length, 1);
+  assert.equal((list[0] as { token?: string }).token, "fresh");
   assert.equal((list[0] as { label?: string }).label, "家里");
 });
 

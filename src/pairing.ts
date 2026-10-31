@@ -59,8 +59,7 @@ export function parsePairingInput(input: string): PairingPayload {
   return { baseUrl: normalizeBaseUrl(url.toString()), token, raw };
 }
 
-/** 反向：生成配对链接（自测 / 传递用）。 */
-export function buildPairingUrl(baseUrl: string, token: string): string {
+/** 反向：生成配对链接（自测 / 传递用）。 */export function buildPairingUrl(baseUrl: string, token: string): string {
   const normalized = normalizeBaseUrl(baseUrl);
   const url = new URL(normalized);
   url.searchParams.set("token", token);
@@ -75,4 +74,64 @@ export function looksLikePairingUrl(input: string): boolean {
   } catch {
     return false;
   }
+}
+
+const PRIVATE_SUFFIXES = [".local", ".lan", ".home", ".internal", ".ts.net"];
+
+/**
+ * 主机名是否落在「本机 / 局域网 / Tailscale」这些私有范围。
+ *
+ * 只用于风险提示：私有范围内走明文 http 是正常用法（局域网内没有证书），
+ * 一旦出了这个范围，明文意味着令牌会裸露在公网上。
+ */
+export function isPrivateHostname(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  if (!host) return false;
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (PRIVATE_SUFFIXES.some((suffix) => host.endsWith(suffix))) return true;
+
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    const [a, b] = host.split(".").map(Number) as [number, number, number, number];
+    if (a === 127 || a === 10) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    // Tailscale 落在 100.64.0.0/10（CGNAT），也是私有
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+
+  if (host === "::1") return true;
+  if (/^f[cd][0-9a-f]{0,2}:/.test(host)) return true; // fc00::/7 唯一本地地址
+  if (/^fe[89ab][0-9a-f]?:/.test(host)) return true; // fe80::/10 链路本地
+  return false;
+}
+
+export interface PairingRisk {
+  /** 需要用户确认后才能连 */
+  needsConfirm: boolean;
+  /** 逐条说明，直接显示给用户 */
+  messages: string[];
+}
+
+/**
+ * 配对前的风险判断。
+ *
+ * 扫码的结果是可以被伪造的：任何一张写着 `http://<陌生 IP>:8765/?token=...` 的二维码
+ * 都会让 App 把本机令牌发过去。所以出了私有网段就要明确问一句。
+ */
+export function pairingRisk(payload: { baseUrl: string }): PairingRisk {
+  let url: URL;
+  try {
+    url = new URL(payload.baseUrl);
+  } catch {
+    return { needsConfirm: true, messages: [`地址无法解析：${payload.baseUrl}`] };
+  }
+  const host = url.hostname;
+  const isPrivate = isPrivateHostname(host);
+  const plaintext = url.protocol === "http:";
+  const messages: string[] = [];
+  if (!isPrivate) messages.push(`${host} 不在局域网范围内，请确认这确实是你的电脑`);
+  if (plaintext && !isPrivate) messages.push("而且是明文 http：令牌会裸露在公网上");
+  return { needsConfirm: messages.length > 0, messages };
 }

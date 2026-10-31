@@ -65,6 +65,16 @@ export function clearPairing(): void {
   }
 }
 
+/** 「断开全部连接」用：连配对历史一起清掉，不给本机留下任何令牌。 */
+export function clearAllPairings(): void {
+  clearPairing();
+  try {
+    localStorage.removeItem(HISTORY_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 /* ---------------------------- 历史列表 ---------------------------- */
 
 function readHistory(): SavedPairing[] {

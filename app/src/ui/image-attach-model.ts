@@ -15,6 +15,24 @@ export const MAX_IMAGES = 4;
 export const MAX_EDGE = 1600;
 /** JPEG 质量：0.82 在截图上几乎无损 */
 export const JPEG_QUALITY = 0.82;
+/** 单张原图体积上限：超过就不要读进内存（手机上一张 40MB 的 HEIC 直接 OOM） */
+export const MAX_IMAGE_FILE_BYTES = 8 * 1024 * 1024;
+/** 能可靠重编码的格式；HEIC/AVIF 在 WebView 的 canvas 里可能根本解不开 */
+export const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+/** 选图时的先决判断：返回文案表示要拒绝，null 表示可以继续压缩。 */
+export function imageFileProblem(file: { type?: string; size?: number; name?: string }): string | null {
+  const type = (file.type ?? "").toLowerCase();
+  const size = typeof file.size === "number" ? file.size : 0;
+  if (!type.startsWith("image/")) return `${file.name || "这个文件"} 不是图片`;
+  if (!ACCEPTED_IMAGE_TYPES.includes(type)) {
+    return `不支持 ${type.replace("image/", "").toUpperCase()}：请用 JPG / PNG / WebP / GIF`;
+  }
+  if (size > MAX_IMAGE_FILE_BYTES) {
+    return `图片太大（${formatBytes(size)}），请压缩到 ${formatBytes(MAX_IMAGE_FILE_BYTES)} 以内`;
+  }
+  return null;
+}
 
 export interface PendingImage {
   /** 完整 data URL（含 `data:image/jpeg;base64,` 前缀），用于预览与发送 */

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PiDeckClient, collectRun, normalizeState } from "../src/api/client.ts";
+import { PiDeckClient, collectRun, normalizeBaseUrl, normalizeState } from "../src/api/client.ts";
 import { PiDeckAuthError, PiDeckHttpError, PiDeckOfflineError, PiDeckRuntimeError } from "../src/api/errors.ts";
 
 const BASE = "http://127.0.0.1:8765";
@@ -305,4 +305,33 @@ test("normalizeState 透传 security / acpTools（0.9.9 字段不能裁掉）", 
   const legacy = normalizeState({ projects: [], sessions: [], runtimes: [], pendingUiRequests: [] });
   assert.equal(legacy.security, undefined);
   assert.equal(legacy.acpTools, undefined);
+});
+
+test("normalizeBaseUrl 拒绝带用户名密码的地址", () => {
+  assert.throws(() => normalizeBaseUrl("http://user:pass@10.0.0.2:8765"), /不要带用户名或密码/);
+  // 只有用户名也不行
+  assert.throws(() => normalizeBaseUrl("http://user@10.0.0.2:8765"), /不要带用户名或密码/);
+  // 正常地址不受影响
+  assert.equal(normalizeBaseUrl("10.0.0.2:8765"), "http://10.0.0.2:8765");
+});
+
+test("导出 HTML：GET 走 Authorization 头，URL 里没有 token", async () => {
+  const { client, calls } = clientWith(() => new Response("<html>ok</html>", { status: 200, headers: { "content-type": "text/html" } }));
+  const html = await client.sessionExportHtml("s1");
+  assert.equal(html, "<html>ok</html>");
+  const call = calls[0]!;
+  assert.equal(call.url, `${BASE}/api/sessions/s1/export-html`);
+  assert.equal(call.url.includes("token="), false);
+  const headers = call.init.headers as Record<string, string>;
+  assert.equal(headers.authorization, `Bearer ${TOKEN}`);
+  assert.match(String(headers.accept), /text\/html/);
+});
+
+test("导出 HTML 失败时报出状态码", async () => {
+  const { client } = clientWith(() => json({ code: "webError.internal", error: "boom" }, 500));
+  await assert.rejects(() => client.sessionExportHtml("s1"), (error: unknown) => {
+    assert.ok(error instanceof PiDeckHttpError);
+    assert.equal(error.status, 500);
+    return true;
+  });
 });

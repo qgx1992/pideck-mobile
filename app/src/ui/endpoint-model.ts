@@ -45,7 +45,11 @@ export function endpointLabelOf(endpoint: EndpointLike): string {
 }
 
 /**
- * 去重：同一 origin 只留一条（先到先得，但后来的非空备注名会补上）。
+ * 去重：同一 origin 只留一条。
+ *
+ * 后到的记录赢 —— 重新扫码往往就是为了换令牌（桌面端轮换过 / 重装过），
+ * 以前「先到先得」会把新令牌丢掉，表现成「扫了没反应」。
+ * 传入的新记录没备注名时沿用旧名字。
  */
 export function dedupeEndpoints<T extends EndpointLike>(list: readonly T[]): T[] {
   const seen = new Map<string, T>();
@@ -59,7 +63,11 @@ export function dedupeEndpoints<T extends EndpointLike>(list: readonly T[]): T[]
     }
     const existingLabel = typeof existing.label === "string" ? existing.label.trim() : "";
     const nextLabel = typeof item.label === "string" ? item.label.trim() : "";
-    if (!existingLabel && nextLabel) seen.set(id, { ...item });
+    const merged = { ...item } as T & { label?: string };
+    const label = nextLabel || existingLabel;
+    if (label) merged.label = label;
+    else delete merged.label;
+    seen.set(id, merged as T);
   }
   return [...seen.values()];
 }
