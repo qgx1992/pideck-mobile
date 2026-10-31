@@ -240,11 +240,13 @@ export class PiDeckClient {
       headers?: Record<string, string>;
       signal?: AbortSignal;
       timeoutMs?: number;
+      /** 免鉴权端点（`/api/health`）：不带 query token 也不带 Authorization。 */
+      anonymous?: boolean;
     } = {},
   ): Promise<T> {
     const method = options.method ?? "GET";
     let url = this.buildUrl(path, options.query);
-    if (method === "GET") url = this.withQueryToken(url);
+    if (method === "GET" && !options.anonymous) url = this.withQueryToken(url);
 
     const init: RequestInit = {
       method,
@@ -254,7 +256,7 @@ export class PiDeckClient {
           ...(options.headers ?? {}),
         },
         // GET 走 query token，不加 Authorization，保持简单请求不触发预检
-        { withAuth: method !== "GET" },
+        { withAuth: method !== "GET" && !options.anonymous },
       ),
     };
     if (options.body !== undefined) init.body = JSON.stringify(options.body);
@@ -321,9 +323,15 @@ export class PiDeckClient {
   /* 探活与状态                                                          */
   /* ------------------------------------------------------------------ */
 
-  /** 免鉴权。用于配对时确认对面确实是 PiDeck。 */
+  /**
+   * 免鉴权。用于配对时确认对面确实是 PiDeck。
+   *
+   * `anonymous`：这一步跑到时对面的身份还没验证过（见 `main.ts` 的 `attemptConnect`），
+   * 不能先把 token 交出去 —— 否则扫到一张伪造的二维码，凭据就直接落到攻击者手里。
+   * URL 里也就不会留下 `?token=`，不落进对端访问日志。
+   */
   async health(): Promise<HealthInfo> {
-    return this.requestJson<HealthInfo>("/api/health");
+    return this.requestJson<HealthInfo>("/api/health", { anonymous: true });
   }
 
   /**

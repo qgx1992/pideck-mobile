@@ -32,14 +32,23 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
   });
 }
 
-test("GET 只带 query token，不发 Authorization（避免触发 CORS 预检）", async () => {
-  const { client, calls } = clientWith(() => json({ ok: true, service: "PiDeck", host: "0.0.0.0", port: 8765 }));
-  await client.health();
+test("普通 GET 只带 query token，不发 Authorization（避免触发 CORS 预检）", async () => {
+  const { client, calls } = clientWith(() => json({ sessions: [] }));
+  await client.listSessions("p1");
   const call = calls[0]!;
   assert.match(call.url, new RegExp(`token=${TOKEN}`));
   const headers = call.init.headers as Record<string, string>;
   // PiDeck 的预检只放行 content-type；GET 带 Authorization 会升级成需要预检的请求，
   // 预检失败在 WebView 里表现为 "Failed to fetch"。
+  assert.equal(headers.authorization, undefined);
+});
+
+test("health 一个凭据都不带（配对握手时对面身份尚未验证）", async () => {
+  const { client, calls } = clientWith(() => json({ ok: true, service: "PiDeck", host: "0.0.0.0", port: 8765 }));
+  await client.health();
+  const call = calls[0]!;
+  assert.equal(call.url.includes("token="), false);
+  const headers = call.init.headers as Record<string, string>;
   assert.equal(headers.authorization, undefined);
 });
 
