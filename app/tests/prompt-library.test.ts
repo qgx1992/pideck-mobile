@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { filterPrompts, filterByCategory, normalizePrompts, promptSubtitle } = await import(
+const { emptyPromptsHint, filterPrompts, filterByCategory, normalizePrompts, promptSubtitle } = await import(
   "../src/ui/prompt-library-model.ts"
 );
 
@@ -64,8 +64,8 @@ test("脏数据丢弃：没有 slug 的条目、没有分类的 categories", () 
 });
 
 test("非法输入不炸", () => {
-  assert.deepEqual(normalizePrompts(null), { categories: [], items: [] });
-  assert.deepEqual(normalizePrompts({ prompts: "nope" }), { categories: [], items: [] });
+  assert.deepEqual(normalizePrompts(null), { categories: [], items: [], dbState: undefined });
+  assert.deepEqual(normalizePrompts({ prompts: "nope" }), { categories: [], items: [], dbState: undefined });
 });
 
 test("本地搜索：标题 / 描述 / 标签 / 分类都能命中", () => {
@@ -99,4 +99,23 @@ test("列表副标题带分类与标签", () => {
   assert.match(subtitle, /git/);
   // 没有子分类与标签时只剩分类，不留多余分隔符
   assert.equal(promptSubtitle(items[2]!), "writing");
+});
+
+test("dbState：认得的透传，陌生的当未知", () => {
+  assert.equal(normalizePrompts({ ...payload, dbState: "downloading" }).dbState, "downloading");
+  assert.equal(normalizePrompts({ ...payload, dbState: "ready" }).dbState, "ready");
+  // 老版本 PiDeck 不透传该字段
+  assert.equal(normalizePrompts(payload).dbState, undefined);
+  // 服务端将来加了新状态，别让 UI 当成已知值去渲染
+  assert.equal(normalizePrompts({ ...payload, dbState: "weird" }).dbState, undefined);
+});
+
+test("空列表文案：如实告知电脑端提示词库要下载", () => {
+  assert.match(emptyPromptsHint("downloading"), /正在下载/);
+  assert.match(emptyPromptsHint("missing"), /设置 → 提示词库/);
+  assert.match(emptyPromptsHint("failed"), /失败/);
+  // dbState 未知（老版本不透传）时也要给出可执行的引导，而不是干说「没有数据」
+  const fallback = emptyPromptsHint(undefined);
+  assert.match(fallback, /首次下载/);
+  assert.match(fallback, /重试/);
 });

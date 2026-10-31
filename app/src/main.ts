@@ -66,7 +66,13 @@ import {
 } from "./ui/settings-model.ts";
 import type { DshPluginRow, ExtensionRow, ModelRow, SkillSection } from "./ui/settings-model.ts";
 import { emptyStateSubtitle, emptyStateTitle, suggestionContext, suggestionsFor } from "./ui/empty-suggestions.ts";
-import { filterByCategory, filterPrompts, normalizePrompts, promptSubtitle } from "./ui/prompt-library-model.ts";
+import {
+  emptyPromptsHint,
+  PROMPT_PAGE_SIZE,
+  type PromptDbState,
+  normalizePrompts,
+  promptSubtitle,
+} from "./ui/prompt-library-model.ts";
 import type { PromptItem } from "./ui/prompt-library-model.ts";
 import { buildPlanSubmission } from "./ui/plan-mode.ts";
 import { renderFlatSection, renderProjectGroup } from "./ui/sidebar-view.ts";
@@ -4009,118 +4015,134 @@ function bookmarkIcon(): SVGSVGElement {
  */
 async function openPromptLibrarySheet(): Promise<void> {
   if (!runtime) return;
+  const client = runtime.client;
   const sessionId = activeSessionId;
-
-  openSheet("提示词库", (sheet) => {
-    sheet.append(h("p", { class: "sheet-note", text: "正在读取提示词…" }));
-  });
-
-  let items: PromptItem[] = [];
-  let categories: Array<{ slug: string; name: string; count: number }> = [];
-  try {
-    const raw = await runtime.client.listPrompts({ pageSize: 200 });
-    const parsed = normalizePrompts(raw);
-    items = parsed.items;
-    categories = parsed.categories;
-  } catch (error) {
-    openSheet("提示词库", (sheet) => {
-      sheet.append(h("p", { class: "sheet-note", text: `读取失败：${describeError(error)}` }));
-    });
-    return;
-  }
-
-  if (items.length === 0) {
-    openSheet("提示词库", (sheet) => {
-      sheet.append(
-        h("p", {
-          class: "sheet-note",
-          text: "这台 PiDeck 没有返回提示词。先在桌面端「提示词库」里添加几条，或确认库目录可用。",
-        }),
-      );
-    });
-    return;
-  }
 
   let query = "";
   let category = "";
+  let items: PromptItem[] = [];
+  let categories: Array<{ slug: string; name: string; count: number }> = [];
+  let dbState: PromptDbState | undefined;
+  /** 递增序号：快速输入时只认最新一次请求的结果 */
+  let seq = 0;
+  let debounce: ReturnType<typeof setTimeout> | undefined;
 
-  const render = (): void => {
-    const filtered = filterPrompts(filterByCategory(items, category), query);
-    openSheet(`提示词库（${filtered.length}）`, (sheet) => {
-      const search = h("input", {
-        class: "sheet-input",
-        type: "search",
-        placeholder: "搜索标题 / 描述 / 标签…",
-        value: query,
-      });
-      search.addEventListener("input", () => {
-        query = search.value;
-        render();
-        // 重画后焦点会丢，重新聚焦并还原光标
-        const next = document.querySelector<HTMLInputElement>(".sheet-backdrop .sheet-input");
-        if (next) {
-          next.focus();
-          next.setSelectionRange(next.value.length, next.value.length);
-        }
-      });
-      sheet.append(search);
+  const chipsWrap = h("div", { class: "prompt-cats" });
+  const listWrap = h("div", { class: "prompt-list" });
 
-      if (categories.length > 0) {
-        const chips = h("div", { class: "prompt-cats" });
-        const all = h("button", {
-          class: `prompt-cat${category === "" ? " is-active" : ""}`,
-          text: "全部",
-          onclick: () => {
-            category = "";
-            render();
+  const retryButton = (): HTMLElement =>
+    h("button", { class: "sheet-item", text: "重试", onclick: () => void load() });
+
+  /** 只重画列表，不动搜索框 —— 中文输入法组字时重建 input 会丢字。 */
+  const paintList = (): void => {
+    if (!listWrap.isConnected) return;
+    listWrap.replaceChildren();
+    if (items.length === 0) {
+      listWrap.append(h("p", { class: "sheet-note", text: emptyPromptsHint(dbState) }), retryButton());
+      return;
+    }
+    for (const item of items) {
+      listWrap.append(
+        h(
+          "button",
+          {
+            class: "sheet-item sheet-item--two",
+            onclick: () => void pickPrompt(item, sessionId),
           },
-        });
-        chips.append(all);
-        for (const item of categories.slice(0, 12)) {
-          chips.append(
-            h("button", {
-              class: `prompt-cat${category === item.slug ? " is-active" : ""}`,
-              text: item.name,
-              title: `${item.name}（${item.count}）`,
-              onclick: () => {
-                category = category === item.slug ? "" : item.slug;
-                render();
-              },
-            }),
-          );
-        }
-        sheet.append(chips);
-      }
-
-      if (filtered.length === 0) {
-        sheet.append(h("p", { class: "sheet-note", text: "没有匹配的提示词" }));
-        return;
-      }
-
-      const list = h("div", { class: "prompt-list" });
-      for (const item of filtered.slice(0, 60)) {
-        list.append(
-          h(
-            "button",
-            {
-              class: "sheet-item sheet-item--two",
-              onclick: () => void pickPrompt(item, sessionId),
-            },
-            [
-              h("span", { class: "conn-name", text: item.title }),
-              h("span", { class: "conn-url", text: promptSubtitle(item) || item.description || " " }),
-            ],
-          ),
-        );
-      }
-      sheet.append(list);
-      if (filtered.length > 60) {
-        sheet.append(h("p", { class: "sheet-note", text: `只显示前 60 条（共 ${filtered.length}），用搜索缩小范围` }));
-      }
-    });
+          [
+            h("span", { class: "conn-name", text: item.title }),
+            h("span", { class: "conn-url", text: promptSubtitle(item) || item.description || " " }),
+          ],
+        ),
+      );
+    }
+    if (items.length >= PROMPT_PAGE_SIZE) {
+      listWrap.append(
+        h("p", { class: "sheet-note", text: `只显示前 ${PROMPT_PAGE_SIZE} 条，用搜索缩小范围` }),
+      );
+    }
   };
 
-  render();
+  const paintChips = (): void => {
+    if (!chipsWrap.isConnected) return;
+    chipsWrap.replaceChildren();
+    if (categories.length === 0) return;
+    chipsWrap.append(
+      h("button", {
+        class: `prompt-cat${category === "" ? " is-active" : ""}`,
+        text: "全部",
+        onclick: () => {
+          category = "";
+          paintChips();
+          void load();
+        },
+      }),
+    );
+    for (const item of categories.slice(0, 12)) {
+      chipsWrap.append(
+        h("button", {
+          class: `prompt-cat${category === item.slug ? " is-active" : ""}`,
+          text: item.name,
+          title: `${item.name}（${item.count}）`,
+          onclick: () => {
+            category = category === item.slug ? "" : item.slug;
+            paintChips();
+            void load();
+          },
+        }),
+      );
+    }
+  };
+
+  /** 搜索与分类都打服务端：库有四千多条，本地只拿到一页会漏。 */
+  async function load(): Promise<void> {
+    const mine = ++seq;
+    if (listWrap.isConnected) {
+      listWrap.replaceChildren(h("p", { class: "sheet-note", text: "正在读取提示词…" }));
+    }
+    try {
+      const raw = await client.listPrompts({
+        ...(query.trim() ? { search: query.trim() } : {}),
+        ...(category ? { category } : {}),
+        pageSize: PROMPT_PAGE_SIZE,
+      });
+      if (mine !== seq) return;
+      const parsed = normalizePrompts(raw);
+      items = parsed.items;
+      // 带 search/category 时也照常返回分类栏；万一老版本没返回就保留上一次的
+      if (parsed.categories.length > 0) categories = parsed.categories;
+      dbState = parsed.dbState;
+      paintChips();
+      paintList();
+    } catch (error) {
+      if (mine !== seq) return;
+      items = [];
+      dbState = undefined;
+      if (listWrap.isConnected) {
+        listWrap.replaceChildren(
+          h("p", { class: "sheet-note", text: `读取失败：${describeError(error)}` }),
+          retryButton(),
+        );
+      }
+    }
+  }
+
+  const search = h("input", {
+    class: "sheet-input",
+    type: "search",
+    placeholder: "搜索标题 / 描述 / 标签…",
+  });
+  search.addEventListener("input", () => {
+    query = search.value;
+    if (debounce) clearTimeout(debounce);
+    // 防抖：边打字边发请求既费流量也容易被自己的旧响应覆盖
+    debounce = setTimeout(() => void load(), 300);
+  });
+
+  openSheet("提示词库", (sheet) => {
+    sheet.append(search, chipsWrap, listWrap);
+  });
+  await load();
 }
 
 /** 选中一条 → 拉正文 → 插到输入框光标处。 */
