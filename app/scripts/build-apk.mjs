@@ -12,7 +12,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -67,6 +67,11 @@ if (!existsSync(path.join(APP_DIR, "android"))) {
   process.exit(1);
 }
 
+// 出包前把产物目录清干净：dist 里残留的旧哈希 chunk 会被 cap 一起拷进包里，
+// 越攒越多，还容易让人误判「装上的还是旧代码」（踩过：包里有上一版 index-*.js）。
+for (const dir of ["dist", path.join("android", "app", "src", "main", "assets", "public")]) {
+  rmSync(path.join(APP_DIR, dir), { recursive: true, force: true });
+}
 run("npm", ["run", "build"]);
 // 必须 sync 而不是 copy：新装的插件要写进 capacitor.settings.gradle，否则 Gradle 根本不编译它
 // （踩过：加了 @capacitor/app 但只 copy，backButton 事件永远不到 JS）
