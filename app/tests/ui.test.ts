@@ -270,6 +270,45 @@ test("clearLive 清空流式区，状态行定格成「用时 + 完成时间」"
   assert.match(status, /^用时 \d+\.\ds · \d\d:\d\d 完成$/, "轮次结束要留下计时与完成时刻");
 });
 
+test("settleTurn 把卡住的转圈收口成「用时 + 完成时间」", () => {
+  // 回归：App 在后台被冻死、点任务完成通知进来时，reducer 停在 running，
+  // 状态行会一直转圈且秒数不动；服务端说没在跑就该立刻定格。
+  const { root, view } = makeView();
+  view.startTurn();
+  const status = root.querySelector(".run-status") as HTMLElement;
+  assert.equal(status.dataset.status, "running");
+  assert.match(status.textContent ?? "", /^\d+\.\ds$/);
+
+  view.settleTurn();
+  assert.equal(status.dataset.status, "finished", "收口后不能再挂 running 的转圈");
+  assert.match(status.textContent ?? "", /^用时 \d+\.\ds · \d\d:\d\d 完成$/);
+
+  // 定格之后再落一次历史，也不能把转圈又激活回来
+  view.setHistory([{ id: "m1", role: "assistant", text: "答案", timestamp: 2 } as never]);
+  assert.equal(status.dataset.status, "finished");
+});
+
+test("settleTurn 在没有回合锚点时什么都不写", () => {
+  // 从通知点进一个早就跑完的会话：历史里有答案，但没有「这一轮」的锚点，
+  // 不该凭空写一个 0.0s 的计时器上去
+  const { root, view } = makeView();
+  view.setHistory([{ id: "m1", role: "assistant", text: "老答案", timestamp: 2 } as never]);
+  view.settleTurn();
+  const status = root.querySelector(".run-status") as HTMLElement;
+  assert.equal(status.textContent, "");
+  assert.equal(status.dataset.status, "");
+});
+
+test("settleTurn 之后再来一帧 running 会重新开始计时", () => {
+  const { root, view } = makeView();
+  view.startTurn();
+  view.settleTurn();
+  view.setLive("run-2", [{ kind: "text", id: "t1", text: "又来一轮", done: false }], "running");
+  const status = root.querySelector(".run-status") as HTMLElement;
+  assert.equal(status.dataset.status, "running", "新一轮不能被上一轮的收口状态压住");
+  assert.match(status.textContent ?? "", /^\d+\.\ds$/);
+});
+
 test("连续 setLive 不会累积「执行过程」块（回归：每帧新建 group 却不移除旧的）", () => {
   const { root, view } = makeView();
   const blocks: never[] = [];

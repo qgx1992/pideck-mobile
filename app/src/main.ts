@@ -1218,6 +1218,7 @@ function renderMain(): void {
   const unsubscribe = store.subscribe((state) => {
     if (!runtime) return;
     detectCompletedRuns(runtime.id, state);
+    syncTurnWithState(state);
     renderSidebar(state);
     renderHeader(state);
     if (activeSessionId) restorePending(activeSessionId);
@@ -1720,6 +1721,52 @@ function isRunActive(): boolean {
 }
 
 /**
+ * 以服务端状态为准收口本地回合。
+ *
+ * 从后台回来、点任务完成通知进来时最容易撞上：后台 socket 被系统冻死，
+ * 结束帧没收到，`reducer.status` 就永久停在 running —— 表现是回答下方
+ * 一直转圈、计时不停。这里只看「服务端是否还在跑」，跑完了就收口。
+ */
+function settleStaleTurn(): void {
+  if (!runtime || !activeSessionId) return;
+  const info = runtime.store.state.runtimes.find((item) => item.sessionId === activeSessionId);
+  if (info?.status === "running") return;
+  if (channel?.reducer.status === "running") channel.reducer.reset();
+  // 流式区要一并收掉（内容已经进历史了），否则会和 reloadHistory 出来的正式消息重叠
+  chatView?.clearLive();
+  chatView?.settleTurn();
+  // 收口的同时对一次真实历史：后台那一轮的消息可能还没落到本机
+  void reloadHistory(activeSessionId);
+  renderComposerState();
+  renderPrimaryButton();
+}
+
+/** 上一次看到「这个会话真的在跑」的时刻（给状态推送流失的宽限）。 */
+let lastRunActiveSeenAt = 0;
+
+/**
+ * 状态里的「在不在跑」比流（reducer）更权威：流断了会永远停在 running。
+ *
+ * 给 8 秒宽限：刚发出的一段很短时间里，服务端的 runtimes 还没这个会话，
+ * 不能因此就把刚开始的计时直接判成结束。
+ */
+function syncTurnWithState(state: PiDeckState): void {
+  if (!activeSessionId || !chatView) return;
+  if (channel?.reducer.status !== "running") {
+    lastRunActiveSeenAt = 0;
+    return;
+  }
+  const info = state.runtimes.find((item) => item.sessionId === activeSessionId);
+  if (info?.status === "running") {
+    lastRunActiveSeenAt = Date.now();
+    return;
+  }
+  if (lastRunActiveSeenAt === 0) lastRunActiveSeenAt = Date.now();
+  if (Date.now() - lastRunActiveSeenAt < 8_000) return;
+  settleStaleTurn();
+}
+
+/**
  * 主按钮状态机：
  *   运行中 → 停止（红色描边、可点）
  *   有文字 → 发送（主色）
@@ -1981,6 +2028,13 @@ async function resumeAfterBackground(): Promise<void> {
   const launchSession = await consumeLaunchSession();
   if (launchSession && launchSession !== activeSessionId && runtime.store.session(launchSession)) {
     await openSession(launchSession);
+    // 这里原本直接 return，于是「服务端已经跑完、本地还挂着 running」没人收口，
+    // 点通知进来就是一整个永远转圈的计时器
+    settleStaleTurn();
+    void learnRuntimePrefs(launchSession, true);
+    void refreshContextUsage(launchSession);
+    void refreshTodo(launchSession);
+    void refreshSubagents(launchSession);
     return;
   }
   if (!sessionId || sessionId !== activeSessionId) return;
@@ -1988,14 +2042,9 @@ async function resumeAfterBackground(): Promise<void> {
   // 历史永远重拉一次：既覆盖「跑完了」，也覆盖「期间有新消息」
   void reloadHistory(sessionId);
 
-  // 服务端已经不认为它在跑了 → 收口本地状态，别让按钮停在「停止」
+  // 服务端已经不认为它在跑了 → 收口本地状态，别让按钮停在「停止」、计时器还在转
   // 注意：跑完后 runtime 通常还在（status=idle），所以要看 status 而不是「有没有 runtime」
-  const runtimeInfo = runtime.store.state.runtimes.find((item) => item.sessionId === sessionId);
-  const stillRunning = runtimeInfo?.status === "running";
-  if (!stillRunning) {
-    channel?.reducer.reset();
-    chatView?.clearLive();
-  }
+  settleStaleTurn();
 
   channel?.forceReconnect();
   void learnRuntimePrefs(sessionId, true);

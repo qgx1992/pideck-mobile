@@ -152,13 +152,36 @@ export class ChatView {
         this.renderStatus(outcome, turnStatusText(this.turn, outcome));
       }
     } else {
-      this.statusEl.textContent = "";
-      this.statusEl.dataset.status = "";
-      this.statusEl.dataset.text = "";
-      this.statusEl.dataset.key = "";
-      this.headTextEl = null;
+      this.clearStatus();
     }
     if (this.stick) this.scrollToBottom();
+  }
+
+  /**
+   * 服务端说这一轮已经结束，但流还停在 running：收口，别让转圈和计时一直转。
+   *
+   * 典型场景：App 在后台被系统冻死，收不到结束帧；点任务完成通知进来时
+   * 状态行就卡在「running + 一直涨的秒数」，而这一轮其实早就结束了。
+   */
+  settleTurn(): void {
+    this.stopTicker();
+    if (!this.turn) {
+      this.clearStatus();
+      return;
+    }
+    this.turn.finishedAt ??= Date.now();
+    const outcome = this.lastLiveStatus === "running" ? "finished" : this.lastLiveStatus;
+    this.lastLiveStatus = outcome;
+    this.renderStatus(outcome, turnStatusText(this.turn, outcome));
+  }
+
+  /** 状态行清空（没有回合锚点时用它，比如打开一个从没跑过的会话）。 */
+  private clearStatus(): void {
+    this.statusEl.textContent = "";
+    this.statusEl.dataset.status = "";
+    this.statusEl.dataset.text = "";
+    this.statusEl.dataset.key = "";
+    this.headTextEl = null;
   }
 
   setEmpty(text: string): void {
@@ -368,7 +391,6 @@ export class ChatView {
     // 回合计时：运行中递增，结束定格成用时 + 完成时间
     this.noteStatus(status);
     this.renderStatus(status, turnStatusText(this.turn, status));
-    this.statusEl.dataset.status = status;
     if (this.stick) this.scrollToBottom();
   }
 
@@ -410,6 +432,7 @@ export class ChatView {
   /** 状态行：左边是回合状态（运行中带转圈 + 计时），右边是吞吐指标。 */
   private renderStatus(status: string, statusText: string): void {
     this.statusEl.dataset.text = statusText;
+    this.statusEl.dataset.status = status;
     // key 里刻意不含计时文字：计时每 100ms 变一次，变一次就重建 DOM 太浪费
     const key = `${status}|${statusText ? 1 : 0}|${JSON.stringify(this.perf)}`;
     if (this.statusEl.dataset.key === key) {
