@@ -87,7 +87,13 @@ export function mergeTodoHistory(
   limit: number = TODO_HISTORY_LIMIT,
 ): TodoHistoryEntry[] {
   const planId = planKeyOf(view);
-  const index = history.findIndex((entry) => entry.planId === planId && !entry.sealed);
+  const open = history.findIndex((entry) => entry.planId === planId && !entry.sealed);
+  // 已归档、但内容一字不差的同一份清单 → 就地更新，别再记一条。
+  // 否则每次重新打开老会话，右边「待办」里就会多一份一模一样的记录。
+  const index =
+    open >= 0
+      ? open
+      : history.findIndex((entry) => entry.planId === planId && sameItems(entry.items, view.items));
 
   if (index < 0) {
     return sortAndCap([entryFromView(view, now), ...history], limit);
@@ -201,6 +207,39 @@ export function parseTodoHistory(raw: unknown): TodoHistoryEntry[] {
  */
 export function shouldShowTodoStrip(view: TodoView | null): boolean {
   return view !== null;
+}
+
+/**
+ * 「这份清单算不算本轮」的判定状态（按会话记，只在内存里）。
+ *
+ * 条带只该显示**本轮**的清单：老会话里那份是上一轮留下的，属于右边「待办」Tab，
+ * 重新打开会话时不该再占输入框上方那块地方。
+ */
+export interface TodoLiveState {
+  planId: string;
+  signature: string;
+  /** 已确认是本轮的 → 一直显示到发出下一轮 */
+  live: boolean;
+}
+
+/**
+ * 推进「本轮」判定。
+ *
+ *   - 会话正在运行（runActive）→ 一定是本轮
+ *   - 本次启动里已经认过是本轮 → 继续算（切走再切回来不闪）
+ *   - 之前拉过这个会话、这次内容变了（进度推进 / 新一轮）→ 升格成本轮
+ *   - 首次拉到（刚打开会话）且没在运行 → 是历史清单，只进「待办」，不占条带
+ */
+export function nextTodoLiveState(
+  known: TodoLiveState | undefined,
+  view: TodoView,
+  runActive: boolean,
+): TodoLiveState {
+  const planId = planKeyOf(view);
+  const signature = todoSignature(view);
+  const changed = known !== undefined && (known.planId !== planId || known.signature !== signature);
+  const live = runActive || (known?.live ?? false) || changed;
+  return { planId, signature, live };
 }
 
 /**

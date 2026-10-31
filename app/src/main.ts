@@ -160,11 +160,12 @@ import {
   historyTimeLabel,
   clearedTodoState,
   mergeTodoHistory,
+  nextTodoLiveState,
   planKeyOf,
   sealTodoHistory,
   todoSignature,
 } from "./ui/todo-history-model.ts";
-import type { TodoHistoryEntry } from "./ui/todo-history-model.ts";
+import type { TodoHistoryEntry, TodoLiveState } from "./ui/todo-history-model.ts";
 import { clearTodoHistory, loadTodoHistory, saveTodoHistory } from "./platform/todo-history.ts";
 import {
   contextChipLabel,
@@ -1955,6 +1956,15 @@ const todoHistoryByScope = new Map<string, TodoHistoryEntry[]>();
 const dismissedTodoPlans = new Map<string, { planId: string; signature: string }>();
 
 /**
+ * 每份清单「算不算本轮」（条带只在有本轮清单时显示）。
+ *
+ * 服务端对老会话也会返回它上一轮那份清单（可能是几天前、早就 6/6 了），
+ * 以前不区分就整条画到输入框上方，看起来像「刚跑完还没收」。现在只有本轮
+ * 运行过、或本次启动里亲眼看到它变化过的那份才上条带，其余只进「待办」。
+ */
+const todoLiveByScope = new Map<string, TodoLiveState>();
+
+/**
  * 「清除所有」的内联二次确认状态。
  *
  * 不用 openSheet：那个函数为了不让遮罩吃掉触摸会顺手关掉工作区抽屉，
@@ -2011,6 +2021,8 @@ function archiveTodoBeforeSend(sessionId: string | null): void {
     dismissedTodoPlans.set(scope, { planId: planKeyOf(view), signature: todoSignature(view) });
   }
   todoView = null;
+  // 下一轮开始了：上一份的「本轮」身份作废，下一份清单得重新挣
+  todoLiveByScope.delete(todoScope(sessionId));
   renderTodoStrip();
   renderTodoHistory();
 }
@@ -2149,6 +2161,7 @@ async function refreshTodo(sessionId: string): Promise<void> {
     // 完全没变的那份旧清单 → 继续隐藏（下一轮还没真正开始）
     if (view && dismissed && planKeyOf(view) === dismissed.planId && todoSignature(view) === dismissed.signature) {
       todoView = null;
+      todoLiveByScope.set(scope, { planId: planKeyOf(view), signature: todoSignature(view), live: false });
       renderTodoStrip();
       renderTodoHistory();
       return;
@@ -2156,7 +2169,15 @@ async function refreshTodo(sessionId: string): Promise<void> {
     // planId 相同但内容变了 = 新的一轮复用同名计划，解除屏蔽
     if (view && dismissed) dismissedTodoPlans.delete(scope);
 
-    todoView = view;
+    // 老会话里那份上一轮的清单是历史，不该占输入框上方：只记进「待办」
+    let live = view !== null;
+    if (view) {
+      const state = nextTodoLiveState(todoLiveByScope.get(scope), view, isRunActive());
+      todoLiveByScope.set(scope, state);
+      live = state.live;
+    }
+
+    todoView = live ? view : null;
     rememberTodo(view, sessionId);
     renderTodoStrip();
     renderTodoHistory();

@@ -18,6 +18,7 @@ const {
   parseTodoHistory,
   planKeyOf,
   clearedTodoState,
+  nextTodoLiveState,
   sealTodoHistory,
   shouldShowTodoStrip,
   todoSignature,
@@ -267,4 +268,45 @@ test("清除后若不管当前清单，轮询确实会把它写回来（这就�
 
   // 压掉之后（main.ts 用 planId + signature 拦），轮询不会重新记账
   assert.equal(afterClear.dismissed!.planId, "8");
+});
+
+/**
+ * 用户反馈 #4：重新打开历史会话时，那份早就跑完的清单又会冒到输入框上方。
+ *
+ * 服务端对老会话照样返回它上一轮那份（可能几天前、早就 6/6），
+ * 所以「看起来是本轮的」不能靠清单状态判断，只能靠「本次启动里有没有亲眼见过它动」。
+ */
+test("重新打开老会话：首次拉到的旧清单不算本轮，不占条带", () => {
+  const state = nextTodoLiveState(undefined, view("7", ["completed", "completed"]) as never, false);
+  assert.equal(state.live, false, "刚打开会话拉到的历史清单不该显示条带");
+});
+
+test("会话正在跑：清单直接算本轮", () => {
+  const state = nextTodoLiveState(undefined, view("8", ["in_progress", "pending"]) as never, true);
+  assert.equal(state.live, true);
+});
+
+test("本次启动里认过本轮 → 切走再切回来还显示", () => {
+  const first = nextTodoLiveState(undefined, view("8", ["in_progress"]) as never, true);
+  const back = nextTodoLiveState(first, view("8", ["in_progress"]) as never, false);
+  assert.equal(back.live, true, "同一份清单、运行已结束 → 仍然要留着（完成也要留到下一轮）");
+});
+
+test("拉过这个会话、这次内容变了 → 升格为本轮（别处触发的运行也能看到）", () => {
+  const restored = nextTodoLiveState(undefined, view("8", ["pending"]) as never, false);
+  assert.equal(restored.live, false);
+  const advanced = nextTodoLiveState(restored, view("8", ["completed"]) as never, false);
+  assert.equal(advanced.live, true, "进度推进了说明有人在跑，条带要出来");
+});
+
+test("上一份已归档时，同一份清单不重复记账（否则每次打开老会话都多一条）", () => {
+  const round1 = mergeTodoHistory([], view("7", ["completed", "completed"]) as never, 1_000);
+  const sealed = sealTodoHistory(round1, view("7", ["completed", "completed"]) as never, 2_000);
+
+  // 几天后重新打开这个会话，服务端还是返回同一份
+  const reopened = mergeTodoHistory(sealed, view("7", ["completed", "completed"]) as never, 99_000);
+  assert.equal(reopened.length, 1, "内容一字不差的同一份不该新增记录");
+  assert.equal(reopened[0]!.sealed, true, "仍然是归档状态");
+  assert.equal(reopened[0]!.firstSeenAt, 1_000, "首次时间不变");
+  assert.equal(reopened[0]!.lastChangedAt, 2_000, "没有变化就不该刷新时间");
 });
