@@ -18,7 +18,9 @@ const {
   parseTodoHistory,
   planKeyOf,
   clearedTodoState,
+  clearedTodoIdentity,
   nextTodoLiveState,
+  todoRoundBaseline,
   sealTodoHistory,
   shouldShowTodoStrip,
   todoSignature,
@@ -277,26 +279,66 @@ test("清除后若不管当前清单，轮询确实会把它写回来（这就�
  * 所以「看起来是本轮的」不能靠清单状态判断，只能靠「本次启动里有没有亲眼见过它动」。
  */
 test("重新打开老会话：首次拉到的旧清单不算本轮，不占条带", () => {
-  const state = nextTodoLiveState(undefined, view("7", ["completed", "completed"]) as never, false);
+  const state = nextTodoLiveState(undefined, view("7", ["completed", "completed"]) as never);
   assert.equal(state.live, false, "刚打开会话拉到的历史清单不该显示条带");
 });
 
-test("会话正在跑：清单直接算本轮", () => {
-  const state = nextTodoLiveState(undefined, view("8", ["in_progress", "pending"]) as never, true);
-  assert.equal(state.live, true);
+/**
+ * 用户反馈 #5：清掉的清单在重启 App、发出新提问后又冒到输入框上方。
+ *
+ * 旧规则是「运行中就一定是本轮」——重启后内存里的「已收口」记录没了，
+ * 一轮跑起来时服务端还在返回上一轮那份，于是被判成本轮重新顶上去。
+ * 现在只认「内容/planId 变了」，运行状态不参与判定。
+ */
+test("重启后没有内存基线：跑着一轮也不把旧清单当本轮", () => {
+  const state = nextTodoLiveState(undefined, view("7", ["completed", "completed"]) as never);
+  assert.equal(state.live, false, "没见过它动，就不该显示（运行与否无关）");
 });
 
 test("本次启动里认过本轮 → 切走再切回来还显示", () => {
-  const first = nextTodoLiveState(undefined, view("8", ["in_progress"]) as never, true);
-  const back = nextTodoLiveState(first, view("8", ["in_progress"]) as never, false);
-  assert.equal(back.live, true, "同一份清单、运行已结束 → 仍然要留着（完成也要留到下一轮）");
+  const restored = nextTodoLiveState(undefined, view("8", ["pending"]) as never);
+  const advanced = nextTodoLiveState(restored, view("8", ["completed"]) as never);
+  const back = nextTodoLiveState(advanced, view("8", ["completed"]) as never);
+  assert.equal(back.live, true, "同一份清单 → 仍然要留着（完成也要留到下一轮）");
 });
 
 test("拉过这个会话、这次内容变了 → 升格为本轮（别处触发的运行也能看到）", () => {
-  const restored = nextTodoLiveState(undefined, view("8", ["pending"]) as never, false);
+  const restored = nextTodoLiveState(undefined, view("8", ["pending"]) as never);
   assert.equal(restored.live, false);
-  const advanced = nextTodoLiveState(restored, view("8", ["completed"]) as never, false);
+  const advanced = nextTodoLiveState(restored, view("8", ["completed"]) as never);
   assert.equal(advanced.live, true, "进度推进了说明有人在跑，条带要出来");
+});
+
+test("发出新一轮：服务端还返回上一轮那份时不显示，真写出新清单才显示", () => {
+  // 上一轮：已经在条带上（live）
+  const live = nextTodoLiveState(undefined, view("7", ["in_progress"]) as never);
+  const shown = nextTodoLiveState(live, view("7", ["completed"]) as never);
+  assert.equal(shown.live, true);
+
+  // 用户发出下一轮 → 基线降级；中途轮询拿到的还是同一份（6/6 旧清单）
+  const baseline = todoRoundBaseline(shown);
+  assert.equal(baseline.live, false);
+  assert.equal(nextTodoLiveState(baseline, view("7", ["completed"]) as never).live, false, "没变就不该重新冒出来");
+
+  // agent 真的写了新清单（新 planId）
+  assert.equal(nextTodoLiveState(baseline, view("9", ["pending", "pending"]) as never).live, true);
+});
+
+test("发出新一轮但本次启动从没见过旧清单：新清单照样能升为本轮", () => {
+  // 重启后直接发：内存里没有基线，走空身份兜底
+  const baseline = todoRoundBaseline(undefined);
+  assert.deepEqual(baseline, { planId: "", signature: "", live: false });
+  assert.equal(nextTodoLiveState(baseline, view("9", ["pending"]) as never).live, true);
+});
+
+test("清除所有：条带隐藏时（todoView 为 null）也要能压住那份清单", () => {
+  // 条带隐藏时 main 用「上次见到的身份」兜底
+  const cleared = clearedTodoIdentity({ planId: "7", signature: "sig-7" });
+  assert.deepEqual(cleared.history, []);
+  assert.deepEqual(cleared.dismissed, { planId: "7", signature: "sig-7" });
+  // 与 view 版本等价
+  const viaView = clearedTodoState(view("7", ["completed"]) as never);
+  assert.equal(viaView.dismissed!.planId, "7");
 });
 
 test("上一份已归档时，同一份清单不重复记账（否则每次打开老会话都多一条）", () => {

@@ -181,15 +181,22 @@ import {
   historyProgressLabel,
   historyStatusLabel,
   historyTimeLabel,
-  clearedTodoState,
+  clearedTodoIdentity,
   mergeTodoHistory,
   nextTodoLiveState,
   planKeyOf,
   sealTodoHistory,
+  todoRoundBaseline,
   todoSignature,
 } from "./ui/todo-history-model.ts";
 import type { TodoHistoryEntry, TodoLiveState } from "./ui/todo-history-model.ts";
-import { clearTodoHistory, loadTodoHistory, saveTodoHistory } from "./platform/todo-history.ts";
+import {
+  clearTodoHistory,
+  loadDismissedTodo,
+  loadTodoHistory,
+  saveDismissedTodo,
+  saveTodoHistory,
+} from "./platform/todo-history.ts";
 import {
   contextChipLabel,
   contextChipTitle,
@@ -2023,6 +2030,31 @@ const todoHistoryByScope = new Map<string, TodoHistoryEntry[]>();
 const dismissedTodoPlans = new Map<string, { planId: string; signature: string }>();
 
 /**
+ * 记住「这个会话上一份清单已经被收口/清除」。
+ *
+ * 以前只放内存 Map，重启 App 就丢了：重新打开会话时 5s 轮询把清掉的清单
+ * 又写回「待办」，发出新一轮时那份旧清单还会被当成新一轮顶到输入框上方。
+ * 现在内存 + localStorage 双写。
+ */
+function dismissedFor(scope: string): { planId: string; signature: string } | undefined {
+  const cached = dismissedTodoPlans.get(scope);
+  if (cached) return cached;
+  const stored = loadDismissedTodo(scope);
+  if (stored) dismissedTodoPlans.set(scope, stored);
+  return stored ?? undefined;
+}
+
+function setDismissed(scope: string, value: { planId: string; signature: string } | null): void {
+  if (value) {
+    dismissedTodoPlans.set(scope, value);
+    saveDismissedTodo(scope, value);
+    return;
+  }
+  dismissedTodoPlans.delete(scope);
+  saveDismissedTodo(scope, null);
+}
+
+/**
  * 每份清单「算不算本轮」（条带只在有本轮清单时显示）。
  *
  * 服务端对老会话也会返回它上一轮那份清单（可能是几天前、早就 6/6 了），
@@ -2085,11 +2117,14 @@ function archiveTodoBeforeSend(sessionId: string | null): void {
   if (view) {
     const scope = todoScope(sessionId);
     setHistory(scope, sealTodoHistory(historyFor(scope), view, Date.now()));
-    dismissedTodoPlans.set(scope, { planId: planKeyOf(view), signature: todoSignature(view) });
+    setDismissed(scope, { planId: planKeyOf(view), signature: todoSignature(view) });
   }
   todoView = null;
-  // 下一轮开始了：上一份的「本轮」身份作废，下一份清单得重新挣
-  todoLiveByScope.delete(todoScope(sessionId));
+  // 下一轮开始了：把服务端「现在这份」记成基线并降级为非本轮。
+  // 不能直接 delete —— 删了就没有可比对的基线，新一轮真写出来的清单
+  // 也会因为「第一次见到」而被判成旧清单。
+  const scope = todoScope(sessionId);
+  todoLiveByScope.set(scope, todoRoundBaseline(todoLiveByScope.get(scope)));
   renderTodoStrip();
   renderTodoHistory();
 }
@@ -2187,14 +2222,23 @@ function renderTodoHistoryTab(content: HTMLElement): void {
  */
 function clearAllTodoHistory(): void {
   const scope = currentTodoScope();
-  const result = clearedTodoState(todoView);
+  // 条带隐藏时 todoView 是 null，但服务端那份清单还在轮询里 —— 用「上次见到的身份」
+  // 兜底，否则一清历史立刻被 5s 轮询写回来。
+  const known = todoLiveByScope.get(scope);
+  const identity = todoView
+    ? { planId: planKeyOf(todoView), signature: todoSignature(todoView) }
+    : known
+      ? { planId: known.planId, signature: known.signature }
+      : null;
+  const result = clearedTodoIdentity(identity);
 
   todoHistoryByScope.set(scope, result.history);
   clearTodoHistory(scope);
 
   if (result.dismissed) {
     // 当前这份一起压掉，否则 5s 后的轮询会立刻把它写回历史
-    dismissedTodoPlans.set(scope, result.dismissed);
+    setDismissed(scope, result.dismissed);
+    todoLiveByScope.set(scope, { planId: result.dismissed.planId, signature: result.dismissed.signature, live: false });
     todoView = null;
     renderTodoStrip();
   }
@@ -2223,7 +2267,7 @@ async function refreshTodo(sessionId: string): Promise<void> {
     if (sessionId !== activeSessionId) return;
     const view = parseSessionTodo(raw);
     const scope = todoScope(sessionId);
-    const dismissed = dismissedTodoPlans.get(scope);
+    const dismissed = dismissedFor(scope);
 
     // 完全没变的那份旧清单 → 继续隐藏（下一轮还没真正开始）
     if (view && dismissed && planKeyOf(view) === dismissed.planId && todoSignature(view) === dismissed.signature) {
@@ -2234,12 +2278,12 @@ async function refreshTodo(sessionId: string): Promise<void> {
       return;
     }
     // planId 相同但内容变了 = 新的一轮复用同名计划，解除屏蔽
-    if (view && dismissed) dismissedTodoPlans.delete(scope);
+    if (view && dismissed) setDismissed(scope, null);
 
     // 老会话里那份上一轮的清单是历史，不该占输入框上方：只记进「待办」
     let live = view !== null;
     if (view) {
-      const state = nextTodoLiveState(todoLiveByScope.get(scope), view, isRunActive());
+      const state = nextTodoLiveState(todoLiveByScope.get(scope), view);
       todoLiveByScope.set(scope, state);
       live = state.live;
     }

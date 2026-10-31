@@ -6,9 +6,10 @@
  */
 
 import { parseTodoHistory } from "../ui/todo-history-model.ts";
-import type { TodoHistoryEntry } from "../ui/todo-history-model.ts";
+import type { TodoHistoryEntry, TodoIdentity } from "../ui/todo-history-model.ts";
 
 const KEY_PREFIX = ["pideck", "todo", "history", "v1"].join("-");
+const DISMISSED_PREFIX = ["pideck", "todo", "dismissed", "v1"].join("-");
 
 function storageKey(scope: string): string {
   return `${KEY_PREFIX}-${scope}`;
@@ -39,4 +40,45 @@ export function clearTodoHistory(scope: string): void {
   } catch {
     /* ignore */
   }
+}
+
+function dismissedKey(scope: string): string {
+  return `${DISMISSED_PREFIX}-${scope}`;
+}
+
+/**
+ * 读这个会话「已收口」的那份清单身份。
+ *
+ * 必须落盘：以前只放在内存 Map 里，重启 App 就丢了，于是
+ * ①重新打开会话时 5 秒轮询把清掉的清单又写回「待办」；
+ * ②发出新一轮时服务端仍返回那份旧清单，条带又冒到输入框上方。
+ */
+export function loadDismissedTodo(scope: string): TodoIdentity | null {
+  try {
+    const raw = localStorage.getItem(dismissedKey(scope));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    const planId = typeof record.planId === "string" ? record.planId : "";
+    const signature = typeof record.signature === "string" ? record.signature : "";
+    if (!planId && !signature) return null;
+    return { planId, signature };
+  } catch {
+    return null;
+  }
+}
+
+export function saveDismissedTodo(scope: string, value: TodoIdentity | null): void {
+  try {
+    if (!value) localStorage.removeItem(dismissedKey(scope));
+    else localStorage.setItem(dismissedKey(scope), JSON.stringify({ planId: value.planId, signature: value.signature }));
+  } catch {
+    /* 隐私模式写不进去，忽略 */
+  }
+}
+
+/** 清掉某个会话的历史与屏蔽（删除会话时调用）。 */
+export function clearDismissedTodo(scope: string): void {
+  saveDismissedTodo(scope, null);
 }

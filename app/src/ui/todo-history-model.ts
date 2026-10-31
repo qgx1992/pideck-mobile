@@ -223,23 +223,35 @@ export interface TodoLiveState {
 }
 
 /**
- * 推进「本轮」判定。
+ * 这一份清单「算不算本轮」。
  *
- *   - 会话正在运行（runActive）→ 一定是本轮
- *   - 本次启动里已经认过是本轮 → 继续算（切走再切回来不闪）
- *   - 之前拉过这个会话、这次内容变了（进度推进 / 新一轮）→ 升格成本轮
- *   - 首次拉到（刚打开会话）且没在运行 → 是历史清单，只进「待办」，不占条带
+ * 之前这里有第三个参数 `runActive`，运行中就直接升为本轮——重启后内存里的
+ * 「已收口」记录丢了，发出新一轮时服务端还在返回上一轮那份（可能几天前、
+ * 6/6 早就完成），一跑起来就又冒到输入框上方，正是用户报的
+ * 「清掉的清单在发送提问后又显示出来」。
+ *
+ * 现在只认「变了」：
+ * - 本次启动还没见过这份清单（`known` 为空）→ 先不当本轮；
+ * - 见过、且 planId 或内容签名变了 → 升为本轮（说明确实是这一轮写出来的）；
+ * - 已经认过本轮 → 继续显示（完成也留到发出下一轮，见 archiveTodoBeforeSend）。
  */
-export function nextTodoLiveState(
-  known: TodoLiveState | undefined,
-  view: TodoView,
-  runActive: boolean,
-): TodoLiveState {
+export function nextTodoLiveState(known: TodoLiveState | undefined, view: TodoView): TodoLiveState {
   const planId = planKeyOf(view);
   const signature = todoSignature(view);
-  const changed = known !== undefined && (known.planId !== planId || known.signature !== signature);
-  const live = runActive || (known?.live ?? false) || changed;
-  return { planId, signature, live };
+  if (!known) return { planId, signature, live: false };
+  const changed = known.planId !== planId || known.signature !== signature;
+  return { planId, signature, live: changed || known.live };
+}
+
+/**
+ * 发出新一轮时的基线：把「服务端现在这份清单」记成基线并收拾成「不算本轮」。
+ *
+ * 没有内存基线时返回空身份（planId/signature 都是空串）：`nextTodoLiveState`
+ * 把空身份当「上一次服务端有没有清单不知道」，任何一份真清单对它都算变化，
+ * 所以新一轮真写出来的清单照样能升为本轮。
+ */
+export function todoRoundBaseline(known: TodoLiveState | undefined): TodoLiveState {
+  return known ? { ...known, live: false } : { planId: "", signature: "", live: false };
 }
 
 /**
@@ -252,14 +264,27 @@ export function nextTodoLiveState(
  */
 export interface TodoClearResult {
   history: TodoHistoryEntry[];
-  dismissed: { planId: string; signature: string } | null;
+  dismissed: TodoIdentity | null;
+}
+
+/** 一份清单的身份（planId + 内容签名），不需要整份清单。 */
+export interface TodoIdentity {
+  planId: string;
+  signature: string;
 }
 
 export function clearedTodoState(view: TodoView | null): TodoClearResult {
-  return {
-    history: [],
-    dismissed: view ? { planId: planKeyOf(view), signature: todoSignature(view) } : null,
-  };
+  return clearedTodoIdentity(view ? { planId: planKeyOf(view), signature: todoSignature(view) } : null);
+}
+
+/**
+ * 「清除所有」的结果：历史清空 + 把这个身份记进「已收口」。
+ *
+ * 只清历史不清屏蔽的话，5 秒一次轮询会立刻把服务端那份清单写回历史，
+ * 看起来就像没清干净（条带隐藏时 `todoView` 是 null，所以这里要能接身份）。
+ */
+export function clearedTodoIdentity(identity: TodoIdentity | null): TodoClearResult {
+  return { history: [], dismissed: identity };
 }
 
 /** 历史条目头部文案：`4/5`。 */
