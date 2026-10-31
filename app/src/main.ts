@@ -176,7 +176,8 @@ import {
   ringPercent,
 } from "./ui/context-usage.ts";
 import type { ContextUsage } from "./ui/context-usage.ts";
-import { readPerfMetrics } from "./ui/perf-metrics.ts";
+import { perfRows, readPerfMetrics } from "./ui/perf-metrics.ts";
+import type { PerfMetrics } from "./ui/perf-metrics.ts";
 import type { LearnedPrefs } from "./ui/session-prefs.ts";
 import {
   askNotificationBody,
@@ -2262,6 +2263,8 @@ function renderSubagentStrip(): void {
 /* ---------------------------- 上下文用量 ---------------------------- */
 
 let contextUsage: ContextUsage | null = null;
+/** 和 contextUsage 同一次请求拿到的吞吐指标（面板里要显示会话平均） */
+let perfMetrics: PerfMetrics | null = null;
 let contextPollTimer: number | null = null;
 let contextPollSession: string | null = null;
 
@@ -2272,6 +2275,7 @@ function stopContextPolling(): void {
   }
   contextPollSession = null;
   contextUsage = null;
+  perfMetrics = null;
   renderContextChip();
 }
 
@@ -2293,7 +2297,8 @@ async function refreshContextUsage(sessionId: string): Promise<void> {
     contextUsage = readContextUsage(raw);
     renderContextChip();
     // 同一次请求里就带着吞吐指标，不用再发一次
-    chatView?.setRunStats(readPerfMetrics(raw));
+    perfMetrics = readPerfMetrics(raw);
+    chatView?.setRunStats(perfMetrics);
   } catch {
     /* 运行时刚起 / 已停：保留上一次的读数 */
   }
@@ -2368,7 +2373,8 @@ function openContextSheet(): void {
     sheet.append(summary);
 
     const list = h("ul", { class: "ctx-rows" });
-    for (const row of contextRows(usage)) {
+    // 上下文 + 吞吐（首 token / 总耗时 / 单条速度 / 会话平均），标签互不重叠
+    for (const row of [...contextRows(usage), ...perfRows(perfMetrics)]) {
       list.append(
         h("li", { class: "ctx-row" }, [
           h("span", { class: "ctx-row-label", text: row.label }),

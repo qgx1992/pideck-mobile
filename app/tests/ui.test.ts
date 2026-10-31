@@ -758,17 +758,17 @@ test("执行过程折叠头用 SVG 箭头，且不再是字面量 B8", () => {
 
 /* ---------------- 运行中的吞吐指标 ---------------- */
 
-test("运行中在状态行右侧显示 首token / 流式 / 均速", () => {
+test("运行中在状态行右侧显示 首token / 总耗时 / 流式 / 均速", () => {
   const { root, view } = makeView();
   view.setLive(null, [], "running");
-  view.setRunStats({ ttftMs: 1_274, streamingTps: 113.06, averageTps: 52.508 });
+  view.setRunStats({ ttftMs: 1_274, totalMs: 1_714, streamingTps: 113.06, averageTps: 52.508 });
 
   const status = root.querySelector(".run-status")!;
   assert.equal(status.getAttribute("data-status"), "running");
   assert.ok(status.querySelector(".run-spinner"), "运行中要有转圈标识");
 
   const stats = [...status.querySelectorAll(".run-stat")].map((el) => el.textContent);
-  assert.deepEqual(stats, ["首 1.3s", "流 113 tok/s", "均 52.5 tok/s"]);
+  assert.deepEqual(stats, ["首 1.3s", "总 1.7s", "流 113 tok/s", "均 53 tok/s"]);
   assert.ok(status.querySelector(".run-stat--ttft")?.getAttribute("title")?.includes("首 token"));
 });
 
@@ -780,7 +780,7 @@ test("跑完后指标仍保留，状态行文字还在", () => {
   const status = root.querySelector(".run-status")!;
   assert.equal(status.getAttribute("data-status"), "finished");
   assert.equal(status.querySelector(".run-spinner"), null, "结束后不再转圈");
-  assert.equal(status.querySelectorAll(".run-stat").length, 3, "指标不随结束消失");
+  assert.equal(status.querySelectorAll(".run-stat").length, 3, "指标不随结束消失（这组夹具没有总耗时）");
 });
 
 test("没有指标时不挤出空标签", () => {
