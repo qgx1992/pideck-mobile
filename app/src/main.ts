@@ -65,6 +65,25 @@ import {
   normalizeSkills,
 } from "./ui/settings-model.ts";
 import type { DshPluginRow, ExtensionRow, ModelRow, SkillSection } from "./ui/settings-model.ts";
+import {
+  goalPhaseLabel,
+  goalRoundsText,
+  parseDshGoal,
+  parseDshSkills,
+  parseDshSubagentHistory,
+  parseDshSubagents,
+  DSH_EMPTY_GOAL,
+  DSH_EMPTY_SKILLS,
+  DSH_EMPTY_SUBAGENTS,
+} from "./ui/dsh-tools-model.ts";
+import {
+  parseSecurityState,
+  securityChipLabel,
+  securityChoices,
+  securityDisabledHint,
+  securityLevelFor,
+  composerToolChips,
+} from "./ui/security-level-model.ts";
 import { emptyStateSubtitle, emptyStateTitle, suggestionContext, suggestionsFor } from "./ui/empty-suggestions.ts";
 import {
   filterPromptEntries,
@@ -724,6 +743,10 @@ interface MainRefs {
   primaryBtn: HTMLButtonElement;
   modelBtn: HTMLButtonElement;
   thinkingBtn: HTMLButtonElement;
+  /** 安全级别 chip（只有 pi 会话 + 桌面端 0.9.9+ 才显示） */
+  securityBtn: HTMLButtonElement;
+  /** DSH 工具面板入口（只有 dsh 会话才显示） */
+  dshBtn: HTMLButtonElement;
   /** 上下文用量：有数据才显示 */
   contextBtn: HTMLButtonElement;
   contextRing: HTMLElement;
@@ -814,6 +837,20 @@ function renderMain(): void {
   const slashBtn = h("button", { class: "chip chip--icon", text: "/", title: "斜线命令" });
   const modelBtn = h("button", { class: "chip", text: "模型", title: "选择模型" });
   const thinkingBtn = h("button", { class: "chip", text: "思考", title: "选择思考档位" });
+  // 安全级别（pi 会话的会话级工具权限）：只有桌面端 0.9.9+ 下发 state.security 时才出现
+  const securityBtn = h("button", {
+    class: "chip is-hidden",
+    text: "安全",
+    title: "选择本会话的安全级别",
+    "aria-label": "安全级别",
+  });
+  // DSH 会话的工具面板入口（目标 / 子代理 / 技能）；pi 会话不显示
+  const dshBtn = h("button", {
+    class: "chip is-hidden",
+    text: "DSH",
+    title: "DSH 工具：目标 / 子代理 / 技能",
+    "aria-label": "DSH 工具",
+  });
   const contextRing = h("span", { class: "ctx-ring" });
   const contextText = h("span", { class: "ctx-text", text: "上下文" });
   const contextBtn = h(
@@ -856,7 +893,7 @@ function renderMain(): void {
   const composerInput = h("div", { class: "composer-input" }, [composer, inputTools, fabs]);
   /** 待发送的图片缩略图（有图才占位） */
   const attachmentsEl = h("div", { class: "composer-attachments is-hidden" });
-  const chips = h("div", { class: "composer-chips" }, [modelBtn, thinkingBtn, contextBtn]);
+  const chips = h("div", { class: "composer-chips" }, [modelBtn, thinkingBtn, securityBtn, dshBtn, contextBtn]);
   const todoStrip = createTodoStrip();
   const subagentStrip = createSubagentStrip();
   // 记住用户手动折叠的选择（优先于「有进行中就自动展开」）
@@ -911,6 +948,8 @@ function renderMain(): void {
     primaryBtn,
     modelBtn,
     thinkingBtn,
+  securityBtn,
+  dshBtn,
     contextBtn,
     contextRing,
     contextText,
@@ -1016,6 +1055,8 @@ function renderMain(): void {
   slashBtn.addEventListener("click", () => void openSlashSheet());
   modelBtn.addEventListener("click", () => void openModelSheet());
   thinkingBtn.addEventListener("click", () => void openThinkingSheet());
+  securityBtn.addEventListener("click", () => void openSecuritySheet());
+  dshBtn.addEventListener("click", () => void openDshToolsSheet());
   contextBtn.addEventListener("click", () => openContextSheet());
   // 一个按钮两种行为：运行中=停止，否则=发送
   primaryBtn.addEventListener("click", () => {
@@ -1566,6 +1607,22 @@ function renderComposerState(): void {
   refs.thinkingBtn.textContent = level ? `思考 ${thinkingLabel(level)}` : "思考";
   refs.thinkingBtn.title = level ? `思考档位：${level}（${thinkingHint(level)}）` : "选择思考档位";
   refs.thinkingBtn.classList.toggle("chip--muted", !level);
+
+  // 安全级别：0.9.9 才下发 state.security；dsh/acp 会话改不了（服务端 400），入口直接不显示
+  const securityState = parseSecurityState(runtime.store.state.security);
+  const showSecurity = composerToolChips(session?.backend, securityState, activeSessionId !== null).security;
+  refs.securityBtn.classList.toggle("is-hidden", !showSecurity);
+  if (showSecurity && securityState) {
+    const { level: securityLevel, inherited } = securityLevelFor(securityState, activeSessionId);
+    refs.securityBtn.textContent = securityChipLabel(securityLevel);
+    refs.securityBtn.title = securityLevel
+      ? `安全级别：${securityLevel.name}${inherited ? "（全局默认）" : "（本会话）"}${securityState.enabled ? "" : " · 已关闭切换"}`
+      : "选择本会话的安全级别";
+    refs.securityBtn.classList.toggle("chip--muted", !securityLevel);
+  }
+
+  // DSH 会话才有目标/子代理/技能面板
+  refs.dshBtn.classList.toggle("is-hidden", !composerToolChips(session?.backend, securityState, activeSessionId !== null).dsh);
 
   // 运行中 + 输入框有东西（文字或图片）时，才在「历史」左侧出现「排队 / 插话」
   const running = isRunActive();
@@ -3803,6 +3860,186 @@ function currentModelOption(sections: ModelPickerSection[]) {
   return findModel(sections, session?.model?.provider, session?.model?.modelId);
 }
 
+/**
+ * 会话安全级别选择（桌面端 0.9.9 的 SecurityLevelMenu）。
+ *
+ * 第一项固定是「跟随全局默认」—— 否则用户切了覆盖就找不到撤销入口。
+ * `state.security.enabled === false` 时仍可看列表，但不提交（与桌面端置灰一致）。
+ */
+function openSecuritySheet(): void {
+  if (!runtime || !activeSessionId) {
+    toast("先选一个会话");
+    return;
+  }
+  const sessionId = activeSessionId;
+  const state = parseSecurityState(runtime.store.state.security);
+  const choices = securityChoices(state, sessionId);
+  const hint = securityDisabledHint(state);
+
+  openSheet("安全级别", (sheet) => {
+    if (hint) sheet.append(h("p", { class: "sheet-note", text: hint }));
+    if (choices.length === 0) {
+      sheet.append(h("p", { class: "sheet-note", text: "没有可用的安全级别" }));
+      return;
+    }
+    for (const choice of choices) {
+      const disabled = state !== null && !state.enabled;
+      sheet.append(
+        h(
+          "button",
+          {
+            class: `sheet-item sheet-item--two${choice.active ? " is-active" : ""}${disabled ? " is-disabled" : ""}`,
+            onclick: disabled ? undefined : () => void applySecurityLevel(choice.id),
+          },
+          [
+            h("span", { class: "conn-name", text: choice.active ? `✓ ${choice.label}` : choice.label }),
+            h("span", { class: "conn-url", text: choice.description }),
+          ],
+        ),
+      );
+    }
+  });
+}
+
+async function applySecurityLevel(levelId: string | null): Promise<void> {
+  if (!runtime || !activeSessionId) return;
+  const sessionId = activeSessionId;
+  closeSheet();
+  try {
+    await runtime.client.setSessionSecurityLevel(sessionId, levelId);
+    await runtime.store.refresh();
+    renderComposerState();
+    const name = levelId
+      ? (parseSecurityState(runtime.store.state.security)?.levels.find((level) => level.id === levelId)?.name ?? levelId)
+      : null;
+    toast(name ? `本会话安全级别：${name}` : "已恢复跟随全局默认");
+  } catch (error) {
+    toast("切换安全级别失败：" + describeError(error));
+  }
+}
+
+/**
+ * DSH 会话的工具面板（目标 / 子代理 / 技能）。
+ *
+ * 服务端在没有活跃 runtime 时直接回空集合，所以「空」要当作正常状态提示。
+ */
+async function openDshToolsSheet(): Promise<void> {
+  if (!runtime || !activeSessionId) return;
+  const client = runtime.client;
+  const sessionId = activeSessionId;
+
+  openSheet("DSH 工具", (sheet) => {
+    sheet.append(h("p", { class: "sheet-note", text: "加载中…" }));
+  });
+
+  const [goal, subs, skills] = await Promise.allSettled([
+    client.getDshGoal(sessionId),
+    client.getDshSubagents(sessionId),
+    client.getDshSkills(sessionId),
+  ]);
+  // 加载期间用户可能切了会话或关了面板，别把陈数据画到别的会话上
+  if (activeSessionId !== sessionId) return;
+
+  const goalView = goal.status === "fulfilled" ? parseDshGoal(goal.value) : null;
+  const subagentRows = subs.status === "fulfilled" ? parseDshSubagents(subs.value) : [];
+  const skillRows = skills.status === "fulfilled" ? parseDshSkills(skills.value) : [];
+  const failure = [goal, subs, skills].find((result) => result.status === "rejected");
+
+  openSheet("DSH 工具", (sheet) => {
+    if (failure && failure.status === "rejected") {
+      sheet.append(h("p", { class: "sheet-note", text: `读取失败：${describeError(failure.reason)}` }));
+    }
+
+    sheet.append(h("div", { class: "sheet-group", text: "目标" }));
+    if (!goalView) {
+      sheet.append(h("p", { class: "sheet-note", text: DSH_EMPTY_GOAL }));
+    } else {
+      const meta = [goalPhaseLabel(goalView.phase), goalRoundsText(goalView)].filter(Boolean).join(" · ");
+      sheet.append(
+        h("div", { class: "sheet-item sheet-item--two" }, [
+          h("span", { class: "conn-name", text: goalView.objective }),
+          h("span", { class: "conn-url", text: meta }),
+        ]),
+      );
+    }
+
+    sheet.append(h("div", { class: "sheet-group", text: `子代理（${subagentRows.length}）` }));
+    if (subagentRows.length === 0) {
+      sheet.append(h("p", { class: "sheet-note", text: DSH_EMPTY_SUBAGENTS }));
+    } else {
+      for (const subagent of subagentRows) {
+        const meta = [subagent.running ? "运行中" : "空闲", subagent.diagnostic ? "诊断" : "", subagent.modeLabel]
+          .filter(Boolean)
+          .join(" · ");
+        sheet.append(
+          h(
+            "button",
+            {
+              class: "sheet-item sheet-item--two",
+              onclick: () => void openDshSubagentHistory(sessionId, subagent.id, subagent.label),
+            },
+            [h("span", { class: "conn-name", text: subagent.label }), h("span", { class: "conn-url", text: meta })],
+          ),
+        );
+      }
+    }
+
+    sheet.append(h("div", { class: "sheet-group", text: `技能（${skillRows.length}）` }));
+    if (skillRows.length === 0) {
+      sheet.append(h("p", { class: "sheet-note", text: DSH_EMPTY_SKILLS }));
+    } else {
+      for (const skill of skillRows) {
+        const describe = [skill.description, skill.modelInvocable ? "" : "仅用户可调", skill.whenToUse]
+          .filter(Boolean)
+          .join(" · ");
+        sheet.append(
+          h("div", { class: "sheet-item sheet-item--two" }, [
+            h("span", { class: "conn-name", text: `/${skill.name}` }),
+            h("span", { class: "conn-url", text: describe }),
+          ]),
+        );
+      }
+    }
+  });
+}
+
+/** 子代理的历史消息（只读，按角色区分前缀）。 */
+async function openDshSubagentHistory(sessionId: string, childSessionId: string, label: string): Promise<void> {
+  if (!runtime) return;
+  const client = runtime.client;
+  openSheet(label, (sheet) => {
+    sheet.append(h("p", { class: "sheet-note", text: "加载中…" }));
+  });
+
+  let lines: Array<{ role: string; text: string }> = [];
+  let error = "";
+  try {
+    lines = parseDshSubagentHistory(await client.getDshSubagentHistory(sessionId, childSessionId));
+  } catch (error_) {
+    error = describeError(error_);
+  }
+
+  openSheet(label, (sheet) => {
+    if (error) {
+      sheet.append(h("p", { class: "sheet-note", text: `读取失败：${error}` }));
+      return;
+    }
+    if (lines.length === 0) {
+      sheet.append(h("p", { class: "sheet-note", text: "这个子代理还没有历史消息" }));
+      return;
+    }
+    for (const line of lines) {
+      const role = line.role === "user" ? "我" : line.role === "assistant" ? "子代理" : line.role;
+      sheet.append(
+        h("div", { class: "sheet-item sheet-item--two" }, [
+          h("span", { class: "conn-name", text: role }),
+          h("span", { class: "conn-url", text: line.text }),
+        ]),
+      );
+    }
+  });
+}
+
 async function openModelSheet(): Promise<void> {
   if (!runtime) return;
   const sessionId = activeSessionId;
@@ -4296,6 +4533,8 @@ let settingsModels: ModelRow[] = [];
 let settingsSkills: SkillSection[] = [];
 let settingsExtensions: ExtensionRow[] = [];
 let settingsDshPlugins: DshPluginRow[] = [];
+/** DSH 插件清单的单独错误（桌面端 /api/dsh/plugins 会 500，不能拖黑整页） */
+let settingsDshError: string | undefined;
 let settingsLoading = false;
 let settingsError: string | undefined;
 
@@ -4408,6 +4647,7 @@ function settingsData(): SettingsData {
     extensions: settingsExtensions,
     dshPlugins: settingsDshPlugins,
     loading: settingsLoading,
+    ...(settingsDshError ? { dshError: settingsDshError } : {}),
     ...(settingsError ? { loadError: settingsError } : {}),
   };
 }
@@ -4441,6 +4681,10 @@ async function refreshSettings(): Promise<void> {
   settingsSkills = skills.status === "fulfilled" ? normalizeSkills(skills.value) : [];
   settingsExtensions = extensions.status === "fulfilled" ? normalizeExtensions(extensions.value) : [];
   settingsDshPlugins = plugins.status === "fulfilled" ? normalizeDshPlugins(plugins.value) : [];
+  settingsDshError =
+    plugins.status === "rejected"
+      ? `DSH 插件清单读取失败：${describeError(plugins.reason)}`
+      : undefined;
 
   const failures = [models, skills, extensions].filter((result) => result.status === "rejected");
   const firstFailure = failures[0];
@@ -4534,6 +4778,46 @@ function openSettings(): void {
       openContextSheet();
     },
     onRefresh: () => void refreshSettings(),
+    onDshPluginAction: (plugin: DshPluginRow, action: "run" | "stop" | "uninstall") => {
+      void (async () => {
+        if (!runtime) return;
+        const target = dshSession();
+        if (!target) {
+          toast("先在手机上打开一个 DSH 会话");
+          return;
+        }
+        try {
+          await runtime.client.dshPluginAction(plugin.id, action, {
+            sessionId: target.id,
+            ...(plugin.packageId ? { packageId: plugin.packageId } : {}),
+          });
+          toast(
+            action === "run" ? `已启动 ${plugin.name}` : action === "stop" ? `已停止 ${plugin.name}` : `已卸载 ${plugin.name}`,
+          );
+          void refreshSettings();
+        } catch (error) {
+          toast(`${action === "run" ? "启动" : action === "stop" ? "停止" : "卸载"}失败：${describeError(error)}`);
+        }
+      })();
+    },
+    onDshPluginInstall: (input: { idPrefix: string; name: string; purpose: string }) => {
+      void (async () => {
+        if (!runtime) return;
+        const target = dshSession();
+        if (!target) {
+          toast("先在手机上打开一个 DSH 会话");
+          return;
+        }
+        try {
+          await runtime.client.installDshPlugin({ sessionId: target.id, ...input });
+          toast(`已安装 ${input.name}`);
+          void refreshSettings();
+        } catch (error) {
+          toast("安装失败：" + describeError(error));
+        }
+      })();
+    },
+    dshTargetLabel: () => dshSession()?.label ?? "",
   });
 
   settingsPage = page;
@@ -4545,6 +4829,32 @@ function openSettings(): void {
 function closeSettings(): void {
   settingsPage?.destroy();
   settingsPage = null;
+}
+
+/**
+ * 当前可用于 DSH 插件操作的会话。
+ *
+ * 插件启停/安装都要求带 sessionId（每个 DSH host 一份清单），优先用当前打开的会话，
+ * 其次拿状态里第一个 DSH 会话 —— 用户在聊天页没开 DSH 会话时也能在设置里管理。
+ */
+function dshSession(): { id: string; label: string } | null {
+  if (!runtime) return null;
+  const sessions = runtime.store.state.sessions;
+  const asDsh = (id: string | null | undefined): { id: string; label: string } | null => {
+    if (!id) return null;
+    const session = sessions.find((item) => item.id === id);
+    if (!session) return null;
+    if (String(session.backend ?? "").trim().toLowerCase() !== "dsh") return null;
+    return { id: session.id, label: `会话「${session.title}」` };
+  };
+  const active = asDsh(activeSessionId);
+  if (active) return active;
+  for (const session of sessions) {
+    if (String(session.backend ?? "").trim().toLowerCase() === "dsh") {
+      return { id: session.id, label: `会话「${session.title}」` };
+    }
+  }
+  return null;
 }
 
 function openSheet(title: string, build: (sheet: HTMLElement) => void): void {

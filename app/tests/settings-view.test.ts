@@ -74,6 +74,9 @@ function makePage() {
     onToggleExtension: (_extension, next) => calls.push(`ext:${next}`),
     onOpenUsage: () => calls.push("usage"),
     onRefresh: () => calls.push("refresh"),
+    onDshPluginAction: (plugin, action) => calls.push(`dsh:${plugin.id}:${action}`),
+    onDshPluginInstall: (input) => calls.push(`dshInstall:${input.idPrefix}:${input.name}`),
+    dshTargetLabel: () => "会话「DSH 测试」",
   });
   return { page, calls };
 }
@@ -82,7 +85,7 @@ test("五个分区都在", () => {
   const { page } = makePage();
   page.update(baseData() as never);
   const titles = [...page.el.querySelectorAll(".settings-section-title")].map((el) => el.textContent);
-  assert.deepEqual(titles, ["外观", "通知", "连接与设备（2）", "pi 概况", "技能", "扩展", "关于"]);
+  assert.deepEqual(titles, ["外观", "通知", "连接与设备（2）", "pi 概况", "技能", "扩展", "DSH 插件", "关于"]);
   page.destroy();
 });
 
@@ -199,4 +202,65 @@ test("返回按钮与销毁", () => {
   assert.deepEqual(calls, ["close"]);
   page.destroy();
   assert.equal(dom.window.document.querySelector(".settings-page"), null);
+});
+
+test("DSH 插件：动态插件能启停，卸载要点两次", () => {
+  const { page, calls } = makePage();
+  page.update(
+    baseData({
+      dshPlugins: [
+        { id: "note-abc", name: "note", version: "", running: true, description: "配笔记", kind: "dynamic", packageId: "pkg-1", status: "running" },
+        { id: "row-1", name: "dsh-todo", version: "", running: true, description: "随包内置", kind: "static", packageId: "", status: "running" },
+      ],
+    }) as never,
+  );
+
+  const rows = [...page.el.querySelectorAll(".settings-row--stacked")] as unknown as HTMLElement[];
+  assert.equal(rows.length, 2);
+
+  const dynamicButtons = [...rows[0]!.querySelectorAll(".settings-mini-btn")] as unknown as HTMLElement[];
+  assert.deepEqual(dynamicButtons.map((el) => el.textContent), ["停止", "卸载"]);
+
+  dynamicButtons[0]!.click();
+  assert.deepEqual(calls, ["dsh:note-abc:stop"], "运行中点的是停止");
+
+  // 卸载要两次：第一次只换文案
+  dynamicButtons[1]!.click();
+  assert.deepEqual(calls, ["dsh:note-abc:stop"]);
+  assert.equal(dynamicButtons[1]!.textContent, "确认卸载");
+  dynamicButtons[1]!.click();
+  assert.deepEqual(calls, ["dsh:note-abc:stop", "dsh:note-abc:uninstall"]);
+
+  // 静态条目只读：一个按钮都没有
+  assert.equal(rows[1]!.querySelectorAll(".settings-mini-btn").length, 0);
+  page.destroy();
+});
+
+test("DSH 插件：安装表单校验 ID 前缀", () => {
+  const { page, calls } = makePage();
+  page.update(baseData() as never);
+
+  const form = page.el.querySelector(".settings-install") as unknown as HTMLElement;
+  assert.equal(form.classList.contains("is-hidden"), true, "默认收起");
+
+  const installRow = [...page.el.querySelectorAll(".settings-row--action")].find((el) =>
+    (el.textContent ?? "").includes("安装插件"),
+  ) as unknown as HTMLElement;
+  installRow.click();
+  assert.equal(form.classList.contains("is-hidden"), false);
+
+  const inputs = [...form.querySelectorAll(".settings-input")] as unknown as HTMLInputElement[];
+  const submit = [...form.querySelectorAll(".settings-mini-btn")].find((el) => el.textContent === "安装") as unknown as HTMLElement;
+  const note = form.querySelector(".settings-install-note") as unknown as HTMLElement;
+
+  inputs[0]!.value = "no";
+  inputs[1]!.value = "笔记";
+  submit.click();
+  assert.deepEqual(calls, [], "前缀不合法不该提交");
+  assert.match(note.textContent ?? "", /3-6 个小写字母/);
+
+  inputs[0]!.value = "note";
+  submit.click();
+  assert.deepEqual(calls, ["dshInstall:note:笔记"]);
+  page.destroy();
 });

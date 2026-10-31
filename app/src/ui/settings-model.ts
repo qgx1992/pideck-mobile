@@ -46,6 +46,12 @@ export interface DshPluginRow {
   version: string;
   running: boolean;
   description: string;
+  /** dynamic = 动态 Cordis 插件（可启停/卸载）；static = 静态 Loader 条目（只读） */
+  kind: "dynamic" | "static";
+  /** 归属 DSH host 的 agentId（dynamic 才有，启停/卸载时服务端自己按 sessionId 找，这里仅作展示） */
+  packageId: string;
+  /** 服务端给的原始状态文案（running/stopped/error/...） */
+  status: string;
 }
 
 export interface ModelRow {
@@ -159,21 +165,70 @@ export function applyExtensionToggle(rows: ExtensionRow[], key: string, enabled:
 }
 
 /** DSH 插件列表（形状未在文档里固定，宽松取）。 */
+/**
+ * `/api/dsh/plugins` → 平铺的行。
+ *
+ * 0.9.9 起服务端回 `{ dynamic: [...], static: [...] }`（WebApiRoutes.ts 的 dsh/plugins 分支）：
+ *   dynamic[i] = { pluginId, agentId, packages: [{packageId,name,purpose,...}], currentPackageId?, activeRun?, status? }
+ *   static[i]  = { entryId, moduleName, enabled, fiberPhase, origin? }
+ * 更早的版本只有一个 `plugins` 平铺数组，同样兼容。
+ */
 export function normalizeDshPlugins(raw: unknown): DshPluginRow[] {
+  const payload = asRecord(raw);
+  const dynamic = Array.isArray(raw) ? [] : asArray(payload.dynamic);
+  const statics = Array.isArray(raw) ? [] : asArray(payload.static);
+  const legacy = Array.isArray(raw) ? raw : asArray(payload.plugins);
+
   const rows: DshPluginRow[] = [];
-  for (const item of asArray(raw)) {
+  for (const item of [...dynamic, ...legacy]) {
     const record = asRecord(item);
-    const id = str(record.id) || str(record.name);
+    const packages = asArray(record.packages).map(asRecord);
+    const current = str(record.currentPackageId).trim();
+    const currentPackage = packages.find((pkg) => str(pkg.packageId) === current) ?? packages[0];
+    const id = str(record.pluginId).trim() || str(record.id).trim() || str(record.name).trim();
     if (!id) continue;
+    const status = str(record.status).trim();
     rows.push({
       id,
-      name: str(record.name) || id,
-      version: str(record.version),
-      running: record.running === true || str(record.status) === "running",
-      description: str(record.description).trim(),
+      name: str(currentPackage?.name).trim() || str(record.name).trim() || id,
+      version: str(record.version).trim(),
+      running: record.activeRun != null || record.running === true || status === "running",
+      description:
+        str(currentPackage?.purpose).trim() ||
+        str(record.purpose).trim() ||
+        str(record.description).trim() ||
+        str(record.error).trim(),
+      kind: "dynamic",
+      packageId: current || str(currentPackage?.packageId).trim(),
+      status,
+    });
+  }
+
+  for (const item of statics) {
+    const record = asRecord(item);
+    const id = str(record.entryId).trim() || str(record.id).trim();
+    if (!id) continue;
+    const origin = str(record.origin).trim();
+    const phase = str(record.fiberPhase).trim();
+    rows.push({
+      id,
+      name: str(record.moduleName).trim() || id,
+      version: "",
+      running: record.enabled === true,
+      description: [origin === "user" ? "用户自装" : origin === "builtin" ? "随包内置" : "", phase]
+        .filter(Boolean)
+        .join(" · "),
+      kind: "static",
+      packageId: "",
+      status: record.enabled === true ? "running" : "stopped",
     });
   }
   return rows;
+}
+
+/** 只有动态插件能启停/卸载（静态条目没有对应的 Web 路由）。 */
+export function dshPluginActionable(row: DshPluginRow): boolean {
+  return row.kind === "dynamic";
 }
 
 /** 模型列表 → 设置页里「pi 概况」的只读行。 */

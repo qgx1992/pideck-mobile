@@ -96,6 +96,20 @@ export interface PiDeckState {
   sessions: SessionSummary[];
   runtimes: RuntimeInfo[];
   pendingUiRequests: PendingUiRequest[];
+  /** 0.9.9 起的工具调用快照（桌面端 ACP 工具面板用）；手机端暂不展示，但别丢字段 */
+  acpTools?: unknown[];
+  /** 0.9.9 起的安全级别投影：只有等级选择需要的字段，没有工具规则/正则 */
+  security?: WebSecurityState;
+}
+
+/** `/api/state` 的 `security` 字段（只下发等级选择所需的信息）。 */
+export interface WebSecurityState {
+  /** 总开关：false 时菜单只展示、不可切换（与桌面端置灰语义一致） */
+  enabled: boolean;
+  defaultLevelId: string;
+  levels: Array<{ id: string; name: string; description?: string; builtin?: boolean }>;
+  /** 会话级覆盖：sessionId → levelId（未覆盖的会话不出现） */
+  sessionOverrides: Record<string, string>;
 }
 
 /** 单条消息。结构与 renderer 的会话读取器同源，此处按“可渲染载荷”宽泛描述。 */

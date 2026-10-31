@@ -12,6 +12,7 @@ const {
   DESKTOP_ONLY_NOTE,
   applyExtensionToggle,
   applySkillToggle,
+  dshPluginActionable,
   maskToken,
   normalizeDshPlugins,
   normalizeExtensions,
@@ -109,6 +110,41 @@ test("DSH 插件：宽松解析，status=running 也算运行中", () => {
   assert.equal(rows[0]!.running, true);
   assert.equal(rows[1]!.running, true);
   assert.deepEqual(normalizeDshPlugins(null), []);
+});
+
+test("DSH 插件：0.9.9 的 {dynamic, static} 两段都要读出来", () => {
+  const rows = normalizeDshPlugins({
+    dynamic: [
+      {
+        pluginId: "note-abc",
+        agentId: "agent-1",
+        packages: [{ packageId: "pkg-1", name: "note", purpose: "配笔记用" }],
+        currentPackageId: "pkg-1",
+        activeRun: { pluginRunId: "r1", packageId: "pkg-1" },
+        status: "running",
+      },
+      { pluginId: "idle-one", packages: [{ packageId: "pkg-2", name: "idle", purpose: "没事干" }], status: "stopped" },
+    ],
+    static: [
+      { entryId: "row-1", moduleName: "dsh-todo", enabled: true, fiberPhase: "active", origin: "builtin" },
+      { entryId: "row-2", moduleName: "my-plugin", enabled: false, fiberPhase: null, origin: "user" },
+    ],
+  });
+
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.map((row) => row.kind), ["dynamic", "dynamic", "static", "static"]);
+  assert.equal(rows[0]!.id, "note-abc");
+  assert.equal(rows[0]!.name, "note", "名字取当前 package 的 name");
+  assert.equal(rows[0]!.running, true);
+  assert.equal(rows[0]!.description, "配笔记用");
+  assert.equal(rows[0]!.packageId, "pkg-1");
+  assert.equal(rows[1]!.running, false);
+  assert.equal(rows[2]!.running, true);
+  assert.match(rows[2]!.description, /随包内置/);
+  assert.match(rows[3]!.description, /用户自装/);
+  assert.equal(rows[3]!.running, false);
+  // 只有动态插件可操作（静态条目没有对应的 Web 路由）
+  assert.deepEqual(rows.map(dshPluginActionable), [true, true, false, false]);
 });
 
 test("模型列表：provider + modelId 组成 key", () => {

@@ -32,6 +32,7 @@ import type {
   SessionSummary,
   CommandInfo,
   FileNode,
+  WebSecurityState,
   WireMessage,
 } from "../types.ts";
 
@@ -83,6 +84,17 @@ export interface FileContentResult {
   content: string;
   /** 文件真实字节数（服务端给的 size） */
   size: number;
+}
+
+/**
+ * `/api/dsh/plugins` 的两段清单。
+ *
+ * dynamic = 动态 Cordis 插件（可 run/stop/uninstall），static = 静态 Loader 条目（只读）。
+ * 元素结构由服务端决定，这里保持 unknown，交给 `settings-model.normalizeDshPlugins` 收敛。
+ */
+export interface DshPluginList {
+  dynamic: unknown[];
+  static: unknown[];
 }
 
 export interface SseOptions {
@@ -811,10 +823,107 @@ export class PiDeckClient {
     });
   }
 
-  /** DSH 后端插件（只读列表：安装/卸载需要来源信息，手机上不做）。 */
-  async listDshPlugins(): Promise<unknown> {
-    const response = await this.requestJson<{ plugins?: unknown }>("/api/dsh/plugins");
-    return response.plugins ?? [];
+  /**
+   * DSH 插件清单。
+   *
+   * 0.9.9 起服务端返回 `{ dynamic, static }` 两段（动态 Cordis 插件 / 静态 Loader 条目），
+   * 更早的版本只有一个平铺的 `plugins` 数组 —— 两种都接住，避免「列表永远是空的」。
+   * 手机上安装走 ID 生成（idPrefix/name/purpose），卸载/启停只对 dynamic 有效。
+   */
+  async listDshPlugins(): Promise<DshPluginList> {
+    const response = await this.requestJson<{ dynamic?: unknown; static?: unknown; plugins?: unknown }>("/api/dsh/plugins");
+    const dynamic = Array.isArray(response.dynamic) ? response.dynamic : [];
+    const statics = Array.isArray(response.static) ? response.static : [];
+    if (dynamic.length === 0 && statics.length === 0 && Array.isArray(response.plugins)) {
+      return { dynamic: response.plugins, static: [] };
+    }
+    return { dynamic, static: statics };
+  }
+
+  /**
+   * 启停 / 卸载一个 DSH 插件。
+   *
+   * 服务端要求带 `sessionId`（不同会话有各自的 host），`packageId` 缺省时由 host 选当前包。
+   * 只有动态插件（DshPluginView.pluginId）能走这三个动作；静态条目没有对应 Web 路由。
+   */
+  async dshPluginAction(
+    pluginId: string,
+    action: "run" | "stop" | "uninstall",
+    input: { sessionId: string; packageId?: string },
+  ): Promise<unknown> {
+    const response = await this.requestJson<{ value?: unknown }>(
+      `/api/dsh/plugins/${encodeURIComponent(pluginId)}/${action}`,
+      {
+        method: "POST",
+        body: { sessionId: input.sessionId, ...(input.packageId ? { packageId: input.packageId } : {}) },
+      },
+    );
+    return response.value;
+  }
+
+  /** 安装（define）一个 DSH 动态插件；pluginId 由 host 分配。 */
+  async installDshPlugin(input: {
+    sessionId: string;
+    idPrefix: string;
+    name: string;
+    purpose: string;
+    hostCode?: string;
+    clientCode?: string;
+  }): Promise<unknown> {
+    const response = await this.requestJson<{ receipt?: unknown }>("/api/dsh/plugins/install", {
+      method: "POST",
+      body: {
+        sessionId: input.sessionId,
+        idPrefix: input.idPrefix,
+        name: input.name,
+        purpose: input.purpose,
+        ...(input.hostCode ? { hostCode: input.hostCode } : {}),
+        ...(input.clientCode ? { clientCode: input.clientCode } : {}),
+      },
+    });
+    return response.receipt;
+  }
+
+  /**
+   * DSH 会话的工具面板（PiDeck 0.9.9 起）：目标 / 子代理 / 技能。
+   *
+   * 三个接口在没有活跃 runtime 时返回空集合而不是报错，所以「空」是正常态。
+   */
+  async getDshGoal(sessionId: string): Promise<unknown> {
+    return this.requestJson<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/dsh/goal`);
+  }
+
+  async getDshSubagents(sessionId: string): Promise<unknown> {
+    return this.requestJson<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/dsh/subagents`);
+  }
+
+  async getDshSkills(sessionId: string): Promise<unknown> {
+    return this.requestJson<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/dsh/skills`);
+  }
+
+  /** 单个子代理的历史消息（分页：beforeSeq 往前翻，maxMessages 限条数）。 */
+  async getDshSubagentHistory(
+    sessionId: string,
+    childSessionId: string,
+    options: { beforeSeq?: number; maxMessages?: number } = {},
+  ): Promise<unknown> {
+    return this.requestJson<unknown>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/dsh/subagents/${encodeURIComponent(childSessionId)}/history`,
+      { query: { ...(options.beforeSeq ? { beforeSeq: options.beforeSeq } : {}), ...(options.maxMessages ? { maxMessages: options.maxMessages } : {}) } },
+    );
+  }
+
+  /**
+   * 会话级安全级别（PiDeck 0.9.9 起）。
+   *
+   * `levelId = null` 表示清除本会话覆盖、跟随全局默认（空串同义）。
+   * 仅 pi 会话可设；dsh / acp 服务端返回 400 `securityUnsupportedBackend`。
+   */
+  async setSessionSecurityLevel(sessionId: string, levelId: string | null): Promise<void> {
+    await this.requestJson<{ ok?: boolean; security?: unknown }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/security-level`,
+      { method: "POST", body: { levelId } },
+    );
   }
 }
 
@@ -835,6 +944,12 @@ export function normalizeState(raw: unknown): PiDeckState {
     sessions: asArray<SessionSummary>(record.sessions),
     runtimes: asArray<PiDeckState["runtimes"][number]>(record.runtimes),
     pendingUiRequests: asArray<PendingUiRequest>(record.pendingUiRequests),
+    // security / acpTools 是 0.9.9 才有的字段，旧桌面端没有；有就透传（不裁剪），
+    // 否则安全级别的 chip 永远读不到 state。
+    ...(record.security && typeof record.security === "object"
+      ? { security: record.security as WebSecurityState }
+      : {}),
+    ...(Array.isArray(record.acpTools) ? { acpTools: record.acpTools } : {}),
   };
 }
 

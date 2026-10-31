@@ -84,6 +84,9 @@ g.localStorage.setItem(
   ["pideck", "pairing", "v1"].join("-"),
   JSON.stringify({ baseUrl, token, savedAt: Date.now() }),
 );
+// 侧栏默认分段已经是「活动」（扁平列表，没有 .project-head），这个烟测断言的是
+// 「聊天」分段的项目分组，固定切过去，否则一进来就等到超时。
+g.localStorage.setItem(["pideck", "ui", "sidebarTab", "v1"].join("-"), "projects");
 
 const entry = readdirSync(DIST_ASSETS).find((name) => /^index-.*\.js$/.test(name));
 if (!entry) {
@@ -166,9 +169,49 @@ const piSession = [...doc.querySelectorAll(".session")].find(
 if (piSession) {
   piSession.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   await waitFor(() => doc.querySelectorAll(".history .msg").length > 0, 6000);
-  const piChips = [...doc.querySelectorAll(".composer-chips .chip")].map((el) => el.textContent);
+  const visibleChips = () =>
+    [...doc.querySelectorAll(".composer-chips .chip")]
+      .filter((el) => !el.classList.contains("is-hidden"))
+      .map((el) => el.textContent);
+  // 安全级别面板：点 chip 能否列出「跟随全局 + 各等级」（只读检查，不真的切等级）
+  const securityChip = [...doc.querySelectorAll(".composer-chips .chip")].find((el) => (el.textContent ?? "").startsWith("安全"));
+  if (securityChip) {
+    securityChip.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 400));
+    const items = [...doc.querySelectorAll(".sheet-backdrop .sheet-item")];
+    console.log(`安全级别面板: 项=${items.length} 首项=${JSON.stringify(items[0]?.querySelector(".conn-name")?.textContent ?? items[0]?.textContent ?? "")}`);
+    doc.querySelector(".sheet-backdrop")?.remove();
+  }
+
+  const piChips = visibleChips();
+  const hasSecurity = piChips.some((text) => text.startsWith("安全"));
+  const hasDsh = piChips.includes("DSH");
   console.log(`
-pi 会话 chips: ${piChips.join(" | ")}`);
+pi 会话 chips: ${piChips.join(" | ")}
+  安全 chip=${hasSecurity ? "显示 OK" : "缺失 FAIL"}  DSH chip=${hasDsh ? "不该显示 FAIL" : "隐藏 OK"}`);
+
+  // DSH 会话：DSH chip 出现、安全 chip 隐藏（桌面端只给 pi 会话发安全级别）
+  const dshSession = [...doc.querySelectorAll(".session")].find((el) =>
+    (el.querySelector(".smeta")?.textContent ?? "").includes("dsh"),
+  );
+  if (dshSession) {
+    dshSession.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 600));
+    const dshChips = visibleChips();
+    console.log(`DSH 会话 chips: ${dshChips.join(" | ") || "(无)"}
+  DSH chip=${dshChips.includes("DSH") ? "显示 OK" : "缺失 FAIL"}  安全 chip=${dshChips.some((t) => t.startsWith("安全")) ? "不该显示 FAIL" : "隐藏 OK"}`);
+    // 点开「DSH」面板，看三段是否渲染（接口 500 时要给出人话提示而不是空白）
+    const dshBtn = [...doc.querySelectorAll(".composer-chips .chip")].find((el) => el.textContent === "DSH");
+    dshBtn?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 800));
+    const sheetText = doc.querySelector(".sheet-backdrop .sheet")?.textContent ?? "";
+    console.log(`  DSH 面板: ${sheetText ? sheetText.slice(0, 120).replace(/\s+/g, " ") : "没打开 FAIL"}`);
+    doc.querySelector(".sheet-backdrop")?.remove();
+    piSession.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 400));
+  } else {
+    console.log("  （当前列表里没有 dsh 会话，跳过 DSH chip 检查）");
+  }
 }
 
 // 验证「执行过程」折叠：历史里的工具/思考应被收进少数几个折叠块
@@ -255,12 +298,14 @@ if (wsBtn) {
 }
 
 // 跳转历史：点一条能否真的定位到 DOM
-const hasFab = doc.querySelector(".composer-fab") !== null;
-const fabInInput = Boolean(doc.querySelector(".composer-input .composer-fab"));
+// 注意：.composer-fabs 里「排队」按钮排在「历史」前面，必须显式排除
+const fabSel = ".composer-fab:not(.composer-fab--queue)";
+const hasFab = doc.querySelector(fabSel) !== null;
+const fabInInput = Boolean(doc.querySelector(".composer-input " + fabSel));
 console.log("");
 console.log(`历史按钮: ${hasFab ? "存在" : "缺失"}  在输入框内=${fabInInput}`);
 if (hasFab) {
-  doc.querySelector(".composer-fab").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  doc.querySelector(fabSel).dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   await new Promise((r) => setTimeout(r, 400));
   const head = doc.querySelector(".sheet-backdrop .sheet h2")?.textContent;
   const items = doc.querySelectorAll(".sheet-backdrop .jump-item").length;
@@ -280,8 +325,10 @@ if (hasFab) {
   doc.querySelector(".sheet-backdrop")?.remove();
 }
 
-// 检查 composer 上的模型 / 思考 chip 是否按会话渲染
-const chips = [...doc.querySelectorAll(".composer-chips .chip")].map((el) => el.textContent);
+// 检查 composer 上的模型 / 思考 chip 是否按会话渲染（隐藏的不算，否则看不出条件显示对不对）
+const chips = [...doc.querySelectorAll(".composer-chips .chip")]
+  .filter((el) => !el.classList.contains("is-hidden"))
+  .map((el) => el.textContent);
 console.log(`
 composer chips: ${chips.join(" | ") || "(无)"}`);
 
@@ -371,7 +418,9 @@ Markdown: 助手气泡=${bodies.length} 粗体=${strong} 代码块=${code} 行�
 inline tools: ${labels.join(" | ") || "(无)"}  在输入框内=${Boolean(inline)}`);
 
   const wrap = doc.querySelector(".composer-input");
-  const rowChips = [...doc.querySelectorAll(".composer-row .chip")].map((el) => el.textContent.trim());
+  const rowChips = [...doc.querySelectorAll(".composer-row .chip")]
+    .filter((el) => !el.classList.contains("is-hidden"))
+    .map((el) => el.textContent.trim());
   console.log(`composer-row chips: ${rowChips.join(" | ") || "(无)"}`);
 
   const ctxChip = doc.querySelector(".chip--ctx");
@@ -380,7 +429,7 @@ inline tools: ${labels.join(" | ") || "(无)"}  在输入框内=${Boolean(inline
   const ring = ctxChip?.querySelector(".ctx-ring");
   const pct = ring?.style.getPropertyValue("--ctx-pct") ?? "";
   console.log(`上下文 chip: 文本=${JSON.stringify(ctxText)} 隐藏=${ctxHidden} 环百分比=${pct || "(空)"} title=${ctxChip?.title ?? ""}`);
-  const fab = doc.querySelector(".composer-fab");
+  const fab = doc.querySelector(fabSel);
   console.log(`布局自检: 输入框包裹=${Boolean(wrap)} @在包裹内=${Boolean(wrap?.querySelector(".composer-inline-tools"))} 历史在包裹内=${Boolean(wrap?.querySelector(".composer-fab"))} 行内不再有@=${!rowChips.includes("@")} 历史文字=${JSON.stringify(fab?.textContent ?? "")}`);
 }
 

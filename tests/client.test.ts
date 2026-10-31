@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PiDeckClient, collectRun } from "../src/api/client.ts";
+import { PiDeckClient, collectRun, normalizeState } from "../src/api/client.ts";
 import { PiDeckAuthError, PiDeckHttpError, PiDeckOfflineError, PiDeckRuntimeError } from "../src/api/errors.ts";
 
 const BASE = "http://127.0.0.1:8765";
@@ -224,4 +224,85 @@ test("streamSse 每收到一个分片就回调 onActivity（用于检测连接�
     },
   });
   assert.equal(activity, 3, "三个分片应触发三次活动回调（含心跳）");
+});
+
+test("listDshPlugins：0.9.9 的 {dynamic, static} 两段都返回", async () => {
+  const { client } = clientWith(() =>
+    json({ dynamic: [{ pluginId: "p1" }], static: [{ entryId: "row-1" }] }),
+  );
+  const list = await client.listDshPlugins();
+  assert.deepEqual(list.dynamic, [{ pluginId: "p1" }]);
+  assert.deepEqual(list.static, [{ entryId: "row-1" }]);
+});
+
+test("listDshPlugins：旧版只有平铺 plugins 时也能读", async () => {
+  const { client } = clientWith(() => json({ plugins: [{ id: "old" }] }));
+  const list = await client.listDshPlugins();
+  assert.deepEqual(list.dynamic, [{ id: "old" }]);
+  assert.deepEqual(list.static, []);
+});
+
+test("DSH 工具面板三个只读接口的 URL", async () => {
+  const { client, calls } = clientWith(() => json({}));
+  await client.getDshGoal("s1");
+  await client.getDshSubagents("s1");
+  await client.getDshSkills("s1");
+  await client.getDshSubagentHistory("s1", "a b", { maxMessages: 20 });
+  assert.match(calls[0]!.url, /\/api\/sessions\/s1\/dsh\/goal\?token=/);
+  assert.match(calls[1]!.url, /\/api\/sessions\/s1\/dsh\/subagents\?token=/);
+  assert.match(calls[2]!.url, /\/api\/sessions\/s1\/dsh\/skills\?token=/);
+  assert.match(calls[3]!.url, /\/dsh\/subagents\/a%20b\/history\?/);
+  assert.match(calls[3]!.url, /maxMessages=20/);
+});
+
+test("DSH 插件启停/卸载：POST 到 /api/dsh/plugins/:id/:action，带 sessionId", async () => {
+  const { client, calls } = clientWith(() => json({ ok: true, value: { pluginRunId: "r1" } }));
+  const value = await client.dshPluginAction("note-abc", "run", { sessionId: "s1", packageId: "pkg-1" });
+  const call = calls[0]!;
+  assert.equal(call.url, `${BASE}/api/dsh/plugins/note-abc/run`);
+  assert.equal(call.init.method, "POST");
+  assert.deepEqual(JSON.parse(String(call.init.body)), { sessionId: "s1", packageId: "pkg-1" });
+  assert.deepEqual(value, { pluginRunId: "r1" });
+});
+
+test("DSH 插件安装：POST /api/dsh/plugins/install，缺 hostCode 时不发空字段", async () => {
+  const { client, calls } = clientWith(() => json({ receipt: { pluginId: "note-xyz" } }));
+  const receipt = await client.installDshPlugin({ sessionId: "s1", idPrefix: "note", name: "笔记", purpose: "记东西" });
+  assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), {
+    sessionId: "s1",
+    idPrefix: "note",
+    name: "笔记",
+    purpose: "记东西",
+  });
+  assert.deepEqual(receipt, { pluginId: "note-xyz" });
+});
+
+test("setSessionSecurityLevel：levelId=null 表示清除会话覆盖", async () => {
+  const { client, calls } = clientWith(() => json({ ok: true }));
+  await client.setSessionSecurityLevel("s1", "strict");
+  await client.setSessionSecurityLevel("s1", null);
+  assert.equal(calls[0]!.url, `${BASE}/api/sessions/s1/security-level`);
+  assert.equal(calls[0]!.init.method, "POST");
+  assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), { levelId: "strict" });
+  assert.deepEqual(JSON.parse(String(calls[1]!.init.body)), { levelId: null });
+});
+
+test("normalizeState 透传 security / acpTools（0.9.9 字段不能裁掉）", async () => {
+  const raw = {
+    projects: [],
+    sessions: [],
+    runtimes: [],
+    pendingUiRequests: [],
+    acpTools: [{ name: "t" }],
+    security: { enabled: true, defaultLevelId: "strict", levels: [{ id: "strict" }], sessionOverrides: { s1: "off" } },
+  };
+  const { client } = clientWith(() => json(raw));
+  const { state } = await client.getState();
+  assert.equal(state.security?.defaultLevelId, "strict");
+  assert.equal(state.security?.sessionOverrides.s1, "off");
+  assert.equal(state.acpTools?.length, 1);
+  // 旧桌面端没有这两个字段时不该凭空造出 undefined 以外的值
+  const legacy = normalizeState({ projects: [], sessions: [], runtimes: [], pendingUiRequests: [] });
+  assert.equal(legacy.security, undefined);
+  assert.equal(legacy.acpTools, undefined);
 });

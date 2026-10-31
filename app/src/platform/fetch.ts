@@ -1,12 +1,13 @@
 /**
  * 平台相关的 fetch 分流。
  *
- * 背景（均已对着 PiDeck 0.9.7 实测）：
+ * 背景（对着 PiDeck 0.9.7 实测；0.9.9 已修复第 2 条，见下）：
  *   1. CORS 预检只放行 `content-type`，不放行 `authorization`
  *      → 跨域 POST 带 Bearer 会被拦。
- *   2. workspace 路由（/api/files、/api/prompts、/api/skills、/api/git/*）**实际响应不带
- *      Access-Control-Allow-Origin**，只有 OPTIONS 预检带。
- *      → 这些接口在 WebView 里一律 `Failed to fetch`，跟用什么地址无关。
+ *   2. workspace 路由（/api/files、/api/prompts、/api/skills、/api/git/*）在 0.9.7/0.9.8 上
+ *      **实际响应不带 Access-Control-Allow-Origin**（只有 OPTIONS 预检带），于是 WebView 里
+ *      一律 `Failed to fetch`。0.9.9 已统一补上（WebHttpResponders 的 WEB_CORS_HEADERS），
+ *      但第 1 条的预检限制依旧，所以分流继续保留：原生栈省掉预检往返，也少一层抖动。
  *
  * 因此分流规则：
  *   - SSE（Accept: text/event-stream）：必须走 WebView，原生栈不支持流式响应体

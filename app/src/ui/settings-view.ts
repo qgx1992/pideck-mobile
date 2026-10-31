@@ -11,7 +11,7 @@
 
 import { h, clear } from "./dom.ts";
 import { createChevron, setChevronExpanded } from "./chevron.ts";
-import { DESKTOP_ONLY_NOTE, maskToken } from "./settings-model.ts";
+import { DESKTOP_ONLY_NOTE, dshPluginActionable, maskToken } from "./settings-model.ts";
 import type { DshPluginRow, ExtensionRow, ModelRow, SkillSection } from "./settings-model.ts";
 
 export interface SettingsDeviceRow {
@@ -33,6 +33,8 @@ export interface SettingsData {
   skills: SkillSection[];
   extensions: ExtensionRow[];
   dshPlugins: DshPluginRow[];
+  /** DSH 插件清单自己的错误（桌面端这个接口会单独报错，不该拖黑整页） */
+  dshError?: string;
   /** 概况类数据的加载状态 */
   loading: boolean;
   /** 加载失败时的人话说明（比如旧版 PiDeck 没有 /api/skills） */
@@ -51,6 +53,12 @@ export interface SettingsHandlers {
   onToggleExtension: (extension: ExtensionRow, enabled: boolean) => void;
   onOpenUsage: () => void;
   onRefresh: () => void;
+  /** DSH 插件启停/卸载（只有动态插件有这三个动作）。 */
+  onDshPluginAction: (plugin: DshPluginRow, action: "run" | "stop" | "uninstall") => void;
+  /** DSH 插件安装：sessionId 由 main 侧按当前会话补上。 */
+  onDshPluginInstall: (input: { idPrefix: string; name: string; purpose: string }) => void;
+  /** 当前可用的 DSH 会话描述（空串 = 没有，安装/启停会提示先打开会话）。 */
+  dshTargetLabel: () => string;
 }
 
 export interface SettingsPage {
@@ -130,8 +138,106 @@ function collapsible(title: string, count: number, build: () => HTMLElement[]): 
   return h("div", { class: "settings-fold" }, [head, body]);
 }
 
-export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {
-  const body = h("div", { class: "settings-body" });
+/**
+ * DSH 插件区块。
+ *
+ * 动态插件（Cordis）能启停/卸载；静态 Loader 条目只展示 —— 服务端没有对应的 Web 路由。
+ * 安装只需要三个字段，`hostCode`/`clientCode` 这种写代码的活在手机上做不了，留给桌面端。
+ */
+function dshPluginSection(data: SettingsData, handlers: SettingsHandlers): HTMLElement {
+  const target = handlers.dshTargetLabel();
+  const rows: HTMLElement[] = [];
+
+  if (data.dshPlugins.length === 0) {
+    rows.push(
+      row("插件", data.dshError ? "读取失败" : "无", {
+        sub:
+          data.dshError ??
+          (target ? `${target} 还没有动态插件` : "先在手机上打开一个 DSH 会话，再回来管理插件"),
+      }),
+    );
+  }
+
+  for (const plugin of data.dshPlugins) {
+    const value = plugin.running ? "运行中" : plugin.kind === "static" ? "未启用" : "已停止";
+    const sub = [plugin.description, plugin.kind === "static" ? "静态条目（只读）" : ""].filter(Boolean).join(" · ");
+    const tail: HTMLElement[] = [h("span", { class: "settings-row-value", text: value })];
+
+    if (dshPluginActionable(plugin)) {
+      const actions = h("div", { class: "settings-row-actions" }, [
+        h("button", {
+          class: "settings-mini-btn",
+          text: plugin.running ? "停止" : "运行",
+          onclick: () => handlers.onDshPluginAction(plugin, plugin.running ? "stop" : "run"),
+        }),
+      ]);
+      // 卸载不可恢复（会删插件定义），借同一颗按钮做一次二次确认
+      const remove = h("button", { class: "settings-mini-btn settings-mini-btn--danger", text: "卸载" });
+      remove.addEventListener("click", () => {
+        if (remove.dataset.confirm === "1") {
+          handlers.onDshPluginAction(plugin, "uninstall");
+          return;
+        }
+        remove.dataset.confirm = "1";
+        remove.textContent = "确认卸载";
+      });
+      actions.append(remove);
+      tail.push(actions);
+    }
+
+    rows.push(
+      h("div", { class: "settings-row settings-row--stacked" }, [
+        h("span", { class: "settings-row-text" }, [
+          h("span", { class: "settings-row-label", text: plugin.name }),
+          ...(sub ? [h("span", { class: "settings-row-sub", text: sub })] : []),
+        ]),
+        h("span", { class: "settings-row-tail" }, tail),
+      ]),
+    );
+  }
+
+  const form = h("div", { class: "settings-install is-hidden" });
+  const prefix = h("input", { class: "settings-input", placeholder: "ID 前缀：3-6 个小写字母，如 note" });
+  const name = h("input", { class: "settings-input", placeholder: "插件名称" });
+  const purpose = h("input", { class: "settings-input", placeholder: "用途（一句话）" });
+  const note = h("p", { class: "settings-install-note" });
+  const submit = h("button", { class: "settings-mini-btn settings-mini-btn--primary", text: "安装" });
+  const cancel = h("button", { class: "settings-mini-btn", text: "取消" });
+  submit.addEventListener("click", () => {
+    const idPrefix = prefix.value.trim().toLowerCase();
+    const pluginName = name.value.trim();
+    const usage = purpose.value.trim();
+    if (!/^[a-z]{3,6}$/.test(idPrefix)) {
+      note.textContent = "ID 前缀要 3-6 个小写字母";
+      return;
+    }
+    if (!pluginName) {
+      note.textContent = "填个名称";
+      return;
+    }
+    if (!target) {
+      note.textContent = "先在手机上打开一个 DSH 会话";
+      return;
+    }
+    handlers.onDshPluginInstall({ idPrefix, name: pluginName, purpose: usage });
+  });
+  cancel.addEventListener("click", () => {
+    form.classList.add("is-hidden");
+    note.textContent = "";
+  });
+  form.append(prefix, name, purpose, note, h("div", { class: "settings-row-actions" }, [submit, cancel]));
+  rows.push(
+    row("安装插件", "＋", {
+      sub: target || "需要先打开一个 DSH 会话",
+      onClick: () => form.classList.toggle("is-hidden"),
+    }),
+    form,
+  );
+
+  return section("DSH 插件", rows);
+}
+
+export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {  const body = h("div", { class: "settings-body" });
   const title = h("h1", { class: "settings-title", text: "设置" });
 
   const back = h("button", {
@@ -303,18 +409,7 @@ export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {
     body.append(section("扩展", extensionSection));
 
     // ── DSH 插件 ──
-    if (data.dshPlugins.length > 0) {
-      body.append(
-        section(
-          "DSH 插件",
-          data.dshPlugins.map((plugin) =>
-            row(plugin.name, plugin.running ? "运行中" : plugin.version || "已安装", {
-              ...(plugin.description ? { sub: plugin.description } : {}),
-            }),
-          ),
-        ),
-      );
-    }
+    body.append(dshPluginSection(data, handlers));
 
     // ── 关于 ──
     body.append(
