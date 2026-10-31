@@ -34,24 +34,45 @@
 > 本机 `git push` 需要显式走系统代理：`git -c http.proxy=http://127.0.0.1:7897 push ...`
 > （代理端口会随 Clash 重启变化，先 `netstat` 确认）。
 
-## 局域网下载页（8080）：必须用 detached 方式启动
+## 局域网下载页（8080）：开机自启的计划任务，不要挂工具子进程
 
 `apk/` 目录用 Python 的静态服务器对局域网开放（手机扫码下载 APK 走这条）。
 **不要把它挂在 agent 的 shell 子进程里** —— 任何一条工具命令超时被 kill 时，整个进程组
 会一起死，下载页就无声消失了。踩过：`gh release download` 超时、60s guardrail 砍掉进程组，
 8080 上的 PID 356 跟着消失，用户端看到的就是「下载页怎么挂了」。
 
-启动（Windows，PowerShell `Start-Process` 脱离父进程组；注意脚本路径别用 `python`
-裸名，PowerShell 里会命中 `WindowsApps` 的空壳别名而静默失败）：
+现在走的是 **Windows 计划任务**（登录后延迟 20 秒启动，`pythonw.exe` 无终端窗口）：
 
 ```powershell
-powershell -NoProfile -Command "$p = Start-Process -FilePath 'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe' -ArgumentList '-m http.server 8080 --bind 0.0.0.0 --directory \"D:\A-my project\PiDeck-Mobile\apk\"' -PassThru -WindowStyle Hidden; 'pid=' + $p.Id + ' exited=' + $p.HasExited"
+# 注册 + 立刻启动（幂等，可重复跑；-NoStart 只注册不起）
+powershell -NoProfile -ExecutionPolicy Bypass -File app/scripts/install-download-server-task.ps1
+
+# 卸载（顺带杀掉还在监听 8080 的进程）
+powershell -NoProfile -ExecutionPolicy Bypass -File app/scripts/install-download-server-task.ps1 -Uninstall
 ```
+
+- 任务名 `PiDeck Download Server`，实际命令：`pythonw.exe "…\app\scripts\serve-apk.py" --port 8080`
+- 服务本体是 `app/scripts/serve-apk.py`，**不是** `python -m http.server`：后者是单线程，
+  手机拉 14MB 包时整站被堵住；且 `pythonw` 下 `sys.stdout/stderr` 是 `None`，
+  基类的 `log_message` 一写就抛 `AttributeError`（在发响应头之前炸），必须先把它们接管到日志文件。
+- 日志：`%LOCALAPPDATA%\PiDeck-DownloadServer\server.log`（**不能**放进 `apk/`，那是对外明文目录）。
+- 改了 `serve-apk.py` 之后要重启任务才生效：
+  `powershell -NoProfile -Command "Stop-ScheduledTask 'PiDeck Download Server'; Start-ScheduledTask 'PiDeck Download Server'"`
+
+临时起一份（调试 / 换端口）用这个，同样要 detached：
+
+```powershell
+powershell -NoProfile -Command "$p = Start-Process -FilePath 'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\pythonw.exe' -ArgumentList '-m http.server 8080 --bind 0.0.0.0 --directory \"D:\A-my project\PiDeck-Mobile\apk\"' -PassThru -WindowStyle Hidden; 'pid=' + $p.Id + ' exited=' + $p.HasExited"
+```
+
+> 两个 PowerShall 坑：脚本路径别写 `python` / `pythonw` 裸名（会命中 `WindowsApps` 的空壳
+> 别名而静默失败，表现为 `http=000`）；`.ps1` 里带中文必须存成 **UTF-8 with BOM**，
+> 否则 Windows PowerShell 5.1 按 GBK 解，直接解析失败（`字符串缺少终止符`）。
 
 起完必须核对四件事：
 
 ```bash
-netstat -ano | grep LISTENING | grep :8080          # 有 0.0.0.0:8080 且 PID 是刚起的那只
+netstat -ano | grep LISTENING | grep :8080          # 有 0.0.0.0:8080 且 PID 指向 pythonw.exe
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/
 curl -s -o /dev/null -w "%{http_code}\n" http://<本机局域网IP>:8080/   # 页面里的二维码指向这个地址
 curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # 与 apk/SHA256SUMS.txt 一致
@@ -62,7 +83,7 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - `apk/` 下**只放能公开的东西**。它是对局域网无鉴权明文开放的（还带目录列表），
   任何凭据 / 客户端配置 / 未脱敏的笔记都不能放在这里（踩过：`apk/proxy/` 里三份代理配置曾对外 200）。
 - 页面里的二维码用 `app/scripts/gen-qr.py` 生成、`app/scripts/verify-qr.mjs --expect <地址>` 校验。
-- `python -m http.server` 没有 deny 规则，要挡住某个文件只能让它不在这棵目录树里。
+- 静态服务器没有 deny 规则，要挡住某个文件只能让它不在这棵目录树里。
 
 ## 改动完成后必须跑的验证
 
