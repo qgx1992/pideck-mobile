@@ -1506,6 +1506,48 @@ body.barcode-scanner-active .scan-overlay {
   overflow: auto;
 }
 
+/* 预览页：自带「← 列表 / 文件名 / 下载」，不再接在文件列表下面 */
+.ws-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 8px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-soft);
+}
+
+.ws-preview-back {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.ws-preview-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 整页预览：把 50vh 的限制放开，让 .ws-content 自己滚 */
+.ws-preview--page {
+  margin: 0;
+  max-height: none;
+}
+
+/* 从聊天里带行号进来时高亮那一行 */
+.ws-preview--page .ws-line {
+  min-height: 1.2em;
+  border-radius: 4px;
+}
+
+.ws-preview--page .ws-line.is-target {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 /* 宽屏时右侧常驻，不需要遮罩 */
 @media (min-width: 761px) {
   .workspace-panel {
@@ -2977,6 +3019,28 @@ body.barcode-scanner-active .scan-overlay {
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+/* 正文里的文件路径：看着像链接，点一下开预览 */
+.md-file-ref {
+  display: inline;
+  padding: 0;
+  border: none;
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.md-file-ref:active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.md-file-ref--code {
+  font-family: inherit;
 }
 
 /* 表格 */

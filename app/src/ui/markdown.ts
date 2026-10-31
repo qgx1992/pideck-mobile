@@ -14,12 +14,18 @@
  */
 
 import { highlightInto } from "./highlight.ts";
+import { findFileRefs, splitFileRef } from "./file-ref-model.ts";
 
 export interface MarkdownOptions {
   /** 点击链接时的处理（默认交给系统浏览器 / WebView） */
   onLinkClick?: (href: string) => void;
   /** 代码块「复制」按钮，默认用剪贴板 API */
   onCopy?: (code: string) => void;
+  /**
+   * 点击正文里的文件路径（如 `src/api/client.ts:12`）。
+   * 不传就不做链接化 —— 只做「长得像路径」的判断，文件存不存在交给回调去验证。
+   */
+  onFileRef?: (path: string, line?: number) => void;
 }
 
 /** 判断链接是否安全（只放行常见协议与站内相对路径）。 */
@@ -327,6 +333,52 @@ const RE_INLINE = new RegExp(
 );
 
 /** 把行内 Markdown 追加到容器里。 */
+/**
+ * 一个可点的文件路径。
+ *
+ * 用 button 而不是 a：它不参与链接安全策略，也不会被 WebView 当成外链打开。
+ * `stopPropagation` 是为了不让这次点击传到消息体的长按手势上。
+ */
+function fileRefNode(
+  label: string,
+  raw: string,
+  options: MarkdownOptions,
+  extraClass = "",
+): HTMLElement {
+  const ref = splitFileRef(raw) ?? { path: raw };
+  const node = el("button", `md-file-ref${extraClass}`) as HTMLButtonElement;
+  node.type = "button";
+  node.textContent = label;
+  node.title = ref.line ? `预览 ${ref.path}（第 ${ref.line} 行）` : `预览 ${ref.path}`;
+  node.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    options.onFileRef?.(ref.path, ref.line);
+  });
+  return node;
+}
+
+/** 追加一段纯文本；开了 onFileRef 时把里面的文件路径包成可点按钮。 */
+function pushTextWithFileRefs(container: HTMLElement, text: string, options: MarkdownOptions): void {
+  if (!options.onFileRef) {
+    container.append(document.createTextNode(text));
+    return;
+  }
+  const hits = findFileRefs(text);
+  if (hits.length === 0) {
+    container.append(document.createTextNode(text));
+    return;
+  }
+  let cursor = 0;
+  for (const hit of hits) {
+    if (hit.index > cursor) container.append(document.createTextNode(text.slice(cursor, hit.index)));
+    const label = text.slice(hit.index, hit.index + hit.length);
+    container.append(fileRefNode(label, label, options));
+    cursor = hit.index + hit.length;
+  }
+  if (cursor < text.length) container.append(document.createTextNode(text.slice(cursor)));
+}
+
 export function appendInline(
   container: HTMLElement,
   source: string,
@@ -339,7 +391,7 @@ export function appendInline(
     const parts = value.split("\n");
     parts.forEach((part, i) => {
       if (i > 0) container.append(el("br"));
-      if (part) container.append(document.createTextNode(part));
+      if (part) pushTextWithFileRefs(container, part, options);
     });
   };
 
@@ -353,7 +405,12 @@ export function appendInline(
 
     if (m.codeBody !== undefined) {
       const code = el("code", "md-inline-code");
-      code.textContent = m.codeBody;
+      // 行内代码常常就是一串路径：整段都像路径时也做成可点
+      if (options.onFileRef && splitFileRef(m.codeBody)) {
+        code.append(fileRefNode(m.codeBody.trim(), m.codeBody.trim(), options, " md-file-ref--code"));
+      } else {
+        code.textContent = m.codeBody;
+      }
       container.append(code);
     } else if (m.bold !== undefined || m.bold2 !== undefined) {
       const strong = el("strong");

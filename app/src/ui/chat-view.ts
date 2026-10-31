@@ -3,6 +3,7 @@
 import type { ChatBlock, PendingUiRequest, RunStatus, WireMessage } from "@core/types.ts";
 import { h, clear } from "./dom.ts";
 import { renderMarkdownInto } from "./markdown.ts";
+import type { MarkdownOptions } from "./markdown.ts";
 import { collectImageSources } from "./image-attach-model.ts";
 import { openImageLightbox } from "./image-lightbox.ts";
 import { attachPressable } from "./press.ts";
@@ -26,6 +27,8 @@ export interface ChatViewHandlers {
   onRespond: (pending: PendingUiRequest, response: Record<string, unknown>) => void;
   /** 长按历史消息：交给上层弹菜单（编辑/重发/删除/分叉） */
   onMessageAction?: (messageId: string, role: string) => void;
+  /** 点正文里的文件路径（如 `src/api/client.ts:12`）：交给上层打开预览 */
+  onFileRef?: (path: string, line?: number) => void;
 }
 
 export class ChatView {
@@ -63,6 +66,11 @@ export class ChatView {
     });
     clear(root);
     root.append(this.scroll);
+  }
+
+  /** 聊天正文的 Markdown 选项（目前只有「文件路径可点」）。 */
+  private mdOptions(): MarkdownOptions {
+    return { onFileRef: this.handlers.onFileRef };
   }
 
   clear(): void {
@@ -107,7 +115,7 @@ export class ChatView {
     const trimmed = text.trim();
     if (!trimmed && images.length === 0) return;
     this.clearLocalEcho();
-    const el = messageNode("user", trimmed, Date.now(), undefined, images);
+    const el = messageNode("user", trimmed, Date.now(), undefined, images, this.mdOptions());
     el.classList.add("msg--local");
     this.historyEl.append(el);
     this.localEcho = { text: trimmed, el };
@@ -285,6 +293,7 @@ export class ChatView {
         message.timestamp,
         typeof message.id === "string" ? message.id : undefined,
         images,
+        this.mdOptions(),
       );
       // 长按弹菜单：只在有 id 且上层愿意处理时才绑，否则白响一下震动
       const mid = typeof message.id === "string" ? message.id : undefined;
@@ -349,7 +358,7 @@ export class ChatView {
       // 结构没变：只更新内容
       for (const block of blocks) {
         const node = this.liveNodes.get(this.blockKey(block));
-        if (node) updateBlockNode(node, block);
+        if (node) updateBlockNode(node, block, this.mdOptions());
       }
       this.refreshLiveGroups(blocks);
     }
@@ -468,7 +477,7 @@ export class ChatView {
         node = blockNode(block);
         this.liveNodes.set(id, node);
       }
-      updateBlockNode(node, block);
+      updateBlockNode(node, block, this.mdOptions());
 
       if (isProcessBlock(block)) {
         if (!group) {
@@ -1010,6 +1019,7 @@ function messageNode(
   timestamp: unknown,
   id?: string,
   images: readonly string[] = [],
+  mdOptions: MarkdownOptions = {},
 ): HTMLElement {
   const wrap = h("article", { class: `msg msg--${role}` });
   if (id) wrap.dataset.mid = id;
@@ -1021,7 +1031,7 @@ function messageNode(
   } else {
     // 助手回答是 Markdown：粗体、代码块、列表、表格都要还原（对齐 Web 端）
     const md = h("div", { class: "md" });
-    renderMarkdownInto(md, text);
+    renderMarkdownInto(md, text, mdOptions);
     body.append(md);
     body.classList.add("msg-body--md");
     mdSources.set(body, text);
@@ -1098,7 +1108,7 @@ function blockNode(block: ChatBlock): HTMLElement {
   return details;
 }
 
-function updateBlockNode(node: HTMLElement, block: ChatBlock): void {
+function updateBlockNode(node: HTMLElement, block: ChatBlock, mdOptions: MarkdownOptions = {}): void {
   if (block.kind === "text") {
     let body = node.querySelector<HTMLElement>(".msg-body");
     if (!body) {
@@ -1115,7 +1125,7 @@ function updateBlockNode(node: HTMLElement, block: ChatBlock): void {
         body.append(md);
         body.classList.add("msg-body--md");
       }
-      renderMarkdownInto(md, visible);
+      renderMarkdownInto(md, visible, mdOptions);
       mdSources.set(body, visible);
     }
     node.classList.toggle("is-done", block.done);

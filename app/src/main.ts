@@ -104,6 +104,7 @@ import {
 } from "./ui/workspace-model.ts";
 import type { GitCommit, GitStatusView } from "./ui/workspace-model.ts";
 import { baseName, downloadBlockedReason, downloadDoneText, mimeForName } from "./ui/file-download-model.ts";
+import { dirStackOf, fileNameOf, toProjectRelative } from "./ui/file-ref-model.ts";
 import { saveTextFile } from "./platform/save-file.ts";
 import type { FileNode, RuntimeTarget, WireMessage } from "@core/types.ts";
 import { BUILTIN_SLASH, filterSlashItems, groupSlashItems, mergeSlashItems, slashText } from "./ui/slash-model.ts";
@@ -890,6 +891,7 @@ function renderMain(): void {
       void respondToUi(pending, response);
     },
     onMessageAction: (messageId, role) => openMessageActions(messageId, role),
+    onFileRef: (path, line) => void openChatFileRef(path, line),
   });
   renderEmptyState(null);
 
@@ -2826,7 +2828,7 @@ let workspaceTab: WorkspaceTab = "git";
 let workspaceOpen = false;
 /** 文件 Tab 的当前目录栈（相对项目根） */
 let workspaceStack: string[] = [];
-let workspacePreview: { path: string; content: string } | null = null;
+let workspacePreview: { path: string; content: string; line?: number } | null = null;
 
 function toggleWorkspacePanel(): void {
   if (workspaceOpen) {
@@ -2998,6 +3000,11 @@ async function renderGitTab(content: HTMLElement, projectId: string): Promise<vo
 
 async function renderFilesTab(content: HTMLElement, projectId: string): Promise<void> {
   if (!runtime) return;
+  // 预览是一页，不再接在列表下面：文件一多就要先拉到底才能看到内容
+  if (workspacePreview) {
+    renderFilePreviewPage(content, projectId);
+    return;
+  }
   const dirPath = workspaceStack.join("/");
 
   let nodes;
@@ -3082,36 +3089,116 @@ async function renderFilesTab(content: HTMLElement, projectId: string): Promise<
     });
     content.append(row);
   }
+}
 
-  if (workspacePreview) {
-    content.append(h("div", { class: "ws-group", text: workspacePreview.path.split("/").pop() ?? "预览" }));
-    content.append(h("pre", { class: "ws-preview", text: workspacePreview.content }));
+/**
+ * 文件预览页。
+ *
+ * 以前预览是「文件列表下面再接一段 pre」，文件一多就要先拉到底才能看到内容；
+ * 现在预览是一页，自带返回（← 回文件列表）与下载，列表不会再被顶到下面。
+ */
+function renderFilePreviewPage(content: HTMLElement, projectId: string): void {
+  const preview = workspacePreview;
+  if (!preview) return;
+
+  const back = h("button", { class: "icon-btn ws-preview-back", title: "返回文件列表", text: "←" });
+  back.addEventListener("click", () => {
+    workspacePreview = null;
+    void renderWorkspacePanel();
+  });
+  const title = h("span", { class: "ws-preview-name", text: fileNameOf(preview.path), title: preview.path });
+  const download = h("button", { class: "icon-btn", title: "下载到手机", text: "⤓" });
+  download.addEventListener("click", () => {
+    void downloadWorkspaceFile(projectId, preview.path);
+  });
+  content.append(h("div", { class: "ws-preview-head" }, [back, title, h("span", { class: "spacer" }), download]));
+
+  const body = h("div", { class: "ws-preview ws-preview--page" });
+  content.append(body);
+
+  // 从聊天里带行号点进来时：只拆行（大文件不拆，几千个 span 会卡）
+  const target = preview.line;
+  if (target && preview.content.length <= 80_000) {
+    const lines = preview.content.split("\n");
+    let hit: HTMLElement | null = null;
+    lines.forEach((line, index) => {
+      const row = h("div", { class: "ws-line", text: line || " " });
+      if (index + 1 === target) {
+        row.classList.add("is-target");
+        hit = row;
+      }
+      body.append(row);
+    });
+    if (hit) {
+      const anchor = hit as HTMLElement;
+      requestAnimationFrame(() => anchor.scrollIntoView({ block: "center" }));
+    }
+  } else {
+    body.textContent = preview.content;
   }
 }
 
-async function openFilePreview(projectId: string, path: string): Promise<void> {
+/** 预览正文：二进制 / 超限 / 被截断都说清楚，不要默默展示半截。 */
+function previewTextOf(file: { kind: string; size: number; content: string }): string {
+  const limitKb = Math.round(FILE_PREVIEW_MAX_BYTES / 1024);
+  switch (file.kind) {
+    case "binary":
+      return `（二进制文件，${formatBytes(file.size)}，桌面端接口只提供文本，看不了内容）`;
+    case "tooLarge":
+      return `（文件 ${formatBytes(file.size)}，超过 2 MB 读不全，不预览）`;
+    case "truncated":
+      return `${file.content}\n\n…（文件共 ${formatBytes(file.size)}，这里只显示前 512 KB）`;
+    default:
+      if (!shouldPreviewFile(file.size)) {
+        return `文件过大（${formatBytes(file.size)}），超过 ${limitKb} KB 不预览。`;
+      }
+      return file.content || "（空文件）";
+  }
+}
+
+async function openFilePreview(projectId: string, path: string, line?: number): Promise<void> {
   if (!runtime) return;
   workspaceTab = "files";
-  const parts = path.replace(/\\/g, "/").split("/");
-  const fileName = parts.pop() ?? path;
-  workspaceStack = parts;
-  workspacePreview = { path: fileName, content: "读取中…" };
+  workspaceStack = dirStackOf(path);
+  workspacePreview = { path, content: "读取中…", line };
   await renderWorkspacePanel();
 
   try {
     const file = await runtime.client.fileContent(projectId, path);
-    if (!shouldPreviewFile(file.size)) {
-      workspacePreview = {
-        path: fileName,
-        content: `文件过大（${Math.round(file.size / 1024)} KB），超过 ${Math.round(FILE_PREVIEW_MAX_BYTES / 1024)} KB 不预览。`,
-      };
-    } else {
-      workspacePreview = { path: fileName, content: file.content || "（空文件）" };
-    }
+    workspacePreview = { path, content: previewTextOf(file), line };
   } catch (error) {
-    workspacePreview = { path: fileName, content: `读取失败：${describeError(error)}` };
+    workspacePreview = { path, content: `读取失败：${describeError(error)}`, line };
   }
   await renderWorkspacePanel();
+}
+
+/**
+ * 聊天里点了文件路径。
+ *
+ * 先请求一次再开抽屉：路径是「长得像」才变成链接的，真不存在时
+ * 不该把抽屉拉出来只为了显示一个 404 —— 直接说没找到。
+ */
+async function openChatFileRef(rawPath: string, line?: number): Promise<void> {
+  if (!runtime) return;
+  const projectId = currentWorkspaceProjectId();
+  if (!projectId) {
+    toast("没有可用项目：请先在桌面端添加项目目录");
+    return;
+  }
+  const relative = toProjectRelative(rawPath, currentWorkspaceProjectPath());
+  let file: { kind: string; size: number; content: string };
+  try {
+    file = await runtime.client.fileContent(projectId, relative);
+  } catch {
+    toast(`没找到 ${relative}`);
+    return;
+  }
+  workspaceTab = "files";
+  workspaceStack = dirStackOf(relative);
+  workspacePreview = { path: relative, content: previewTextOf(file), line };
+  // 左右抽屉互斥，避免预览页被侧栏压住
+  refs?.hostBody?.classList.remove("show-sidebar");
+  await openWorkspacePanel();
 }
 
 /** 长按文件行弹出的菜单（目录不长按：目录用来进入）。 */
@@ -3123,7 +3210,7 @@ function openFileMenu(projectId: string, node: FileNode): void {
         text: "下载到手机",
         onclick: () => {
           closeSheet();
-          void downloadWorkspaceFile(projectId, node);
+          void downloadWorkspaceFile(projectId, node.relativePath);
         },
       }),
     );
@@ -3157,12 +3244,12 @@ function openFileMenu(projectId: string, node: FileNode): void {
  * 服务端只会吐文本（二进制 / 超 2MB 有限制），所以先看 kind：
  * 下不了就说明原因，绝不自作主张存一个半截文件。
  */
-async function downloadWorkspaceFile(projectId: string, node: FileNode): Promise<void> {
+async function downloadWorkspaceFile(projectId: string, relativePath: string): Promise<void> {
   if (!runtime) return;
-  const name = baseName(node.relativePath || node.name);
+  const name = baseName(relativePath);
   toast(`正在读取 ${name}…`);
   try {
-    const result = await runtime.client.fileContent(projectId, node.relativePath);
+    const result = await runtime.client.fileContent(projectId, relativePath);
     const blocked = downloadBlockedReason(result, name);
     if (blocked) {
       toast(blocked);

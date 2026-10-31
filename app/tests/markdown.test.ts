@@ -118,3 +118,40 @@ test("markdownToText 去掉标记", () => {
   assert.equal(markdownToText("## 标题"), "标题");
   assert.equal(markdownToText("[文字](https://x.com)"), "文字");
 });
+
+/** 正文里的文件路径：点一下能把 path/line 交出去（上层据此开预览）。 */
+test("文件路径变成可点引用，回调带 path + line", () => {
+  const clicked: Array<[string, number | undefined]> = [];
+  const host = document.createElement("div");
+  host.append(
+    renderMarkdown("看 app/src/main.ts:42 和 `src/api/client.ts` 这两个文件", {
+      onFileRef: (path, line) => clicked.push([path, line]),
+    }),
+  );
+  const refs = Array.from(host.querySelectorAll<HTMLElement>(".md-file-ref"));
+  assert.equal(refs.length, 2);
+  assert.equal(refs[0]?.textContent, "app/src/main.ts:42");
+  refs[0]?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  // 行内代码里的整段路径也能点
+  refs[1]?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert.deepEqual(clicked, [
+    ["app/src/main.ts", 42],
+    ["src/api/client.ts", undefined],
+  ]);
+});
+
+test("URL 不会被当成文件路径", () => {
+  const host = document.createElement("div");
+  host.append(
+    renderMarkdown("见 https://github.com/qgx1992/pideck-mobile/blob/master/README.md", {
+      onFileRef: () => undefined,
+    }),
+  );
+  assert.equal(host.querySelectorAll(".md-file-ref").length, 0);
+});
+
+test("没传 onFileRef 时保持纯文本（不改变原有渲染）", () => {
+  const host = render("看 app/src/main.ts:42");
+  assert.equal(host.querySelectorAll(".md-file-ref").length, 0);
+  assert.match(host.textContent ?? "", /app\/src\/main\.ts:42/);
+});
