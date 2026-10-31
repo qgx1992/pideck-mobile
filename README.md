@@ -16,7 +16,7 @@
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
 | `src/` | 协议与状态核心 + 探针 CLI（**56 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（Vite + Capacitor，**462 条测试**） | `cd app && npm run dev` / `npm run apk` |
+| `app/` | 手机客户端（Vite + Capacitor，**465 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
@@ -174,7 +174,7 @@ node src/cli/probe.ts stop --pair "..." --session <sessionId>
 
 ```bash
 npm test && npm run typecheck                 # 核心：56 条
-cd app && npm test && npm run typecheck       # 客户端：462 条
+cd app && npm test && npm run typecheck       # 客户端：465 条
 cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```
 

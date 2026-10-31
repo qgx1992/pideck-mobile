@@ -203,6 +203,26 @@ export function shouldShowTodoStrip(view: TodoView | null): boolean {
   return view !== null;
 }
 
+/**
+ * 「清除所有」之后的状态。
+ *
+ * 清历史很简单，难的是**别让轮询立刻把它写回来**：服务端仍然返回当前那份清单，
+ * 5 秒后 merge 又会新增一条，用户会觉得没清干净。所以清空时要把当前这份一起压掉。
+ *
+ * 只在「当前确实有清单」时返回 dismissed；没有清单就只清历史。
+ */
+export interface TodoClearResult {
+  history: TodoHistoryEntry[];
+  dismissed: { planId: string; signature: string } | null;
+}
+
+export function clearedTodoState(view: TodoView | null): TodoClearResult {
+  return {
+    history: [],
+    dismissed: view ? { planId: planKeyOf(view), signature: todoSignature(view) } : null,
+  };
+}
+
 /** 历史条目头部文案：`4/5`。 */
 export function historyProgressLabel(entry: TodoHistoryEntry): string {
   return `${entry.done}/${entry.total}`;

@@ -17,6 +17,7 @@ const {
   mergeTodoHistory,
   parseTodoHistory,
   planKeyOf,
+  clearedTodoState,
   sealTodoHistory,
   shouldShowTodoStrip,
   todoSignature,
@@ -238,4 +239,32 @@ test("内容签名：状态或条目变化都会变，完全没变则相同", ()
   assert.equal(a, same, "同一份清单签名必须一致（用来拦「服务端还在返回旧清单」）");
   assert.notEqual(a, advanced, "进度变化要能区分");
   assert.notEqual(a, longer, "条目变化要能区分");
+});
+
+/**
+ * 「清除所有」：清历史容易，难的是别让轮询立刻把它写回来。
+ * 所以清空时要把当前这份清单一起压掉（dismissed）。
+ */
+test("清除所有：有当前清单时连它一起压掉", () => {
+  const result = clearedTodoState(view("8", ["completed", "pending"]) as never);
+  assert.deepEqual(result.history, []);
+  assert.ok(result.dismissed, "有清单时必须有 dismissed，否则 5s 后又被写回");
+  assert.equal(result.dismissed!.planId, "8");
+  assert.equal(result.dismissed!.signature, todoSignature(view("8", ["completed", "pending"]) as never));
+});
+
+test("清除所有：没有当前清单时只清历史", () => {
+  const result = clearedTodoState(null);
+  assert.deepEqual(result.history, []);
+  assert.equal(result.dismissed, null);
+});
+
+test("清除后若不管当前清单，轮询确实会把它写回来（这就是要 dismissed 的原因）", () => {
+  // 模拟：清空历史 → 5s 后轮询拿到同一份清单
+  const afterClear = clearedTodoState(view("8", ["pending"]) as never);
+  const repolled = mergeTodoHistory(afterClear.history, view("8", ["pending"]) as never, 5_000);
+  assert.equal(repolled.length, 1, "不压掉的话历史立刻又有一条 —— 看起来像没清干净");
+
+  // 压掉之后（main.ts 用 planId + signature 拦），轮询不会重新记账
+  assert.equal(afterClear.dismissed!.planId, "8");
 });

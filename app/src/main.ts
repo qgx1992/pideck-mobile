@@ -151,13 +151,14 @@ import {
   historyProgressLabel,
   historyStatusLabel,
   historyTimeLabel,
+  clearedTodoState,
   mergeTodoHistory,
   planKeyOf,
   sealTodoHistory,
   todoSignature,
 } from "./ui/todo-history-model.ts";
 import type { TodoHistoryEntry } from "./ui/todo-history-model.ts";
-import { loadTodoHistory, saveTodoHistory } from "./platform/todo-history.ts";
+import { clearTodoHistory, loadTodoHistory, saveTodoHistory } from "./platform/todo-history.ts";
 import {
   contextChipLabel,
   contextChipTitle,
@@ -1945,6 +1946,14 @@ const todoHistoryByScope = new Map<string, TodoHistoryEntry[]>();
  */
 const dismissedTodoPlans = new Map<string, { planId: string; signature: string }>();
 
+/**
+ * 「清除所有」的内联二次确认状态。
+ *
+ * 不用 openSheet：那个函数为了不让遮罩吃掉触摸会顺手关掉工作区抽屉，
+ * 确认完抽屉就没了，用户还得重新打开一次。
+ */
+let todoClearConfirming = false;
+
 function todoScope(sessionId: string): string {
   return epKey(sessionId);
 }
@@ -2011,6 +2020,40 @@ function renderTodoHistoryTab(content: HTMLElement): void {
     return;
   }
 
+  // 顶部工具行：条数 + 清除所有（内联二次确认，避免关掉抽屉）
+  const toolbar = h("div", { class: "todo-history-toolbar" });
+  toolbar.append(h("span", { class: "todo-history-count", text: `共 ${entries.length} 份` }));
+  if (todoClearConfirming) {
+    toolbar.append(
+      h("button", {
+        class: "todo-clear is-confirming",
+        text: "确认清除",
+        onclick: () => clearAllTodoHistory(),
+      }),
+      h("button", {
+        class: "todo-clear-cancel",
+        text: "取消",
+        onclick: () => {
+          todoClearConfirming = false;
+          void renderWorkspacePanel();
+        },
+      }),
+    );
+  } else {
+    toolbar.append(
+      h("button", {
+        class: "todo-clear",
+        text: "清除所有",
+        title: "清空当前会话的全部历史清单（只影响本机记录）",
+        onclick: () => {
+          todoClearConfirming = true;
+          void renderWorkspacePanel();
+        },
+      }),
+    );
+  }
+  content.append(toolbar);
+
   const list = h("div", { class: "todo-history" });
   // 最新的默认展开，其余收起：历史多了以后一屏全是条目没法扫
   entries.forEach((entry, index) => {
@@ -2044,6 +2087,34 @@ function renderTodoHistoryTab(content: HTMLElement): void {
     list.append(section);
   });
   content.append(list);
+}
+
+/**
+ * 清空当前会话的全部待办历史。
+ *
+ * 只清本机记录 —— 服务端本来就不保留历史（只给最新的 planId），所以这是纯粹的本地清理。
+ *
+ * 关键：如果当前还有一份清单在，必须把它记进 dismissed，否则 5 秒后的轮询会立刻把它
+ * 又写回历史，看起来像「没清干净」。之后清单内容一旦变化（进度推进或新一轮），
+ * 屏蔽会自动解除并重新出现 —— 这是有意的：真有动静了就该让用户看到。
+ */
+function clearAllTodoHistory(): void {
+  const scope = currentTodoScope();
+  const result = clearedTodoState(todoView);
+
+  todoHistoryByScope.set(scope, result.history);
+  clearTodoHistory(scope);
+
+  if (result.dismissed) {
+    // 当前这份一起压掉，否则 5s 后的轮询会立刻把它写回历史
+    dismissedTodoPlans.set(scope, result.dismissed);
+    todoView = null;
+    renderTodoStrip();
+  }
+
+  todoClearConfirming = false;
+  void renderWorkspacePanel();
+  toast("已清除待办历史");
 }
 
 /**

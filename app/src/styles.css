@@ -3864,3 +3864,51 @@ body.barcode-scanner-active .scan-overlay {
   flex-direction: column;
   gap: 2px;
 }
+
+/* ---------------------------- 待办历史：顶部工具行 ---------------------------- */
+
+.todo-history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0 10px;
+}
+
+.todo-history-count {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.todo-clear {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.todo-clear:active {
+  color: var(--text);
+}
+
+/* 二次确认态：变危险色，避免手滑连点直接清掉 */
+.todo-clear.is-confirming {
+  color: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 50%, var(--border));
+  background: color-mix(in oklab, var(--danger) 12%, var(--bg));
+}
+
+.todo-clear-cancel {
+  flex: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
