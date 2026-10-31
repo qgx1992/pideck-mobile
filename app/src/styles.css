@@ -2660,16 +2660,23 @@ body.barcode-scanner-active .scan-overlay {
   position: absolute;
   border: 1px solid var(--border);
   left: 50%;
-  bottom: calc(28px + var(--safe-bottom));
+  /* --toast-offset 由 dom.ts 按输入框实际高度写入；没有输入框时退回 28px */
+  bottom: calc(var(--toast-offset, 28px) + var(--safe-bottom));
   transform: translateX(-50%);
   background: var(--bg-elev);
   color: var(--text);
-  border-radius: 999px;
-  padding: 9px 16px;
+  /* 以前是 999px 的胶囊，圆角大得和内容脱节；改用和气泡一致的 10px */
+  border-radius: 10px;
+  padding: 9px 14px;
   font-size: 13px;
-  z-index: 50;
+  line-height: 1.45;
+  text-align: center;
+  /* 要盖过设置页（9000）与底部面板（40），但低于图片查看层（10000） */
+  z-index: 9500;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
   transition: opacity 0.4s ease;
-  max-width: 90vw;
+  max-width: min(88vw, 420px);
+  overflow-wrap: anywhere;
 }
 
 .toast--out {

@@ -73,9 +73,33 @@ export function fmtTime(ms: number | undefined): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
+/**
+ * 轻提示。
+ *
+ * 挂在 #app 内（position: relative），避免 fixed 在部分 WebView 里定位偏移。
+ *
+ * 位置：**抬到输入框上方**。以前固定在底部 28px，正好盖住正在打字的输入框，
+ * 一边提示一边挡着用户看自己刚打的字。这里按 composer 的实际高度算偏移，
+ * 输入框随内容长高 / 附件行出现时也能跟着走。
+ */
 export function toast(message: string): void {
+  // 同一时刻只留一条，避免连点时叠成一坨
+  for (const previous of Array.from(document.querySelectorAll(".toast"))) previous.remove();
+
   const el = h("div", { class: "toast", text: message });
-  // 挂在 #app 内（position: relative），避免 fixed 在部分 WebView 里定位偏移
+
+  const composer = document.querySelector<HTMLElement>(".composer");
+  if (composer && el.ownerDocument.defaultView) {
+    const host = document.getElementById("app") ?? document.body;
+    const hostRect = host.getBoundingClientRect();
+    const composerRect = composer.getBoundingClientRect();
+    // 输入框占掉的高度 = 容器底 - 输入框顶；再留 12px 空隙
+    const occupied = hostRect.bottom - composerRect.top;
+    if (hostRect.height > 0 && occupied > 0 && occupied <= hostRect.height) {
+      el.style.setProperty("--toast-offset", `${Math.round(occupied) + 12}px`);
+    }
+  }
+
   (document.getElementById("app") ?? document.body).append(el);
   setTimeout(() => el.classList.add("toast--out"), 2_400);
   setTimeout(() => el.remove(), 3_000);
