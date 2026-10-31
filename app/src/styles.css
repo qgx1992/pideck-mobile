@@ -2011,6 +2011,10 @@ body.barcode-scanner-active .scan-overlay {
   border-radius: 9px;
   background: var(--bg-soft);
   color: var(--text-dim);
+  /* 图标按钮：文字与 SVG 都要居中，否则书签图标会贴底 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .composer-inline-tools .chip--icon:active {
@@ -3798,4 +3802,58 @@ body.barcode-scanner-active .scan-overlay {
 .todo-history-text {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+/* ---------------------------- 输入框：计划模式 / 提示词库 ---------------------------- */
+
+/* 计划模式是「一次性」开关，激活时用强调色描边，避免看起来像普通 chip */
+.chip--plan {
+  font-weight: 650;
+}
+
+.chip--plan.is-active {
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 16%, var(--bg));
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+}
+
+/* 输入框左下角图标按钮里的 SVG */
+.composer-inline-tools .chip--icon svg {
+  display: block;
+}
+
+/* 提示词库：分类筛选条 */
+.prompt-cats {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0 8px;
+  scrollbar-width: none;
+}
+
+.prompt-cats::-webkit-scrollbar {
+  display: none;
+}
+
+.prompt-cat {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.prompt-cat.is-active {
+  color: var(--text);
+  font-weight: 600;
+  background: color-mix(in oklab, var(--accent) 16%, var(--bg));
+  border-color: color-mix(in oklab, var(--accent) 48%, var(--border));
+}
+
+.prompt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }

@@ -16,7 +16,7 @@
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
 | `src/` | 协议与状态核心 + 探针 CLI（**56 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（Vite + Capacitor，**438 条测试**） | `cd app && npm run dev` / `npm run apk` |
+| `app/` | 手机客户端（Vite + Capacitor，**457 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
@@ -97,8 +97,9 @@ docs/issue-*.md             已提交给上游的两个缺陷草稿
 - 运行中三处动画标识：对话底部旋转圆环、顶部栏呼吸绿点、侧栏绿条脉冲
 
 **输入框**
-- `@` 文件引用（逐层浏览项目目录）、`/` 斜线命令（运行时命令 + 提示词库 + 内置），
-  两者内嵌在输入框左下角
+- 输入框左下角五个按钮：`@` 文件引用、**提示词库**（与桌面端同一个库，可搜索/按分类筛，
+  选中拉正文插入输入框）、**计划模式**（一次性：只读分析并输出 `Plan:` 编号计划，发完自动关）、
+  `/` 斜线命令、发送图片
 - 模型 / 思考档位切换（无运行时先自动激活），模型面板支持搜索（名称 / ID / 供应商）
 - 上下文用量：环形百分比 + 明细面板（输入/输出/缓存/花费）+ 一键压缩上下文
 - **供应商额度**：面板里手动查询余额/套餐用量（`GET /api/usage/:provider`），未开启时给引导
@@ -173,7 +174,7 @@ node src/cli/probe.ts stop --pair "..." --session <sessionId>
 
 ```bash
 npm test && npm run typecheck                 # 核心：56 条
-cd app && npm test && npm run typecheck       # 客户端：438 条
+cd app && npm test && npm run typecheck       # 客户端：457 条
 cd app && npm run verify:send                 # mock 发送链路（14 项）
 ```
 

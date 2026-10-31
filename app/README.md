@@ -18,7 +18,7 @@ app/
 │  │                     ask 卡片、工作区、模型选择、上下文用量、任务清单、抽屉手势
 │  └─ ...
 ├─ scripts/              APK 构建、图标生成、smoke-ui（真数据）、verify-send（mock 链路）
-└─ tests/                node:test + jsdom，438 条
+└─ tests/                node:test + jsdom，457 条
 ```
 
 ## 本地开发（浏览器里就能用）

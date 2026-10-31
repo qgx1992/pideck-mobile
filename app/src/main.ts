@@ -66,6 +66,9 @@ import {
 } from "./ui/settings-model.ts";
 import type { DshPluginRow, ExtensionRow, ModelRow, SkillSection } from "./ui/settings-model.ts";
 import { emptyStateSubtitle, emptyStateTitle, suggestionContext, suggestionsFor } from "./ui/empty-suggestions.ts";
+import { filterByCategory, filterPrompts, normalizePrompts, promptSubtitle } from "./ui/prompt-library-model.ts";
+import type { PromptItem } from "./ui/prompt-library-model.ts";
+import { buildPlanSubmission } from "./ui/plan-mode.ts";
 import { renderFlatSection, renderProjectGroup } from "./ui/sidebar-view.ts";
 import {
   ACTIVITY_RECENT_LIMIT,
@@ -254,6 +257,12 @@ const previousPendingByEndpoint = new Map<string, PendingSnapshot[]>();
  * 跨会话保留：用户选了插话，切到别的会话还在跑时应该还是插话。
  */
 let sendMode: SendMode = "queue";
+/**
+ * 计划模式开关（每个会话各自记）。
+ * 一次性语义：发送成功后自动关闭，避免用户忘了还开着、后续提问全被限制成只读。
+ */
+let planModeOn = false;
+const planModeBySession = new Map<string, boolean>();
 /** 后台服务已经替我们通知过的会话（回到前台后别再弹一次） */
 const notifiedByService = new Set<string>();
 /**
@@ -707,6 +716,8 @@ interface MainRefs {
   contextText: HTMLElement;
   /** 运行中且输入框有东西时的「排队 / 插话」发送按钮 */
   queueSendBtn: HTMLButtonElement;
+  /** 计划模式开关（发完自动关） */
+  planBtn: HTMLButtonElement;
   /** 待发送图片的缩略图容器 */
   attachments: HTMLElement;
   /** 任务清单条带（agent 维护的 todo） */
@@ -805,12 +816,21 @@ function renderMain(): void {
   });
   // @ / 放在输入框内部左下角，历史按钮固定在右下角
   // （输入框底部预留一条整宽的空白带，左右按钮都落在带子里，不会压到文字）
+  const promptBtn = h("button", { class: "chip chip--icon", title: "提示词库", "aria-label": "提示词库" });
+  promptBtn.append(bookmarkIcon());
+  // 计划模式：一次性，发完自动关（桌面端同规则）
+  const planBtn = h("button", {
+    class: "chip chip--plan",
+    text: "计划",
+    title: "计划模式：只读分析并输出 Plan: 编号计划，发完自动关闭",
+    "aria-label": "计划模式",
+  });
   const attachBtn = h("button", { class: "chip chip--icon", text: "图", title: "发送图片（相册 / 拍照）" });
   const imageInput = h("input", { type: "file" });
   imageInput.accept = "image/*";
   imageInput.multiple = true;
   imageInput.hidden = true;
-  const inputTools = h("div", { class: "composer-inline-tools" }, [mentionBtn, slashBtn, attachBtn]);
+  const inputTools = h("div", { class: "composer-inline-tools" }, [mentionBtn, promptBtn, planBtn, slashBtn, attachBtn]);
   const historyFab = h("button", {
     class: "composer-fab",
     title: "跳转到历史消息",
@@ -880,6 +900,7 @@ function renderMain(): void {
     contextRing,
     contextText,
     queueSendBtn,
+    planBtn,
     attachments: attachmentsEl,
     todoStrip,
     subagentStrip,
@@ -994,6 +1015,12 @@ function renderMain(): void {
       renderComposerState();
       toast(sendModeSwitchToast(sendMode));
     },
+  });
+  promptBtn.addEventListener("click", () => void openPromptLibrarySheet());
+  planBtn.addEventListener("click", () => {
+    planModeOn = !planModeOn;
+    renderComposerState();
+    toast(planModeOn ? "计划模式已开启：本轮只做只读分析并给计划" : "已切回普通模式");
   });
   attachBtn.addEventListener("click", () => imageInput.click());
   imageInput.addEventListener("change", () => {
@@ -1527,6 +1554,13 @@ function renderComposerState(): void {
 
   // 运行中 + 输入框有东西（文字或图片）时，才在「历史」左侧出现「排队 / 插话」
   const running = isRunActive();
+  // 计划模式按钮：开启时高亮，标题说明「发完自动关」
+  refs.planBtn.classList.toggle("is-active", planModeOn);
+  refs.planBtn.title = planModeOn
+    ? "计划模式已开启：本轮只读分析并输出 Plan: 编号计划，发完自动关闭"
+    : "计划模式：只读分析并输出 Plan: 编号计划，发完自动关闭";
+  refs.planBtn.setAttribute("aria-pressed", planModeOn ? "true" : "false");
+
   const hasContent = refs.composer.value.trim().length > 0 || currentImages().length > 0;
   const showRunningSend = shouldShowRunningSend(running, hasContent);
   refs.queueSendBtn.classList.toggle("is-hidden", !showRunningSend);
@@ -1604,6 +1638,9 @@ async function openSession(sessionId: string): Promise<void> {
   activeProjectId = store.session(sessionId)?.projectId ?? activeProjectId;
   chatView.clear();
   chatView.setEmpty("加载中…");
+
+  // 计划模式也是每会话各自记（发送成功后会被置回 false）
+  planModeOn = planModeBySession.get(epKey(sessionId)) ?? false;
 
   // 恢复这个会话自己的草稿（没有就清空，不能留着上一个会话的内容）
   if (refs) {
@@ -2539,6 +2576,15 @@ async function send(): Promise<void> {
     const current = channel;
     if (!current) return;
 
+    // 计划模式：可见消息保持原文，另塞一条带隐藏标记的 agentMessage（与桌面端逐字一致）
+    const submission = buildPlanSubmission(text, planModeOn);
+    if (submission.planMode) {
+      // 一次性语义：发出去就回普通模式，免得后续提问被一直限制成只读
+      planModeOn = false;
+      if (activeSessionId) planModeBySession.set(epKey(activeSessionId), false);
+      renderComposerState();
+    }
+
     // 发出新提问 = 上一轮结束：把当前清单归入历史，并从输入框上方撤掉
     archiveTodoBeforeSend(activeSessionId);
 
@@ -2548,11 +2594,12 @@ async function send(): Promise<void> {
 
     // 先把自己的提问显示出来，不要等服务端落盘
     chatView?.clearLive();
-    chatView?.appendLocalUser(typed || text, images.map((image) => image.dataUrl));
-    await current.send(text, {
+    chatView?.appendLocalUser(typed || submission.message, images.map((image) => image.dataUrl));
+    await current.send(submission.message, {
       // 运行中才带：空闲时排队/插话都等于普通发送
       streamingBehavior: streamingBehaviorFor(isRunActive(), sendMode),
       ...(images.length > 0 ? { images: images.map(toImageAttachment) } : {}),
+      ...(submission.agentMessage ? { extra: { agentMessage: submission.agentMessage } } : {}),
     });
     // 发出去了才清掉缩略图（发送失败时图还在，可以直接重试）
     clearCurrentImages();
@@ -3859,6 +3906,169 @@ async function applyMessageAction(action: MessageAction, messageId: string, text
     toast(action === "edit" ? "已保存" : "已删除");
   } catch (error) {
     toast(describeError(error));
+  }
+}
+
+/** 书签图标（提示词库），与齿轮同一套内联 SVG 写法。 */
+function bookmarkIcon(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "15");
+  svg.setAttribute("height", "15");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.9");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const pathEl = document.createElementNS(ns, "path");
+  pathEl.setAttribute("d", "M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z");
+  svg.append(pathEl);
+  return svg;
+}
+
+/* ---------------------------- 提示词库 ---------------------------- */
+
+/**
+ * 提示词库面板。
+ *
+ * 与桌面端同一个库（`/api/prompts`）：列表只有摘要，选中后再按 slug 拉正文填进输入框。
+ * 搜索与分类都在本地过滤 —— 手机上每敲一个字都打一次接口不值得。
+ */
+async function openPromptLibrarySheet(): Promise<void> {
+  if (!runtime) return;
+  const sessionId = activeSessionId;
+
+  openSheet("提示词库", (sheet) => {
+    sheet.append(h("p", { class: "sheet-note", text: "正在读取提示词…" }));
+  });
+
+  let items: PromptItem[] = [];
+  let categories: Array<{ slug: string; name: string; count: number }> = [];
+  try {
+    const raw = await runtime.client.listPrompts({ pageSize: 200 });
+    const parsed = normalizePrompts(raw);
+    items = parsed.items;
+    categories = parsed.categories;
+  } catch (error) {
+    openSheet("提示词库", (sheet) => {
+      sheet.append(h("p", { class: "sheet-note", text: `读取失败：${describeError(error)}` }));
+    });
+    return;
+  }
+
+  if (items.length === 0) {
+    openSheet("提示词库", (sheet) => {
+      sheet.append(
+        h("p", {
+          class: "sheet-note",
+          text: "这台 PiDeck 没有返回提示词。先在桌面端「提示词库」里添加几条，或确认库目录可用。",
+        }),
+      );
+    });
+    return;
+  }
+
+  let query = "";
+  let category = "";
+
+  const render = (): void => {
+    const filtered = filterPrompts(filterByCategory(items, category), query);
+    openSheet(`提示词库（${filtered.length}）`, (sheet) => {
+      const search = h("input", {
+        class: "sheet-input",
+        type: "search",
+        placeholder: "搜索标题 / 描述 / 标签…",
+        value: query,
+      });
+      search.addEventListener("input", () => {
+        query = search.value;
+        render();
+        // 重画后焦点会丢，重新聚焦并还原光标
+        const next = document.querySelector<HTMLInputElement>(".sheet-backdrop .sheet-input");
+        if (next) {
+          next.focus();
+          next.setSelectionRange(next.value.length, next.value.length);
+        }
+      });
+      sheet.append(search);
+
+      if (categories.length > 0) {
+        const chips = h("div", { class: "prompt-cats" });
+        const all = h("button", {
+          class: `prompt-cat${category === "" ? " is-active" : ""}`,
+          text: "全部",
+          onclick: () => {
+            category = "";
+            render();
+          },
+        });
+        chips.append(all);
+        for (const item of categories.slice(0, 12)) {
+          chips.append(
+            h("button", {
+              class: `prompt-cat${category === item.slug ? " is-active" : ""}`,
+              text: item.name,
+              title: `${item.name}（${item.count}）`,
+              onclick: () => {
+                category = category === item.slug ? "" : item.slug;
+                render();
+              },
+            }),
+          );
+        }
+        sheet.append(chips);
+      }
+
+      if (filtered.length === 0) {
+        sheet.append(h("p", { class: "sheet-note", text: "没有匹配的提示词" }));
+        return;
+      }
+
+      const list = h("div", { class: "prompt-list" });
+      for (const item of filtered.slice(0, 60)) {
+        list.append(
+          h(
+            "button",
+            {
+              class: "sheet-item sheet-item--two",
+              onclick: () => void pickPrompt(item, sessionId),
+            },
+            [
+              h("span", { class: "conn-name", text: item.title }),
+              h("span", { class: "conn-url", text: promptSubtitle(item) || item.description || " " }),
+            ],
+          ),
+        );
+      }
+      sheet.append(list);
+      if (filtered.length > 60) {
+        sheet.append(h("p", { class: "sheet-note", text: `只显示前 60 条（共 ${filtered.length}），用搜索缩小范围` }));
+      }
+    });
+  };
+
+  render();
+}
+
+/** 选中一条 → 拉正文 → 插到输入框光标处。 */
+async function pickPrompt(item: PromptItem, sessionId: string | null): Promise<void> {
+  if (!runtime) return;
+  try {
+    const content = await runtime.client.getPromptContent(item.slug, item.category);
+    closeSheet();
+    if (!content.trim()) {
+      toast("这条提示词没有正文");
+      return;
+    }
+    insertAtCursor(content.trim());
+    toast("已插入输入框");
+  } catch (error) {
+    toast(`读取提示词失败：${describeError(error)}`);
+  }
+  if (sessionId && sessionId === activeSessionId && refs) {
+    sessionDrafts.set(epKey(sessionId), refs.composer.value);
   }
 }
 

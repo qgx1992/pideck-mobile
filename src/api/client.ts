@@ -691,8 +691,30 @@ export class PiDeckClient {
   async gitDiff(projectId: string, path: string): Promise<unknown> {
     return this.requestJson<unknown>("/api/git/diff", { query: { projectId, path } });
   }
-  listPrompts() {
-    return this.requestJson<unknown>("/api/prompts");
+  /**
+   * 提示词库列表（与桌面端同一个库）。
+   *
+   * 支持 search / category / 分页；返回 `{ categories, prompts, total? }`，
+   * 其中每条只有摘要，正文要再调 `getPromptContent()`。
+   */
+  listPrompts(query: { search?: string; category?: string; page?: number; pageSize?: number } = {}) {
+    return this.requestJson<unknown>("/api/prompts", {
+      query: {
+        ...(query.search ? { search: query.search } : {}),
+        ...(query.category ? { category: query.category } : {}),
+        page: query.page ?? 1,
+        pageSize: query.pageSize ?? 50,
+      },
+    });
+  }
+
+  /** 单条提示词正文（插入输入框用）：`detail.promptContent`。 */
+  async getPromptContent(slug: string, category: string): Promise<string> {
+    const response = await this.requestJson<{ detail?: { promptContent?: string } }>(
+      `/api/prompts/${encodeURIComponent(slug)}`,
+      { query: { category } },
+    );
+    return typeof response.detail?.promptContent === "string" ? response.detail.promptContent : "";
   }
   listSkills() {
     return this.requestJson<unknown>("/api/skills");
