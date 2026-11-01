@@ -132,6 +132,17 @@ export function isReversePastOrigin(travel: number): boolean {
   return travel < -REVERSE_CANCEL_PX;
 }
 
+/**
+ * 手指从最远点往回缩了吗。
+ *
+ * 只看起点不够：拉到一半再往回缩时行程仍是正的，`shouldFinish` 的距离规则
+ * 会照旧判「打开」。所以松手时用这个把它整体否掉 —— 反向就是反悔，抽屉回原位。
+ */
+export function isPulledBack(peakTravel: number, travel: number): boolean {
+  if (!Number.isFinite(peakTravel) || !Number.isFinite(travel)) return false;
+  return peakTravel - travel > REVERSE_CANCEL_PX;
+}
+
 /** 松手前这么久没动过，就不算轻扫（按住不动时残留的旧速度不能拿来判）。 */
 export const FLING_STALE_MS = 120;
 
@@ -298,12 +309,15 @@ export function attachDrawerGestures(options: DrawerGesturesOptions): () => void
   let width = 0;
   let fromEdge = false;
   let active: GestureDrawer | null = null;
+  // 本次手势沿目标方向走过的最远距离，用来识别「拉一半又往回缩」
+  let peakTravel = 0;
 
   const release = (): void => {
     pending = false;
     engaged = false;
     fromEdge = false;
     plan = null;
+    peakTravel = 0;
     if (active) {
       active.drawer.style.transition = "";
       active.drawer.style.transform = "";
@@ -338,6 +352,7 @@ export function attachDrawerGestures(options: DrawerGesturesOptions): () => void
     sampleX = touch.clientX;
     sampleTime = lastTime;
     velocity = 0;
+    peakTravel = 0;
   };
 
   const onMove = (event: TouchEvent): void => {
@@ -381,6 +396,8 @@ export function attachDrawerGestures(options: DrawerGesturesOptions): () => void
       return;
     }
 
+    if (travel > peakTravel) peakTravel = travel;
+
     if (event.cancelable) event.preventDefault();
 
     const now = Date.now();
@@ -410,7 +427,9 @@ export function attachDrawerGestures(options: DrawerGesturesOptions): () => void
     const travel = travelFor(lastX - startX, currentPlan);
     // 松手前手指已经按住不动了：那条旧速度不能拿来判「轻扫」
     const freshVelocity = Date.now() - lastTime > FLING_STALE_MS ? 0 : velocity;
-    const finished = shouldFinish(travel, width, freshVelocity, openRatio, flingVelocity);
+    // 往回缩过就不算数：无论还剩多少行程、速度多快，一律回原位
+    const pulledBack = isPulledBack(peakTravel, travel);
+    const finished = !pulledBack && shouldFinish(travel, width, freshVelocity, openRatio, flingVelocity);
 
     // 先清 inline，让 CSS 类接管，才有吸附动画
     drawer.drawer.style.transition = "";
@@ -428,6 +447,7 @@ export function attachDrawerGestures(options: DrawerGesturesOptions): () => void
     pending = false;
     plan = null;
     active = null;
+    peakTravel = 0;
   };
 
   doc.addEventListener("touchstart", onStart, { passive: true });

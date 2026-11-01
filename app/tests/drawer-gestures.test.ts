@@ -10,6 +10,7 @@ import {
   horizontalScrollRange,
   isHorizontalScroller,
   isInteractiveTarget,
+  isPulledBack,
   isReversePastOrigin,
   isScrollRoot,
   planSwipe,
@@ -137,6 +138,15 @@ test("越过起点才算反悔（留 8px 抖动余量）", () => {
   assert.equal(isReversePastOrigin(-8), false);
   assert.equal(isReversePastOrigin(0), false);
   assert.equal(isReversePastOrigin(40), false);
+});
+
+test("从最远点往回缩就算反悔（不看是否越过起点）", () => {
+  assert.equal(isPulledBack(460, 460), false, "原地不动不算");
+  assert.equal(isPulledBack(460, 452), false, "8px 以内是抖动");
+  assert.equal(isPulledBack(460, 352), true, "行程还是正的，但已经往回缩了 108px");
+  assert.equal(isPulledBack(100, 200), false, "超过峰值（还在往外走）不算");
+  assert.equal(isPulledBack(Number.NaN, 100), false, "脏数据不误伤");
+  assert.equal(isPulledBack(100, Number.NaN), false);
 });
 
 /* ---------------- 哪片区域能起手滑 ---------------- */
@@ -309,6 +319,40 @@ test("越过起点（反悔）→ 手势作废，后续移动也不再接管", (
   });
   assert.equal(h.draw.left.style.transform, "", "作废后不再跟手");
   assert.deepEqual(h.opens, []);
+  h.dispose();
+});
+
+test("拉到 50% 再回缩到 40%（行程仍在阈值上）→ 不弹侧栏", () => {
+  // 回归：以前只看 release 时的行程，352/880 = 40% ≥ 35% 就会被判打开
+  const h = harness();
+  withClock((tick) => {
+    h.fire("touchstart", 100);
+    tick(16);
+    h.fire("touchmove", 560); // 52%
+    tick(16);
+    h.fire("touchmove", 452); // 往回缩到 40%
+    tick(16);
+    h.fire("touchend", 452);
+  });
+  assert.deepEqual(h.opens, [], "反向就是反悔，抽屉回原位");
+  assert.deepEqual(h.closes, []);
+  h.dispose();
+});
+
+test("回缩后又一路拉过峰值 → 正常打开", () => {
+  const h = harness();
+  withClock((tick) => {
+    h.fire("touchstart", 100);
+    tick(16);
+    h.fire("touchmove", 560);
+    tick(16);
+    h.fire("touchmove", 452); // 缩回来一下
+    tick(16);
+    h.fire("touchmove", 640); // 又冲过峰值
+    tick(16);
+    h.fire("touchend", 640);
+  });
+  assert.deepEqual(h.opens, ["left"]);
   h.dispose();
 });
 
