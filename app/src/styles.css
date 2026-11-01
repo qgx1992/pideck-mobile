@@ -1263,6 +1263,15 @@ body.barcode-scanner-active .scan-overlay {
 
 .scrim {
   display: none;
+  /* 拖拽过程中 JS 只切 display / opacity，位置属性必须一直存在：
+     否则它会变成 .body 网格里的第二个流内元素（多出一行），
+     主界面被压短、底部露出一条空白 —— 新会话内容少时最明显 */
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  background: rgb(0 0 0 / 0.5);
+  touch-action: none;
+  overscroll-behavior: contain;
 }
 
 /* ---------------------------- 右侧「工作区」抽屉 ---------------------------- */
@@ -1290,6 +1299,11 @@ body.barcode-scanner-active .scan-overlay {
 
 .workspace-scrim {
   display: none;
+  /* 同上：手势过程中只切 display，定位写在基础规则里，避免多出一行网格 */
+  position: absolute;
+  inset: 0;
+  z-index: 21;
+  background: rgb(0 0 0 / 0.35);
   touch-action: none;
   overscroll-behavior: contain;
   /* 拖动时由 attachDrawerSwipe 临时设 inline opacity */
@@ -1298,13 +1312,6 @@ body.barcode-scanner-active .scan-overlay {
 
 .body.show-workspace .workspace-scrim {
   display: block;
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 21;
-  background: rgb(0 0 0 / 0.35);
 }
 
 .ws-head {
@@ -1622,23 +1629,13 @@ body.barcode-scanner-active .scan-overlay {
   }
 
   /* 拖动时由 edge-swipe 临时设 inline display/opacity；
-     打开后回到 .show-sidebar 接管 */
+     打开后回到 .show-sidebar 接管。定位与背景见基础规则 .scrim */
   .scrim {
     transition: opacity 0.12s linear;
   }
 
   .body.show-sidebar .scrim {
     display: block;
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 15;
-    background: rgb(0 0 0 / 0.5);
-    /* 遮罩自己接收并吞掉触摸，滑动不会穿透到下面的聊天区 */
-    touch-action: none;
-    overscroll-behavior: contain;
   }
 
   /* 抽屉打开时，被遮住的一侧彻底禁用交互与滚动 */

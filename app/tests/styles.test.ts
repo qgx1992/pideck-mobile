@@ -57,3 +57,33 @@ test("执行过程折叠头的箭头只由 SVG 提供，不来自 ::before", () 
   // 反向确认：rules 里没有任何残留的「展开时旋转伪元素」
   assert.equal(/\.process\[open\][^{}]*summary::before/.test(css), false);
 });
+
+/** 取某个选择器（逗号分隔中的一项）命中的所有声明块正文 */
+function declarationsOf(source: string, selector: string): string[] {
+  const out: string[] = [];
+  for (const match of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = match[1]
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (selectors.includes(selector)) out.push(match[2]);
+  }
+  return out;
+}
+
+/**
+ * 遮罩在手势过程中是由 JS 直接 `style.display = "block"` 拉起来的，
+ * 那时 `.show-sidebar / .show-workspace` 还没加上。定位若只写在
+ * `.body.show-sidebar .scrim` 里，拖动期间它就是个普通流内块 ——
+ * `.body` 是 grid，于是多出一行、主界面被压短、底部露出空白条
+ * （新会话内容少时最明显）。所以基础规则必须自带定位。
+ */
+test("抽屉遮罩的定位写在基础规则里，不依赖 .show-* 类", () => {
+  for (const selector of [".scrim", ".workspace-scrim"]) {
+    const blocks = declarationsOf(css, selector);
+    assert.ok(blocks.length > 0, `${selector} 缺少基础规则`);
+    const joined = blocks.join("\n");
+    assert.match(joined, /position:\s*(absolute|fixed)/, `${selector} 必须常驻定位`);
+    assert.match(joined, /(inset:\s*0|top:\s*0[\s\S]*bottom:\s*0)/, `${selector} 必须铺满容器`);
+  }
+});
