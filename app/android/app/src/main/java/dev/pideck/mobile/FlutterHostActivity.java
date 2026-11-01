@@ -23,8 +23,13 @@ import io.flutter.plugin.common.MethodChannel;
  *   pideckFlutterSessionId  可选的会话 id（从聊天页跳过来时带上）
  *
  * Dart 侧（flutter_module/lib/main.dart）调 channel "pideck/flutter_host"：
- *   getArgs() → {"route": "...", "sessionId": "..."}
- *   close()   → 关掉 Flutter 页，回到 WebView
+ *   getArgs()          → {"route": "...", "sessionId": "..."}
+ *   getSettings()      → 宿主缓存的 SettingsData JSON（首帧用，不等回程）
+ *   settingsAction(s)  → 把用户在 Flutter 页上的动作回传给 WebView 执行
+ *   close()            → 关掉 Flutter 页，回到 WebView
+ *
+ * 反向（原生 → Dart）：`setSettings(json)` / `showNotice(text)`，由
+ * FlutterLauncherPlugin 在 JS 推数据或要求提示时调进来。
  */
 public class FlutterHostActivity extends FlutterFragmentActivity {
 
@@ -33,6 +38,11 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
 
     private static final String TAG = "PiDeckFlutterHost";
     private static final String CHANNEL = "pideck/flutter_host";
+
+    /** 当前活着的宿主 Activity（插件要能反向调用它；同一时刻只可能有一个）。 */
+    static volatile FlutterHostActivity current;
+
+    private MethodChannel channel;
 
     private String route = "";
     private String sessionId = "";
@@ -56,33 +66,71 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
     @Override
     protected void onStart() {
         super.onStart();
+        current = this;
         FlutterLauncherPlugin.notifyPageVisibility(true);
     }
 
     @Override
     protected void onStop() {
+        if (current == this) current = null;
         FlutterLauncherPlugin.notifyPageVisibility(false);
         super.onStop();
+    }
+
+    /** JS 推来新数据时由插件调用（`FlutterHost.pushSettings`）。 */
+    static void pushSettingsToFlutter(String json) {
+        FlutterHostActivity activity = current;
+        if (activity == null) return;
+        activity.invokeOnFlutter("setSettings", json);
+    }
+
+    /** JS 要求弹一句提示时由插件调用（`FlutterHost.pushNotice`）。 */
+    static void pushNoticeToFlutter(String text) {
+        FlutterHostActivity activity = current;
+        if (activity == null) return;
+        activity.invokeOnFlutter("showNotice", text);
+    }
+
+    /** channel 只能在主线程用；插件回调可能在别的线程。 */
+    private void invokeOnFlutter(String method, String argument) {
+        final MethodChannel target = channel;
+        if (target == null) return;
+        runOnUiThread(() -> {
+            try {
+                target.invokeMethod(method, argument);
+            } catch (Exception error) {
+                Log.w(TAG, method + " 下发失败: " + error.getMessage());
+            }
+        });
     }
 
     @Override
     public void configureFlutterEngine(FlutterEngine flutterEngine) {
         super.configureFlutterEngine(flutterEngine);
-        new MethodChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), CHANNEL)
-                .setMethodCallHandler((call, result) -> {
-                    switch (call.method) {
-                        case "getArgs":
-                            result.success(buildArgs());
-                            break;
-                        case "close":
-                            result.success(null);
-                            finish();
-                            break;
-                        default:
-                            result.notImplemented();
-                            break;
-                    }
-                });
+        MethodChannel methodChannel =
+                new MethodChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), CHANNEL);
+        methodChannel.setMethodCallHandler((call, result) -> {
+            switch (call.method) {
+                case "getArgs":
+                    result.success(buildArgs());
+                    break;
+                case "getSettings":
+                    result.success(FlutterLauncherPlugin.currentSettings());
+                    break;
+                case "settingsAction":
+                    FlutterLauncherPlugin.dispatchSettingsAction(call.argument("json"));
+                    result.success(null);
+                    break;
+                case "close":
+                    result.success(null);
+                    finish();
+                    break;
+                default:
+                    result.notImplemented();
+                    break;
+            }
+        });
+        channel = methodChannel;
     }
 
     private String buildArgs() {

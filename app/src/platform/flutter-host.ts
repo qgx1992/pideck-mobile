@@ -17,9 +17,19 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 export interface FlutterHostBridge {
   open(options: { route: string; sessionId?: string }): Promise<{ opened: boolean; route: string }>;
   available(): Promise<{ available: boolean }>;
+  /** 推一份最新的设置数据（JSON 字符串）；原生会缓存并在 Flutter 首帧同步返回。 */
+  pushSettings(options: { json: string }): Promise<void>;
+  /** 让 Flutter 页弹一句提示（WebView 的 toast 在 Flutter 页上不可见）。 */
+  pushNotice(options: { text: string }): Promise<void>;
+  /** 主动关掉 Flutter 页（handler 里要切到别的界面时）。 */
+  closePage(): Promise<void>;
   addListener(
     eventName: "pageVisibility",
     listener: (data: { open: boolean }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
+  addListener(
+    eventName: "settingsAction",
+    listener: (data: { json: string }) => void,
   ): Promise<{ remove: () => Promise<void> }>;
 }
 
@@ -73,6 +83,74 @@ export async function onFlutterPageVisibility(
     };
   } catch (error) {
     console.warn("[flutter-host] 订阅页面可见性失败", error);
+    return () => undefined;
+  }
+}
+
+/**
+ * 把设置页数据推给 Flutter。
+ *
+ * 设置页走的是「视图迁移」：状态源仍在 WebView（`settingsData()` 组装），
+ * Flutter 只负责画。所以每次数据变就推一份，Flutter 侧整页重绘。
+ * 打开 Flutter 页**之前**也要先推一次 —— 原生会缓存，首帧直接取走，不会白屏。
+ */
+export async function pushFlutterSettings(json: string): Promise<void> {
+  if (!bridge || Capacitor.getPlatform() !== "android") return;
+  try {
+    await bridge.pushSettings({ json });
+  } catch (error) {
+    console.warn("[flutter-host] 推送设置数据失败", error);
+  }
+}
+
+/** 让 Flutter 页弹一句提示。非 Android / 老包时调用方应回退到 toast。 */
+export async function pushFlutterNotice(text: string): Promise<void> {
+  if (!bridge || Capacitor.getPlatform() !== "android") return;
+  try {
+    await bridge.pushNotice({ text });
+  } catch (error) {
+    console.warn("[flutter-host] 推送提示失败", error);
+  }
+}
+
+/** 关掉当前 Flutter 页（JS 侧主动关，比如要跳到配对页）。 */
+export async function closeFlutterPage(): Promise<void> {
+  if (!bridge || Capacitor.getPlatform() !== "android") return;
+  try {
+    await bridge.closePage();
+  } catch (error) {
+    console.warn("[flutter-host] 关闭 Flutter 页失败", error);
+  }
+}
+
+/**
+ * 订阅 Flutter 页回传的动作（用户点了开关 / 切了设备 / 点了刷新）。
+ *
+ * 动作只是一份 JSON，具体执行交给与 Web 版共用的那套 handler，
+ * 这样两个界面的行为不会分叉。返回 detach。
+ */
+export async function onFlutterSettingsAction(
+  handler: (action: Record<string, unknown>) => void,
+): Promise<() => void> {
+  if (!bridge || Capacitor.getPlatform() !== "android") return () => undefined;
+  try {
+    const handle = await bridge.addListener("settingsAction", (data) => {
+      const raw = typeof data?.json === "string" ? data.json : "";
+      if (!raw) return;
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          handler(parsed as Record<string, unknown>);
+        }
+      } catch (error) {
+        console.warn("[flutter-host] 动作解析失败", error);
+      }
+    });
+    return () => {
+      void handle.remove();
+    };
+  } catch (error) {
+    console.warn("[flutter-host] 订阅设置动作失败", error);
     return () => undefined;
   }
 }

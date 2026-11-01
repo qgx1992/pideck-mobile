@@ -46,6 +46,8 @@ function baseData(overrides: Record<string, unknown> = {}) {
       { key: "user::plan-mode", source: "builtin:plan-mode", name: "计划模式", scope: "user", enabled: true, description: "" },
     ],
     dshPlugins: [],
+    // 数据里带而不是走 handler：Flutter 版只收 JSON，拿不到闭包。
+    dshTarget: "会话「DSH 测试」",
     loading: false,
     ...overrides,
   };
@@ -76,7 +78,6 @@ function makePage() {
     onRefresh: () => calls.push("refresh"),
     onDshPluginAction: (plugin, action) => calls.push(`dsh:${plugin.id}:${action}`),
     onDshPluginInstall: (input) => calls.push(`dshInstall:${input.idPrefix}:${input.name}`),
-    dshTargetLabel: () => "会话「DSH 测试」",
   });
   return { page, calls };
 }

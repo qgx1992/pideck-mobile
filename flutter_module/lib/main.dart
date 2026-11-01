@@ -1,35 +1,14 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-/// 与 `app/android/app/src/main/java/dev/pideck/mobile/FlutterHostActivity.java` 一一对应。
-///
-///   getArgs() → {"route": "...", "sessionId": "..."}
-///   close()   → 关掉本页，回到 WebView
-const MethodChannel hostChannel = MethodChannel('pideck/flutter_host');
+import 'app_theme.dart';
+import 'host_channel.dart';
+import 'settings/settings_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final args = await _loadArgs();
-  runApp(PiDeckFlutterApp(route: args.$1, sessionId: args.$2));
-}
-
-/// 取宿主传来的参数。宿主没给（比如直接 flutter run 调试）时给默认值，
-/// 不要让 channel 报错把首帧卡住。
-Future<(String, String)> _loadArgs() async {
-  try {
-    final raw = await hostChannel.invokeMethod<String>('getArgs');
-    if (raw == null || raw.isEmpty) return ('', '');
-    final map = jsonDecode(raw) as Map<String, dynamic>;
-    return (
-      (map['route'] as String?) ?? '',
-      (map['sessionId'] as String?) ?? '',
-    );
-  } catch (_) {
-    return ('', '');
-  }
+  final args = await loadHostArgs();
+  runApp(PiDeckFlutterApp(route: args.route, sessionId: args.sessionId));
 }
 
 class PiDeckFlutterApp extends StatelessWidget {
@@ -38,69 +17,66 @@ class PiDeckFlutterApp extends StatelessWidget {
   final String route;
   final String sessionId;
 
-  /// 与 Web 侧 `app/src/styles.css` 的深色底保持一致，切页时不会闪一下浅色。
-  static const Color background = Color(0xFF16181D);
-  static const Color surface = Color(0xFF1F2229);
-  static const Color accent = Color(0xFF7C9CFF);
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'PiDeck',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: background,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: accent,
-          brightness: Brightness.dark,
-          surface: background,
-        ),
+      theme: buildPiTheme(),
+      // 路由是宿主的 EXTRA_ROUTE，加新页面时在这里挂分支。
+      home: switch (route) {
+        'settings' => const SettingsScreen(),
+        _ => _HostPlaceholderPage(route: route, sessionId: sessionId),
+      },
+    );
+  }
+}
+
+/// 还没迁移的 route 落到这里：显示通道已连通，避免一片空白。
+class _HostPlaceholderPage extends StatelessWidget {
+  const _HostPlaceholderPage({required this.route, required this.sessionId});
+
+  final String route;
+  final String sessionId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: piBackground,
+      appBar: AppBar(
+        backgroundColor: piBackground,
+        surfaceTintColor: Colors.transparent,
+        title: const Text('Flutter 页面', style: TextStyle(fontSize: 16)),
       ),
-      home: Scaffold(
-        appBar: AppBar(
-          backgroundColor: background,
-          surfaceTintColor: Colors.transparent,
-          title: const Text('Flutter 页面', style: TextStyle(fontSize: 16)),
-        ),
-        body: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          children: [
-            _Card(
-              title: '通道已连通',
-              lines: [
-                'route: ${route.isEmpty ? "(未传)" : route}',
-                'sessionId: ${sessionId.isEmpty ? "(未传)" : sessionId}',
-              ],
-            ),
-            const SizedBox(height: 12),
-            const _Card(
-              title: '下一步',
-              lines: [
-                '这里就是逐页迁移的落脚点：把某个 Web 页面改写成 Dart，',
-                '然后从 WebView 用 FlutterHost.open({route}) 跳进来。',
-                '迁移顺序与插件等价方案见 docs/flutter-migration.md。',
-              ],
-            ),
-            const SizedBox(height: 24),
-            FilledButton(
-              onPressed: () => hostChannel.invokeMethod<void>('close'),
-              child: const Text('返回 WebView'),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Flutter ${_engineVersion()}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 11, color: Colors.white38),
-            ),
-          ],
-        ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [
+          _Card(
+            title: '通道已连通',
+            lines: [
+              'route: ${route.isEmpty ? "(未传)" : route}',
+              'sessionId: ${sessionId.isEmpty ? "(未传)" : sessionId}',
+            ],
+          ),
+          const SizedBox(height: 12),
+          const _Card(
+            title: '这个 route 还没有 Dart 页面',
+            lines: [
+              '已迁移：settings（设置页）。',
+              '加新页面：在 main.dart 的 switch 里挂一个分支，',
+              '然后从 WebView 用 FlutterHost.open({route}) 跳进来。',
+              '迁移顺序与接口约定见 docs/flutter-migration.md。',
+            ],
+          ),
+          const SizedBox(height: 24),
+          FilledButton(
+            onPressed: () => closeHost(),
+            child: const Text('返回 WebView'),
+          ),
+        ],
       ),
     );
   }
-
-  String _engineVersion() => '3.47.x';
 }
 
 class _Card extends StatelessWidget {
@@ -115,7 +91,7 @@ class _Card extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: PiDeckFlutterApp.surface,
+        color: piSurface,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(

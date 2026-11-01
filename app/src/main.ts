@@ -71,7 +71,7 @@ import {
   sortProjectsForPicker,
 } from "./ui/sidebar-model.ts";
 import { createSettingsPage } from "./ui/settings-view.ts";
-import type { SettingsData, SettingsPage } from "./ui/settings-view.ts";
+import type { SettingsData, SettingsHandlers, SettingsPage } from "./ui/settings-view.ts";
 import {
   applyExtensionToggle,
   applySkillToggle,
@@ -177,7 +177,15 @@ import {
   startRunWatch,
   stopRunWatch,
 } from "./platform/run-watch.ts";
-import { onFlutterPageVisibility } from "./platform/flutter-host.ts";
+import {
+  closeFlutterPage,
+  isFlutterHostAvailable,
+  onFlutterPageVisibility,
+  onFlutterSettingsAction,
+  openFlutterPage,
+  pushFlutterNotice,
+  pushFlutterSettings,
+} from "./platform/flutter-host.ts";
 import {
   modelChipLabel,
   modelChipTitle,
@@ -345,6 +353,14 @@ let disposers: Array<() => void> = [];
  * 原生 FlutterHostActivity.onStart/onStop 会把这个真实情况报过来。
  */
 let flutterPageOpen = false;
+
+/**
+ * 设置页当前是不是 Flutter 版（而不是 Web 版）。
+ *
+ * 两件事依赖它：① renderSettings() 要把数据推过去；② 提示语要走原生 SnackBar，
+ * 因为 WebView 的 toast 在 Flutter 页盖住时根本看不见。
+ */
+let flutterSettingsOpen = false;
 
 /* ------------------------------------------------------------------ */
 /* 侧栏视图状态（项目分组 / 折叠 / 搜索）                                */
@@ -1093,6 +1109,7 @@ function renderMain(): void {
     // WebView 重新可见 = Flutter 页肯定已经不在上面了。
     // 兼当兵底：万一 onStop 那条事件因为 WebView 被暂停而丢失，标志也不会卡在 true。
     flutterPageOpen = false;
+    flutterSettingsOpen = false;
     void resumeAfterBackground();
   };
   document.addEventListener("visibilitychange", onVisibleAgain);
@@ -1102,6 +1119,14 @@ function renderMain(): void {
   // 用原生回传的标志把「被盖住」和「真后台」分开，否则会在用户看着屏幕时弹完成通知。
   void onFlutterPageVisibility((open) => {
     flutterPageOpen = open;
+    // Flutter 页关掉了 —— 不管它是设置页还是别的，设置页都不在上面了。
+    // 不依赖 Dart 侧记得发 close 动作：用户按返回键、被系统回收都要能复位。
+    if (!open) flutterSettingsOpen = false;
+  }).then((detach) => disposers.push(detach));
+
+  // Flutter 设置页上的一次操作，回传给与 Web 版共用的 handler 执行。
+  void onFlutterSettingsAction((action) => {
+    dispatchFlutterSettingsAction(action);
   }).then((detach) => disposers.push(detach));
 
   // 窄屏手势：左右两个抽屉由同一个控制器管理，保证互斥——
@@ -5059,6 +5084,7 @@ function settingsData(): SettingsData {
     skills: settingsSkills,
     extensions: settingsExtensions,
     dshPlugins: settingsDshPlugins,
+    dshTarget: dshSession()?.label ?? "",
     loading: settingsLoading,
     ...(settingsDshError ? { dshError: settingsDshError } : {}),
     ...(settingsError ? { loadError: settingsError } : {}),
@@ -5066,8 +5092,10 @@ function settingsData(): SettingsData {
 }
 
 function renderSettings(): void {
-  if (!settingsPage) return;
-  settingsPage.update(settingsData());
+  const data = settingsData();
+  if (settingsPage) settingsPage.update(data);
+  // Flutter 版是纯视图，数据变了就整份推过去（它没有回拉的能力）。
+  if (flutterSettingsOpen) void pushFlutterSettings(JSON.stringify(data));
 }
 
 /**
@@ -5113,11 +5141,151 @@ async function refreshSettings(): Promise<void> {
 function openSettings(): void {
   if (!runtime) return;
   closeSheet();
-  settingsPage?.destroy();
+  void openSettingsView();
+}
 
-  const page = createSettingsPage({
-    onClose: () => closeSettings(),
-    onTheme: (mode) => {
+/**
+ * 设置页有两套实现：原生壳里是 Flutter（迁移目标），浏览器 / 老包里是 Web 版。
+ *
+ * 走「视图迁移」：数据仍由本文件组装（`settingsData()`），动作仍由下面这套 handler 执行，
+ * Flutter 只负责画 —— 主题、通知、设备切换这些状态本来就在 WebView 里，
+ * 让 Flutter 再存一份只会两套状态打架。
+ */
+async function openSettingsView(): Promise<void> {
+  if (await isFlutterHostAvailable()) {
+    await openFlutterSettingsPage();
+    return;
+  }
+  openWebSettingsPage();
+}
+
+/**
+ * 打开 Flutter 设置页。
+ *
+ * 关键在顺序：**先 push 数据，再 startActivity**。原生把 JSON 缓存在插件里，
+ * Flutter 首帧用 getSettings() 同步取走，不会先白一下再等一次往返。
+ * 概况类数据（模型/技能/扩展）要请求服务端，等 `refreshSettings()` 回来会再推一次。
+ */
+async function openFlutterSettingsPage(): Promise<void> {
+  flutterSettingsOpen = true;
+  await pushFlutterSettings(JSON.stringify(settingsData()));
+  const opened = await openFlutterPage("settings");
+  if (!opened) {
+    // 插件在、但 Activity 没起来（极端情况），不能让用户对着空屏。
+    flutterSettingsOpen = false;
+    openWebSettingsPage();
+    return;
+  }
+  void refreshSettings();
+}
+
+function openWebSettingsPage(): void {
+  settingsPage?.destroy();
+  const page = createSettingsPage(getSettingsHandlers());
+  settingsPage = page;
+  document.body.append(page.el);
+  renderSettings();
+  void refreshSettings();
+}
+
+/**
+ * Flutter 设置页回传的动作分发。
+ *
+ * 只做「把 JSON 摊平成 handler 调用」，不含任何业务逻辑 —— 这样两个界面的行为
+ * 不会分叉（改一处两边都变）。
+ */
+function dispatchFlutterSettingsAction(action: Record<string, unknown>): void {
+  if (!runtime) return;
+  const handlers = getSettingsHandlers();
+  const type = typeof action.type === "string" ? action.type : "";
+  const text = (key: string): string => (typeof action[key] === "string" ? (action[key] as string) : "");
+
+  switch (type) {
+    case "close":
+      handlers.onClose();
+      return;
+    case "refresh":
+      handlers.onRefresh();
+      return;
+    case "theme": {
+      const value = text("value");
+      if (value) handlers.onTheme(value);
+      return;
+    }
+    case "notify":
+      handlers.onToggleNotify(action.enabled === true);
+      return;
+    case "deviceActivate": {
+      const id = text("id");
+      if (id) handlers.onDeviceActivate(id);
+      return;
+    }
+    case "addDevice":
+      handlers.onAddDevice();
+      return;
+    case "disconnect":
+      handlers.onDisconnect();
+      return;
+    case "openUsage":
+      handlers.onOpenUsage();
+      return;
+    case "toggleSkill": {
+      const sourceId = text("sourceId");
+      const name = text("name");
+      const section = settingsSkills.find((item) => item.sourceId === sourceId);
+      if (section && name) handlers.onToggleSkill(section, name, action.enabled === true);
+      return;
+    }
+    case "toggleExtension": {
+      const key = text("key");
+      const extension = settingsExtensions.find((item) => item.key === key);
+      if (extension) handlers.onToggleExtension(extension, action.enabled === true);
+      return;
+    }
+    case "dshAction": {
+      const id = text("id");
+      const verb = text("action");
+      const plugin = settingsDshPlugins.find((item) => item.id === id);
+      if (plugin && (verb === "run" || verb === "stop" || verb === "uninstall")) {
+        handlers.onDshPluginAction(plugin, verb);
+      }
+      return;
+    }
+    case "dshInstall": {
+      const idPrefix = text("idPrefix");
+      const name = text("name");
+      if (!idPrefix || !name) return;
+      handlers.onDshPluginInstall({ idPrefix, name, purpose: text("purpose") });
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+let settingsHandlers: SettingsHandlers | null = null;
+
+function getSettingsHandlers(): SettingsHandlers {
+  if (!settingsHandlers) settingsHandlers = createSettingsHandlers();
+  return settingsHandlers;
+}
+
+/** 两个界面共用同一套动作，行为不会分叉。 */
+function createSettingsHandlers(): SettingsHandlers {
+  /**
+   * 提示：Flutter 页盖在 WebView 上时，WebView 的 toast 在下面的窗口里，用户看不见。
+   * 所以设置页是 Flutter 版时改走原生推送到 Dart 侧的 SnackBar。
+   */
+  const notify = (message: string): void => {
+    if (flutterSettingsOpen) {
+      void pushFlutterNotice(message);
+      return;
+    }
+    toast(message);
+  };
+
+  return {
+    onClose: () => closeSettings(),    onTheme: (mode) => {
       setThemeMode(mode as ThemeMode);
       renderSettings();
     },
@@ -5126,7 +5294,7 @@ function openSettings(): void {
       renderSettings();
       if (enabled) {
         void ensureNotificationPermission().then((granted) => {
-          if (!granted) toast("通知权限未授予，任务完成提醒不会弹出");
+          if (!granted) notify("通知权限未授予，任务完成提醒不会弹出");
         });
       }
     },
@@ -5156,7 +5324,7 @@ function openSettings(): void {
       clearAllPairings();
       void stopRunWatch();
       disconnectAll();
-      toast("已断开，并清除了本机保存的令牌");
+      notify("已断开，并清除了本机保存的令牌");
       renderPairing();
     },
     onToggleSkill: (section, name, enabled) => {
@@ -5167,7 +5335,7 @@ function openSettings(): void {
           settingsSkills = applySkillToggle(settingsSkills, section.sourceId + "::" + name, enabled);
           renderSettings();
         } catch (error) {
-          toast("技能开关失败：" + describeError(error));
+          notify("技能开关失败：" + describeError(error));
         }
       })();
     },
@@ -5184,7 +5352,7 @@ function openSettings(): void {
           settingsExtensions = applyExtensionToggle(settingsExtensions, extension.key, enabled);
           renderSettings();
         } catch (error) {
-          toast("扩展开关失败：" + describeError(error));
+          notify("扩展开关失败：" + describeError(error));
         }
       })();
     },
@@ -5198,7 +5366,7 @@ function openSettings(): void {
         if (!runtime) return;
         const target = dshSession();
         if (!target) {
-          toast("先在手机上打开一个 DSH 会话");
+          notify("先在手机上打开一个 DSH 会话");
           return;
         }
         try {
@@ -5206,12 +5374,12 @@ function openSettings(): void {
             sessionId: target.id,
             ...(plugin.packageId ? { packageId: plugin.packageId } : {}),
           });
-          toast(
+          notify(
             action === "run" ? `已启动 ${plugin.name}` : action === "stop" ? `已停止 ${plugin.name}` : `已卸载 ${plugin.name}`,
           );
           void refreshSettings();
         } catch (error) {
-          toast(`${action === "run" ? "启动" : action === "stop" ? "停止" : "卸载"}失败：${describeError(error)}`);
+          notify(`${action === "run" ? "启动" : action === "stop" ? "停止" : "卸载"}失败：${describeError(error)}`);
         }
       })();
     },
@@ -5220,30 +5388,29 @@ function openSettings(): void {
         if (!runtime) return;
         const target = dshSession();
         if (!target) {
-          toast("先在手机上打开一个 DSH 会话");
+          notify("先在手机上打开一个 DSH 会话");
           return;
         }
         try {
           await runtime.client.installDshPlugin({ sessionId: target.id, ...input });
-          toast(`已安装 ${input.name}`);
+          notify(`已安装 ${input.name}`);
           void refreshSettings();
         } catch (error) {
-          toast("安装失败：" + describeError(error));
+          notify("安装失败：" + describeError(error));
         }
       })();
     },
-    dshTargetLabel: () => dshSession()?.label ?? "",
-  });
-
-  settingsPage = page;
-  document.body.append(page.el);
-  renderSettings();
-  void refreshSettings();
+  };
 }
 
 function closeSettings(): void {
   settingsPage?.destroy();
   settingsPage = null;
+  // Web 版关掉后什么都没了；Flutter 版还盖在上面，得让原生 finish 掉。
+  if (flutterSettingsOpen) {
+    flutterSettingsOpen = false;
+    void closeFlutterPage();
+  }
 }
 
 /**

@@ -21,8 +21,25 @@ public class FlutterLauncherPlugin extends Plugin {
     /** 事件名：Flutter 页打开/关闭。JS 侧用它把「WebView 被盖住」和「App 真在后台」区分开。 */
     static final String EVENT_PAGE_VISIBILITY = "pageVisibility";
 
+    /**
+     * 事件名：Flutter 页上的一次操作，需要 WebView 去执行。
+     *
+     * 设置页是「视图迁移」：状态仍在 WebView（主题/通知/设备列表本来就存在那儿），
+     * Flutter 只负责画，用户点了什么原样回传，由 `app/src/main.ts` 的
+     * `dispatchFlutterSettingsAction` 分发到与 Web 版同一套 handler。
+     */
+    static final String EVENT_SETTINGS_ACTION = "settingsAction";
+
     /** Capacitor 只创建一个插件实例，这里存一份给 FlutterHostActivity 回传生命周期用。 */
     private static FlutterLauncherPlugin instance;
+
+    /**
+     * 最近一次由 JS 推来的 SettingsData JSON。
+     *
+     * 为什么缓存：JS 在 startActivity **之前**就先 push 一份，Flutter 首帧直接同步取走，
+     * 不用等一次「Dart 要数据 → 原生 → WebView → 原生 → Dart」的往返，避免白屏。
+     */
+    private static volatile String lastSettingsJson = "{}";
 
     @Override
     public void load() {
@@ -32,6 +49,10 @@ public class FlutterLauncherPlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         if (instance == this) instance = null;
+    }
+
+    static String currentSettings() {
+        return lastSettingsJson;
     }
 
     /**
@@ -51,6 +72,50 @@ public class FlutterLauncherPlugin extends Plugin {
         } catch (Exception ignored) {
             /* WebView 已经销毁时忽略 */
         }
+    }
+
+    /**
+     * Flutter 页把动作回传给 WebView（`sendSettingsAction`）。
+     *
+     * 转发成 JS 事件而不是直接在这里处理：处理器（切主题、切设备、调接口）
+     * 全在 `app/src/main.ts`，原生这边不该复制一份业务逻辑。
+     */
+    static void dispatchSettingsAction(String json) {
+        FlutterLauncherPlugin plugin = instance;
+        if (plugin == null) return;
+        try {
+            JSObject data = new JSObject();
+            data.put("json", json == null ? "{}" : json);
+            plugin.notifyListeners(EVENT_SETTINGS_ACTION, data);
+        } catch (Exception ignored) {
+            /* WebView 已经销毁时忽略 */
+        }
+    }
+
+    /** JS 推一份最新的设置数据（`pushFlutterSettings`）。 */
+    @PluginMethod
+    public void pushSettings(PluginCall call) {
+        String json = call.getString("json", "{}");
+        if (json == null || json.isEmpty()) json = "{}";
+        lastSettingsJson = json;
+        FlutterHostActivity.pushSettingsToFlutter(json);
+        call.resolve();
+    }
+
+    /** JS 让 Flutter 页弹一句提示（WebView 的 toast 在 Flutter 页上根本看不见）。 */
+    @PluginMethod
+    public void pushNotice(PluginCall call) {
+        String text = call.getString("text", "");
+        if (text != null && !text.isEmpty()) FlutterHostActivity.pushNoticeToFlutter(text);
+        call.resolve();
+    }
+
+    /** JS 主动关掉 Flutter 页（比如 handler 里要切到别的界面）。 */
+    @PluginMethod
+    public void closePage(PluginCall call) {
+        FlutterHostActivity activity = FlutterHostActivity.current;
+        if (activity != null) activity.finish();
+        call.resolve();
     }
 
     @PluginMethod

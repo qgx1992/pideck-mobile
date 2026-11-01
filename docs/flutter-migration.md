@@ -1,8 +1,9 @@
 # Flutter 混合栈（add-to-app）
 
 > 目标：把客户端逐步从「Capacitor WebView 外壳」迁到 Flutter。
-> 现状：**混合栈已接通**（0.1.19）。WebView 仍是主界面，Flutter 通过独立 Activity 承载，
-> 设置页 →「实验」→「Flutter 混合栈页面」可以打开，用来验证两条栈能共存。
+> 现状：**混合栈已接通（0.1.19），设置页已迁到 Flutter（0.1.21）**。
+> 原生壳里点齿轮直接进 Flutter 设置页；WebView 仍是主界面（会话列表、聊天页都还在里面），
+> 浏览器 / 老包里设置页自动回退到 Web 版。
 
 ## 为什么不是「塞进 WebView」
 
@@ -21,14 +22,16 @@ Flutter 的渲染是 Skia/Impeller 自绘 + 自己的引擎（libflutter.so）�
 
 | 位置 | 作用 |
 |---|---|
-| `flutter_module/` | Flutter 模块（`flutter create --template=module`）。`lib/main.dart` 是试验页 |
+| `flutter_module/lib/main.dart` | 入口：按 `route` 分派页面（`settings` → 设置页，其余落到占位页） |
+| `flutter_module/lib/host_channel.dart` | `pideck/flutter_host` 通道的 Dart 封装：`getArgs` / `getSettings` / `settingsAction` / `close`，以及订阅 `setSettings` / `showNotice` |
+| `flutter_module/lib/settings/` | 设置页：`settings_models.dart`（JSON → 模型，有单测）+ `settings_page.dart`（纯 UI） |
 | `flutter_module/.android/` | Flutter 生成的 Android 宿主工程。**必须提交**（`include_flutter.groovy` 在里面），只忽略 `local.properties` 与 `build/` |
 | `app/android/settings.gradle` | `evaluate(include_flutter.groovy)`，把模块暴露成 Gradle 项目 `:flutter` |
 | `app/android/app/build.gradle` | `implementation project(':flutter')` |
-| `dev/pideck/mobile/FlutterHostActivity.java` | 承载 Flutter 页的 Activity（`FlutterFragmentActivity`），提供 `MethodChannel("pideck/flutter_host")`：`getArgs` / `close` |
-| `dev/pideck/mobile/FlutterLauncherPlugin.java` | Capacitor 插件 `FlutterHost`：`open({route, sessionId})` / `available()` |
-| `dev/pideck/mobile/PiDeckApp.java` | 自定义 Application，用 Activity 计数驱动 `RunWatchService.setAppVisible`（见下） |
-| `app/src/platform/flutter-host.ts` | 前端封装：`isFlutterHostAvailable()` / `openFlutterPage(route, sessionId?)`。老包/浏览器环境静默返回 false |
+| `dev/pideck/mobile/FlutterHostActivity.java` | 承载 Flutter 页的 Activity（`FlutterFragmentActivity`），提供 `MethodChannel("pideck/flutter_host")`：`getArgs` / `getSettings` / `settingsAction` / `close`，反向 `setSettings` / `showNotice` |
+| `dev/pideck/mobile/FlutterLauncherPlugin.java` | Capacitor 插件 `FlutterHost`：`open` / `available` / `pushSettings` / `pushNotice` / `closePage`，事件 `pageVisibility` / `settingsAction` |
+| `dev/pideck/mobile/PiDeckApp.java` | 自定义 Application，用 Activity 计数维护 `isAppVisible()`（见下） |
+| `app/src/platform/flutter-host.ts` | 前端封装：`isFlutterHostAvailable` / `openFlutterPage` / `pushFlutterSettings` / `pushFlutterNotice` / `closeFlutterPage` / `onFlutterPageVisibility` / `onFlutterSettingsAction`。老包/浏览器环境静默返回 false / no-op |
 
 启动链路：WebView 里点入口 → `FlutterHost.open()` → `startActivity(FlutterHostActivity)`
 → Flutter `main()` 通过 MethodChannel 取 `{route, sessionId}` → Flutter 页渲染 → 返回键 / 页面按钮 `close()`
@@ -124,11 +127,55 @@ AGP 的 `stripReleaseDebugSymbols` 只在 `ndkVersion` 对应的 NDK 已安装�
 再由 JS 侧 `consumeLaunchSession` 消费后调 `openFlutterPage`。
 返回键交回系统（`FlutterFragmentActivity` 自己处理），不要拦截。
 
+## 第一个迁完的页：设置页（0.1.21）
+
+采用的是「**视图迁移**」而不是「页面重写」：
+
+```
+main.ts  settingsData()  ──JSON──▶  Flutter SettingsScreen（只负责画）
+         createSettingsHandlers()  ◀──JSON──  用户点开关 / 按钮
+```
+
+数据源和动作执行**仍然是 WebView 那一套**（主题、通知、设备列表本来就存在这边；模型/技能/扩展/DSH
+概况的请求也在 `main.ts`）。Flutter 侧一行状态都不存，所以不存在两套状态打架。
+
+### 通道约定（`pideck/flutter_host`）
+
+| 方向 | 名字 | 载荷 |
+|---|---|---|
+| JS → 原生 → Dart | `getSettings` | 无参，返回当前缓存的 JSON 字符串 |
+| JS → 原生 → Dart | `setSettings`（原生主动 invoke） | 完整 `SettingsData` JSON |
+| JS → 原生 → Dart | `showNotice` | 一行提示文本（替代 Web 版的 `toast`） |
+| Dart → 原生 → JS | `settingsAction` | `{type, ...}`，`type` 见下表 |
+
+| `type` | 附带字段 | 谁执行 |
+|---|---|---|
+| `close` | — | `closeSettings()` → `finish()` |
+| `refresh` | — | `refreshSettings()` |
+| `theme` | `mode` | `runtime.store.setTheme` |
+| `notify` | `enabled` | `setNotificationsEnabled` |
+| `deviceActivate` | `id` | 切设备 |
+| `addDevice` / `disconnect` / `openUsage` | — | 对应的 Web 版流程 |
+| `toggleSkill` | `section`,`name`,`enabled` | 用 `settingsSkills` 反查后调协议 |
+| `toggleExtension` | `key`,`enabled` | 用 `settingsExtensions` 反查 |
+| `dshAction` | `id`,`action`（`run`/`stop`/`uninstall`） | 用 `settingsDshPlugins` 反查 |
+| `dshInstall` | `idPrefix`,`name`,`purpose` | `installDshPlugin` |
+
+**动作只传 id / key，不传整个对象**：对象以 WebView 侧的 `settingsSkills` / `settingsExtensions` /
+`settingsDshPlugins` 为准，避免 Flutter 传来的字段和实际状态不一致。
+
+入口在 `main.ts` 的 `openSettingsView()`：`isFlutterHostAvailable()` 为真就直接开 Flutter 页，
+失败（老包 / 浏览器 / 引擎没起来）回退 `openWebSettingsPage()`，两条路径共用同一份 handler。
+Web 版代码**保留不删**，它是回退路径。
+
+`ui/settings-view.ts` 里原来的「实验 → Flutter 混合栈页面」入口已删掉——设置页自己就是 Flutter 版了。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
 
-1. **设置页**（`ui/settings-view.ts`，438 行）：纯列表 + 开关，只有一个 `toggleNotify` 走插件。最适合练手。
+1. ~~**设置页**（`ui/settings-view.ts`）~~ —— **0.1.21 已完成**，见上一节。后续迁别的页可以照抄那套：
+   数据留在 WebView 组装，Flutter 只画 + 回传动作 id。
 2. **会话列表 / 抽屉**（`ui/sidebar-view.ts`）：数据全是 HTTP，无原生依赖。
 3. **聊天页**：最难，卡在 SSE。`SsePlugin` 现在用 `HttpURLConnection` 读流，搬到 Dart 就是
    `HttpClient().getUrl(...).then((r) => r.transform(utf8.decoder).transform(LineSplitter()))`，
@@ -153,5 +200,8 @@ AGP 的 `stripReleaseDebugSymbols` 只在 `ndkVersion` 对应的 NDK 已安装�
 - [x] `cd app && npm run apk:release` 出包成功，签名校验通过（`apksigner verify`）
 - [x] release 包 43 MB，`lib/*/libflutter.so` 已 strip（11.8 MB / 8.6 MB）
 - [x] WebView 侧流程未受影响：627 个前端单测 + 14 项 `verify:send` 全绿
-- [x] 真机：设置页 →「实验」→ Flutter 页能打开（0.1.19 已确认）
+- [x] `flutter analyze` 无 issue，`flutter test` 通过（`settings_models_test.dart` 4 项：完整解析 / 缺字段宽松 / `sseNative` 缺省 / `maskToken`）
 - [x] 真机：进 Flutter 页期间 RunWatch 通知判定仍然正确（0.1.20 修：`isAppInBackground` 单测覆盖 4 种组合）
+- [ ] 真机：点齿轮直接进 Flutter 设置页，主题 / 通知 / 设备 / 概况 / 技能 / 扩展 / DSH 七个分区都能显示（0.1.21）
+- [ ] 真机：改主题、关通知、切设备、刷概况、开关技能/扩展、DSH 运行/停止、DSH 安装（含错误 ID 校验）均生效且提示正常
+- [ ] 真机：返回键与页内返回都能回 WebView，且回来后会话列表/聊天页状态未丢

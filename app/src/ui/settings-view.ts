@@ -12,7 +12,6 @@
 import { h, clear } from "./dom.ts";
 import { createChevron, setChevronExpanded } from "./chevron.ts";
 import { DESKTOP_ONLY_NOTE, dshPluginActionable, maskToken } from "./settings-model.ts";
-import { isFlutterHostAvailable, openFlutterPage } from "../platform/flutter-host.ts";
 import type { DshPluginRow, ExtensionRow, ModelRow, SkillSection } from "./settings-model.ts";
 
 export interface SettingsDeviceRow {
@@ -34,6 +33,9 @@ export interface SettingsData {
   skills: SkillSection[];
   extensions: ExtensionRow[];
   dshPlugins: DshPluginRow[];
+  /** 当前可用于 DSH 插件操作的会话描述（空串 = 没有）。数据里带而不是走 handler，
+   *  因为 Flutter 版只收 JSON、拿不到闭包。 */
+  dshTarget: string;
   /** DSH 插件清单自己的错误（桌面端这个接口会单独报错，不该拖黑整页） */
   dshError?: string;
   /** 概况类数据的加载状态 */
@@ -58,8 +60,6 @@ export interface SettingsHandlers {
   onDshPluginAction: (plugin: DshPluginRow, action: "run" | "stop" | "uninstall") => void;
   /** DSH 插件安装：sessionId 由 main 侧按当前会话补上。 */
   onDshPluginInstall: (input: { idPrefix: string; name: string; purpose: string }) => void;
-  /** 当前可用的 DSH 会话描述（空串 = 没有，安装/启停会提示先打开会话）。 */
-  dshTargetLabel: () => string;
 }
 
 export interface SettingsPage {
@@ -146,7 +146,7 @@ function collapsible(title: string, count: number, build: () => HTMLElement[]): 
  * 安装只需要三个字段，`hostCode`/`clientCode` 这种写代码的活在手机上做不了，留给桌面端。
  */
 function dshPluginSection(data: SettingsData, handlers: SettingsHandlers): HTMLElement {
-  const target = handlers.dshTargetLabel();
+  const target = data.dshTarget;
   const rows: HTMLElement[] = [];
 
   if (data.dshPlugins.length === 0) {
@@ -261,13 +261,8 @@ export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {  
     body,
   ]);
 
-  // 每次 update() 都会重画整页；异步探测 Flutter 插件的结果只许落到本轮渲染里，
-  // 否则连点刷新会出现两三个「实验」区块。
-  let renderToken = 0;
-
   const update = (data: SettingsData): void => {
     clear(body);
-    const token = ++renderToken;
 
     // ── 外观 ──
     const themeRow = h("div", { class: "settings-choice" });
@@ -417,18 +412,9 @@ export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {  
     // ── DSH 插件 ──
     body.append(dshPluginSection(data, handlers));
 
-    // ── 实验（仅 Android 原生壳里有 FlutterHost 插件时出现）──
-    void isFlutterHostAvailable().then((available) => {
-      if (!available || token !== renderToken) return;
-      body.append(
-        section("实验", [
-          row("Flutter 混合栈页面", "打开", {
-            sub: "混合栈试验页，用来验证 Capacitor 与 Flutter 能否共存",
-            onClick: () => void openFlutterPage("settings"),
-          }),
-        ]),
-      );
-    });
+    // 注：这里原本有个「实验 → 打开 Flutter 页」的入口。
+    // 0.1.21 起设置页在原生壳里默认就是 Flutter 版（main.ts 的 openSettingsView），
+    // 这一页只在浏览器 / 老包里作为回退出现，所以那个入口已经没有意义。
 
     // ── 关于 ──
     body.append(
