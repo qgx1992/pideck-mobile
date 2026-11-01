@@ -71,7 +71,7 @@ $env:GRADLE_OPTS = "-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7897 -Dhttps.pro
 `flutter` 命令本身则认 `HTTP_PROXY`/`HTTPS_PROXY`；注意 pub 的国内镜像 `pub.flutter-io.cn`
 会报 `Got TLS error trying to find package crypto`，走代理用官方 pub.dev 更稳。
 
-## 4 个坑
+## 5 个坑
 
 ### 1. RunWatch 的前台服务判定会被 Flutter 页误伤（踩了两次）
 
@@ -126,6 +126,26 @@ AGP 的 `stripReleaseDebugSymbols` 只在 `ndkVersion` 对应的 NDK 已安装�
 真要做：在 `MainActivity` 的 intent-filter 之外，让 `PiDeckApp` 记录 `pendingFlutterRoute`，
 再由 JS 侧 `consumeLaunchSession` 消费后调 `openFlutterPage`。
 返回键交回系统（`FlutterFragmentActivity` 自己处理），不要拦截。
+
+### 5. `MethodCall.argument()` 只认 Map，传字符串直接抛 `ClassCastException`
+
+Dart 这边 `invokeMethod('settingsAction', jsonEncode(action))` 看起来挺自然，但宿主的
+`call.argument("json")` 实现是：
+
+```java
+if (arguments instanceof Map) return ((Map) arguments).get(key);
+else if (arguments instanceof JSONObject) return ((JSONObject) arguments).opt(key);
+else throw new ClassCastException();   // ← 不是返回 null
+```
+
+异常从 `setMethodCallHandler` 里逃出去，Dart 只收到一个被 `catch (_) {}` 吞掉的
+PlatformException——**全页所有按钮一起失灵，而且日志里什么都不明显**。0.1.21 就是这个症状。
+
+规矩：**Dart → 宿主的带参调用一律 `invokeMethod(m, {'json': ...})`**，宿主侧再用
+`FlutterHostActivity.settingsJsonFrom(call)` 取值（它同时兼容 Map / JSONObject / String，
+不会抛）。`test/host_channel_test.dart` 用 mock messenger 锁住了这个形状。
+
+推论：需要「一定能成」的动作（比如返回）就别绕 WebView 转圈，走专用方法让宿主直接 `finish()`。
 
 ## 第一个迁完的页：设置页（0.1.21）
 

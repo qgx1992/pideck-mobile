@@ -119,6 +119,17 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 国内出包：Gradle 直连 Google 仓库极慢（看起来像卡死）。本机用
   `$env:GRADLE_OPTS="-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7897 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7897"`，
   **不要**写进 `gradle.properties`（CI 没有代理会炸）。
+- **Dart → 宿主的带参调用一律传 Map**：`invokeMethod(m, {'json': ...})`。宿主的
+  `MethodCall.argument()` 在 arguments 不是 Map 时**抛 ClassCastException**（不是返回 null），
+  异常会逃出 `setMethodCallHandler`，Dart 只拿到被 `catch (_)` 吞掉的 PlatformException ——
+  症状是整页按钮全失灵且日志安静（0.1.21 踩过）。宿主取值用
+  `FlutterHostActivity.settingsJsonFrom(call)`，`test/host_channel_test.dart` 锁住形状。
+- 设置页（0.1.21 起）在原生壳里就是 Flutter 版，走「视图迁移」：数据仍由
+  `app/src/main.ts` 的 `settingsData()` 组装并 `pushFlutterSettings` 推过去，用户动作走
+  `settingsAction` 回传到 `dispatchFlutterSettingsAction()`，**与 Web 版共用同一套 handler**
+  （`createSettingsHandlers()`）。别在 Flutter 侧另存一份状态，也别往 handler 里加第二份逻辑。
+- 需要「一定成功」的返回动作走专用方法让宿主直接 `finish()`（`closeHost()`），
+  不要绕 WebView 转一圈。
 
 ## 改动完成后必须跑的验证
 
@@ -126,6 +137,7 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 npm test && npm run typecheck                 # 协议核心
 cd app && npm test && npm run typecheck       # 客户端
 cd app && npm run build && npm run verify:send
+cd flutter_module && flutter analyze && flutter test   # Flutter 侧
 ```
 
 `verify:send` 是 mock 的发送链路（14 项），能挡住「发送后不回显 / 流式块重复 / 按钮状态错」这类回归。

@@ -78,7 +78,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, size: 20),
           tooltip: '返回',
-          onPressed: () => _act('close'),
+          // 直接让宿主 finish（走 `close` 方法，不经过 WebView 转一圈）：
+          // 返回是最不能失败的操作，少一跳就少一个会断的环节。
+          // WebView 侧的 `flutterSettingsOpen` 由 `pageVisibility(false)` 清掉。
+          onPressed: closeHost,
         ),
         title: const Text('设置', style: TextStyle(fontSize: 16)),
         actions: [

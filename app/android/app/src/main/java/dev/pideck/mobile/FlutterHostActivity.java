@@ -8,6 +8,7 @@ import org.json.JSONObject;
 
 import io.flutter.embedding.android.FlutterFragmentActivity;
 import io.flutter.embedding.engine.FlutterEngine;
+import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 
 /**
@@ -118,7 +119,7 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
                     result.success(FlutterLauncherPlugin.currentSettings());
                     break;
                 case "settingsAction":
-                    FlutterLauncherPlugin.dispatchSettingsAction(call.argument("json"));
+                    FlutterLauncherPlugin.dispatchSettingsAction(settingsJsonFrom(call));
                     result.success(null);
                     break;
                 case "close":
@@ -131,6 +132,26 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
             }
         });
         channel = methodChannel;
+    }
+
+    /**
+     * 取 Dart 传来的动作 JSON。
+     *
+     * 不能直接用 `call.argument("json")`：`MethodCall.argument` 在 arguments 不是 Map 时
+     * 会 **抛 ClassCastException**（不是返回 null），异常从 setMethodCallHandler 里逃出去，
+     * Dart 侧只会拿到一个被 catch 掉的 PlatformException，表现就是「点了没反应」。
+     * 所以三种形态都认：Map（约定的 `{json: "..."}`）、String（旧版直接传字符串）、JSONObject。
+     */
+    private static String settingsJsonFrom(MethodCall call) {
+        Object args = call.arguments();
+        if (args instanceof Map) {
+            Object value = ((Map<?, ?>) args).get("json");
+            return value instanceof String ? (String) value : null;
+        }
+        if (args instanceof JSONObject) {
+            return ((JSONObject) args).optString("json", null);
+        }
+        return args instanceof String ? (String) args : null;
     }
 
     private String buildArgs() {

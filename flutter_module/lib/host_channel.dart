@@ -65,9 +65,15 @@ void bindHostChannel({
 }
 
 /// 把动作回传给 WebView（那边是唯一的状态源）。
+///
+/// 参数必须是 **Map**：宿主的 `MethodCall.argument("json")` 只在 arguments 是 Map 时
+/// 才能取值，直接传字符串会抛 ClassCastException（宿主侧 catch 不住，Dart 这边也看不到），
+/// 表现就是「点了什么反应都没有」。
 Future<void> sendSettingsAction(Map<String, Object?> action) async {
   try {
-    await hostChannel.invokeMethod<void>('settingsAction', jsonEncode(action));
+    await hostChannel.invokeMethod<void>('settingsAction', <String, Object?>{
+      'json': jsonEncode(action),
+    });
   } catch (_) {
     /* 宿主已经不在时忽略 */
   }
