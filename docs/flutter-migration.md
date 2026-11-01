@@ -218,10 +218,21 @@ Web 侧改主题 → setThemeMode() → renderSettings()
 
 1. ~~**设置页**（`ui/settings-view.ts`）~~ —— **0.1.21 已完成**，见上一节。后续迁别的页可以照抄那套：
    数据留在 WebView 组装，Flutter 只画 + 回传动作 id。
-2. **会话列表 / 抽屉**（`ui/sidebar-view.ts`）：数据全是 HTTP，无原生依赖。
+2. ~~**会话列表 / 抽屉**（`ui/sidebar-view.ts`）~~ —— **决定不单独迁**（0.1.23 定案）。
+   理由：侧栏是 WebView 里的抽屉，而 Flutter 是独立 Activity，嵌不进去。单独迁只能做成一个全屏页，
+   代价是丢掉滑动手势与长按菜单（菜单本身在 WebView 的 DOM 弹层里），而它在最终形态里本来就不该
+   独立存在 —— 聊天页迁到 Flutter 后，侧栏是那个页面的 `Drawer`。所以**并进第 3 条一起做**。
+   届时要做的事（已和用户确认）：
+   - 数据：把 `sidebar-model.ts` 的 `ProjectGroupView` / `FlatSectionRow` 加一层 JSON 序列化，
+     照 `settingsData()` 的做法整份推给 Dart（侧栏数据全是 HTTP，无原生依赖，这部分最容易）。
+   - 长按菜单：**在 Flutter 里用底部弹层重做**（重命名 / 复制 / 删除 / 后端切换…），
+     不要“关掉 Flutter 页回 WebView 弹原菜单”那条路（会闪一下，而且菜单状态在两边）。
+     重做的代价是菜单内容要维护两处 —— 做的时候把菜单项也抽成数据（`{id, label, danger}`），
+     让 Web 版和 Dart 版都从同一份数据渲染。
 3. **聊天页**：最难，卡在 SSE。`SsePlugin` 现在用 `HttpURLConnection` 读流，搬到 Dart 就是
    `HttpClient().getUrl(...).then((r) => r.transform(utf8.decoder).transform(LineSplitter()))`，
    逻辑几乎 1:1；难点是 `RunWatchService` 的通知联动与流式滚动锚点（`ui/scroll-anchor.ts`）。
+   侧栏（`Drawer`）跟着这一页一起做，见上一条。
 4. **文件保存 / 扫码**：`file_picker` + `mobile_scanner` 两个 pub 包，`FileSaverPlugin` 里
    MediaStore 的那套要换成 `path_provider` + `share_plus`，行为差异最大，放最后。
 
