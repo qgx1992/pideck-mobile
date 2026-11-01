@@ -4,6 +4,8 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
 
+import java.util.Map;
+
 import org.json.JSONObject;
 
 import io.flutter.embedding.android.FlutterFragmentActivity;
