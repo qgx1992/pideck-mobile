@@ -167,6 +167,12 @@ catch AcpTimeoutError → conn.notify("session/cancel", { reason:"turn_timeout" 
 阻塞点：无。**服务端不改也能做「只读兼容 + 权限卡 + 工具卡」，只是不能切 ACP 模型。**
 
 ### (b) ACP 会话管理（新建选 CLI / 恢复 / 归档列表）—— **可做，但要处理激活窗口**
+
+> **状态：已实现（0.1.18）。** 新建会话弹层顶部多了一排后端 chip（pi / DSH / 每个已登记的
+> ACP CLI 各一个，记住上次选择），会话菜单里「后端：…」只对还没有 runtime 的草稿开放切换，
+> 切换走 `POST /api/sessions/:id/update { backend, acpToolId, model:null, thinkingLevel:null }`。
+> 实现见 `app/src/ui/backend-selector.ts` + `app/src/main.ts` 的 `openWorkspacePicker` /
+> `openBackendSheet`。下面「激活最长 60s」与「无插话」两条风险仍成立，本轮未处理。
 - 新建：`client.createSession` 加 `backend?: "acp"; acpToolId?: string`（`src/api/client.ts:470-481`），服务端已支持（`index.ts:6298+`）。UI 需要一个「选 CLI」的 sheet（数据源 `state.acpTools`）。**+约 50 行**。
 - 恢复：**不需要新端点**——`POST /runtime/activate` 就是恢复（`session/load` 重放），历史从 `/messages` 拿。手机端要加：`acpSessionId` 存在性判断（需服务端投影，见 (a)）+ 一行「正在恢复/发消息即恢复/工具已删除」提示条（照搬 `acpSessionRestore.ts:23 resolveAcpRestoreHint` 逻辑，纯函数 ~40 行）。
 - 归档列表：ACP 归档只是每 `acpSessionId` 的 JSON（`AcpSessionArchive.ts`），会话列表本来就是同一份 catalog，**无需新端点**。

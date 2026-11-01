@@ -50,6 +50,18 @@ import { actionsForRole, confirmTextFor } from "./ui/message-actions-model.ts";
 import type { MessageAction } from "./ui/message-actions-model.ts";
 import { acpToolNameOf, backendCapabilities, normalizeBackend } from "./ui/backend-capabilities.ts";
 import { isPromptRejection, rejectionMessage, shouldRollbackRejection } from "./ui/acp-notice.ts";
+import {
+  DEFAULT_BACKEND_CHOICE,
+  backendLockedHint,
+  backendOptions,
+  backendPatch,
+  backendSwitchAllowed,
+  choiceKey,
+  createSessionInput,
+  describeChoice,
+  missingAcpTool,
+} from "./ui/backend-selector.ts";
+import type { BackendChoice, BackendOption } from "./ui/backend-selector.ts";
 import { branchNodes, shortBranchTitle, shouldShowBranchBar } from "./ui/branch-model.ts";
 import {
   buildSidebarGroups,
@@ -1457,7 +1469,11 @@ function renderSidebar(state: PiDeckState): void {
       handlers: {
         onToggleProject: (projectId: string) => toggleProject(projectId),
         onOpenSession: (sessionId: string) => onEndpoint(run, () => void openSession(sessionId)),
-        onCreateSession: (projectId: string) => onEndpoint(run, () => void createSession(projectId)),
+        // 项目行上的「+」是快捷新建：沿用上次选的后端（ACP 工具被删则自动退回 pi）
+        onCreateSession: (projectId: string) =>
+          onEndpoint(run, () =>
+            void createSession(projectId, loadLastBackendChoice(backendOptions(ownState.acpTools))),
+          ),
         onSessionMenu: (sessionId: string) => onEndpoint(run, () => openSessionMenu(sessionId)),
         onProjectMenu: (projectId: string) => onEndpoint(run, () => openProjectMenu(projectId)),
         onToggleSessions: (projectId: string) => toggleSessionsExpanded(projectId),
@@ -2917,15 +2933,19 @@ async function reloadHistory(sessionId: string): Promise<void> {
   }
 }
 
-async function createSession(projectId?: string): Promise<void> {
+async function createSession(projectId?: string, choice: BackendChoice = DEFAULT_BACKEND_CHOICE): Promise<void> {
   if (!runtime) return;
   const targetProject = projectId ?? activeProjectId ?? runtime.store.projects()[0]?.id;
   if (!targetProject) {
     toast("没有可用项目：请先在桌面端添加项目目录");
     return;
   }
+  if (missingAcpTool(choice)) {
+    toast("选了 ACP 后端就得先指定一个 CLI 工具");
+    return;
+  }
   try {
-    const session = await runtime.client.createSession({ projectId: targetProject });
+    const session = await runtime.client.createSession(createSessionInput(targetProject, choice));
     activeProjectId = targetProject;
     collapsedProjects.delete(targetProject);
     persistCollapsedProjects();
@@ -4816,6 +4836,75 @@ function renderEmptyState(sessionId: string | null): void {
 }
 
 /** 新建会话前先选工作区：Chat 置顶，其余按最近使用时间。 */
+/* ------------------------------------------------------------------ */
+/* 后端选择：新建会话时选 pi / DSH / 某个 ACP CLI                        */
+/* ------------------------------------------------------------------ */
+
+const LAST_BACKEND_KEY = ["pideck", "app", "last-backend", "v1"].join("-");
+
+/**
+ * 上次选的后后端。
+ *
+ * 一个人常用哪家 CLI 基本固定，每次新建都要重选太烦；但记下的工具可能已经被删掉
+ * （或电脑关了 ACP），不在当前列表里就退回 pi，否则新建会直接 400。
+ */
+function loadLastBackendChoice(options: readonly BackendOption[]): BackendChoice {
+  try {
+    const raw = localStorage.getItem(LAST_BACKEND_KEY);
+    const parsed = raw ? (JSON.parse(raw) as { backend?: unknown; acpToolId?: unknown }) : null;
+    if (!parsed) return DEFAULT_BACKEND_CHOICE;
+    const choice: BackendChoice = {
+      backend: normalizeBackend(parsed.backend),
+      acpToolId: typeof parsed.acpToolId === "string" ? parsed.acpToolId : null,
+    };
+    return options.some((option) => option.key === choiceKey(choice)) ? choice : DEFAULT_BACKEND_CHOICE;
+  } catch {
+    return DEFAULT_BACKEND_CHOICE;
+  }
+}
+
+function rememberBackendChoice(choice: BackendChoice): void {
+  try {
+    localStorage.setItem(LAST_BACKEND_KEY, JSON.stringify(choice));
+  } catch {
+    /* 隐私模式下写不进去，忽略即可 */
+  }
+}
+
+/** 一排可切换的后端 chip；点击只改选择，不关弹层。 */
+function buildBackendChips(
+  options: readonly BackendOption[],
+  current: () => BackendChoice,
+  onPick: (choice: BackendChoice) => void,
+): HTMLElement {
+  const row = h("div", { class: "backend-chips", role: "group", "aria-label": "后端" });
+  const buttons: HTMLElement[] = [];
+  const sync = (): void => {
+    const key = choiceKey(current());
+    for (const button of buttons) {
+      const active = button.dataset.key === key;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+  };
+  for (const option of options) {
+    const button = h("button", {
+      class: "chip backend-chip",
+      dataset: { key: option.key },
+      title: option.hint,
+      text: option.label,
+      onclick: () => {
+        onPick(option.choice);
+        sync();
+      },
+    });
+    buttons.push(button);
+    row.append(button);
+  }
+  sync();
+  return row;
+}
+
 function openWorkspacePicker(): void {
   if (!runtime) return;
   const state = runtime.store.state;
@@ -4825,8 +4914,19 @@ function openWorkspacePicker(): void {
     return;
   }
   const counts = sessionCountByProject(state.sessions ?? []);
+  const options = backendOptions(state.acpTools);
+  let choice: BackendChoice = loadLastBackendChoice(options);
 
-  openSheet("选择工作区", (sheet) => {
+  openSheet("新建会话", (sheet) => {
+    // 只有 pi 一个选项时不占地方；有 ACP 工具时平铺成一行行 chip
+    if (options.length > 1) {
+      sheet.append(
+        h("div", { class: "sheet-label", text: "后端" }),
+        buildBackendChips(options, () => choice, (next) => {
+          choice = next;
+        }),
+      );
+    }
     for (const project of projects) {
       const label = projectLabel(project) ?? project.id;
       const isChat = project.kind === "chat";
@@ -4837,8 +4937,9 @@ function openWorkspacePicker(): void {
           {
             class: "sheet-item sheet-item--two",
             onclick: () => {
+              rememberBackendChoice(choice);
               closeSheet();
-              void createSession(project.id);
+              void createSession(project.id, choice);
             },
           },
           [
@@ -4851,6 +4952,59 @@ function openWorkspacePicker(): void {
         ),
       );
     }
+  });
+}
+
+/**
+ * 草稿期切换后端。
+ *
+ * 会话已经有 runtime 时不允许改：桌面端同样把锁定放在 create 之后（`backendLocked`），
+ * 因为模型/思考档位/工具清单都跟着旧后端缓存着，改了也只会得到一次「没生效」。
+ */
+function openBackendSheet(sessionId: string): void {
+  if (!runtime) return;
+  const session = runtime.store.session(sessionId);
+  if (!session) return;
+  const state = runtime.store.state;
+  const options = backendOptions(state.acpTools);
+  let choice: BackendChoice = {
+    backend: normalizeBackend(session.backend),
+    acpToolId: typeof session.acpToolId === "string" ? session.acpToolId : null,
+  };
+  const before: BackendChoice = { ...choice };
+
+  openSheet("切换后端", (sheet) => {
+    sheet.append(
+      h("div", {
+        class: "sheet-label",
+        text: `当前：${describeChoice(before, state.acpTools)}`,
+      }),
+      buildBackendChips(options, () => choice, (next) => {
+        choice = next;
+      }),
+      h("button", {
+        class: "sheet-item sheet-item--primary",
+        text: "应用",
+        onclick: () => {
+          if (choiceKey(choice) === choiceKey(before)) {
+            closeSheet();
+            return;
+          }
+          if (missingAcpTool(choice)) {
+            toast("选了 ACP 后端就得先指定一个 CLI 工具");
+            return;
+          }
+          rememberBackendChoice(choice);
+          const target = describeChoice(choice, state.acpTools);
+          // 换后端后旧会话的内容不再适用：切完直接重开这个会话，让标题/能力重新拉
+          void runSessionAction(sessionId, "update", `已切到 ${target} 后端`, backendPatch(choice, before)).then(
+            () => {
+              if (sessionId === activeSessionId) void openSession(sessionId);
+            },
+          );
+        },
+      }),
+    );
   });
 }
 
@@ -5127,12 +5281,33 @@ function openSessionMenu(sessionId: string): void {
     return;
   }
 
+  const switchable = backendSwitchAllowed(runtime.store.state.runtimes ?? [], sessionId);
+  const currentChoice: BackendChoice = {
+    backend: normalizeBackend(session.backend),
+    acpToolId: typeof session.acpToolId === "string" ? session.acpToolId : null,
+  };
+  const acpTools = runtime.store.state.acpTools;
+  const lockedHint = backendLockedHint(currentChoice, acpTools);
+
   openSheet(session.title || "会话", (sheet) => {
     sheet.append(
       h("button", {
         class: "sheet-item",
         text: "重命名",
         onclick: () => openRenameSheet(sessionId, session.title ?? ""),
+      }),
+      h("button", {
+        class: switchable ? "sheet-item" : "sheet-item is-disabled",
+        text: `后端：${describeChoice(currentChoice, acpTools)}${switchable ? "（可切换）" : "（已锁定）"}`,
+        title: switchable ? "会话还没开始过，可以换成别的后端" : lockedHint,
+        onclick: () => {
+          // 锁定态不报错、只提示原因：直接标 disabled 会让用户不知道为什么点不动
+          if (!switchable) {
+            toast(lockedHint);
+            return;
+          }
+          openBackendSheet(sessionId);
+        },
       }),
       h("button", {
         class: "sheet-item",

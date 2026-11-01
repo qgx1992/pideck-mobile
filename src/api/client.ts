@@ -35,6 +35,7 @@ import type {
   FileNode,
   WebSecurityState,
   WireMessage,
+  BackendKind,
 } from "../types.ts";
 
 export type FetchLike = typeof fetch;
@@ -471,6 +472,9 @@ export class PiDeckClient {
   async createSession(input: {
     projectId: string;
     title?: string;
+    /** 后端：缺省 pi。`acp` 必须同时给 acpToolId，否则服务端 400 */
+    backend?: BackendKind;
+    acpToolId?: string;
     model?: { provider: string; modelId: string; modelName?: string };
     thinkingLevel?: string;
   }): Promise<SessionSummary> {

@@ -2741,6 +2741,40 @@ body.barcode-scanner-active .scan-overlay {
   color: var(--danger);
 }
 
+/* 弹层里的小节标题（新建会话的「后端」那一行） */
+.sheet-label {
+  margin: 2px 8px 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 后端选择：平铺一行行 chip，ACP 的每个 CLI 各占一个 */
+.backend-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 8px 6px;
+}
+
+.backend-chip {
+  max-width: 100%;
+}
+
+.backend-chip.is-active {
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+  background: color-mix(in oklab, var(--accent) 14%, var(--bg));
+  font-weight: 600;
+}
+
+/* 锁定态（会话已经有 runtime）：灰掉但仍可点 —— 点了会说明为什么不能改 */
+.sheet-item.is-disabled {
+  color: var(--text-dim);
+}
+
 .sheet-item--primary {
   color: var(--accent);
   font-weight: 600;
