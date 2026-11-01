@@ -69,4 +69,99 @@ void main() {
     await expectLater(sendSettingsAction(<String, Object?>{'type': 'close'}), completes);
     await expectLater(closeHost(), completes);
   });
+
+  group('pickImage', () {
+    test('解析宿主回传的图（裸 base64 + 尺寸）', () async {
+      messenger.setMockMethodCallHandler(hostChannel, (call) async {
+        expect(call.method, 'pickImage');
+        expect(call.arguments, isNull);
+        return <String, Object?>{
+          'data': base64Encode(<int>[1, 2, 3, 4]),
+          'mimeType': 'image/jpeg',
+          'width': 1200,
+          'height': 900,
+          'bytes': 4,
+          'name': 'IMG_0001.jpg',
+        };
+      });
+
+      final PickedImage? image = await pickImage();
+      expect(image, isNotNull);
+      expect(image!.bytesOf, <int>[1, 2, 3, 4]);
+      expect(image.dataUrl, 'data:image/jpeg;base64,${base64Encode(<int>[1, 2, 3, 4])}');
+      expect(image.width, 1200);
+      expect(image.height, 900);
+      expect(image.name, 'IMG_0001.jpg');
+    });
+
+    test('用户取消（宿主回 null）时返回 null', () async {
+      messenger.setMockMethodCallHandler(hostChannel, (call) async => null);
+      expect(await pickImage(), isNull);
+    });
+
+    test('宿主报错时不抛异常', () async {
+      messenger.setMockMethodCallHandler(hostChannel, (call) async {
+        throw PlatformException(code: 'image-too-large');
+      });
+      expect(await pickImage(), isNull);
+    });
+  });
+
+  group('PickedImage.fromJson', () {
+    test('缺 data 时返回 null', () {
+      expect(PickedImage.fromJson(<String, Object?>{'mimeType': 'image/jpeg'}), isNull);
+      expect(PickedImage.fromJson(null), isNull);
+      expect(PickedImage.fromJson('not-a-map'), isNull);
+    });
+
+    test('缺尺寸字段时按 0 处理', () {
+      final PickedImage? image = PickedImage.fromJson(<String, Object?>{'data': 'AAAA'});
+      expect(image, isNotNull);
+      expect(image!.mimeType, 'image/jpeg');
+      expect(image.width, 0);
+      expect(image.height, 0);
+      expect(image.name, '');
+    });
+  });
+
+  group('saveTextFile', () {
+    test('把文本编成 base64 并带上文件名与 mime', () async {
+      MethodCall? captured;
+      messenger.setMockMethodCallHandler(hostChannel, (call) async {
+        captured = call;
+        return <String, Object?>{'location': '下载/PiDeck/snippet.txt'};
+      });
+
+      final String? location = await saveTextFile(name: 'snippet.txt', text: '你好');
+
+      expect(location, '下载/PiDeck/snippet.txt');
+      expect(captured!.method, 'saveFile');
+      final Map<Object?, Object?> args = captured!.arguments as Map<Object?, Object?>;
+      expect(args['name'], 'snippet.txt');
+      expect(args['mime'], 'text/plain');
+      expect(utf8.decode(base64Decode('${args['data']}')), '你好');
+    });
+
+    test('宿主报错时返回 null', () async {
+      messenger.setMockMethodCallHandler(hostChannel, (call) async {
+        throw PlatformException(code: 'write-failed');
+      });
+      expect(await saveTextFile(name: 'a.txt', text: 'x'), isNull);
+    });
+  });
+
+  group('openWebSheet', () {
+    test('只传面板名', () async {
+      MethodCall? captured;
+      messenger.setMockMethodCallHandler(hostChannel, (call) async {
+        captured = call;
+        return null;
+      });
+
+      await openWebSheet('connection');
+
+      expect(captured!.method, 'openWebSheet');
+      expect((captured!.arguments as Map<Object?, Object?>)['name'], 'connection');
+    });
+  });
 }

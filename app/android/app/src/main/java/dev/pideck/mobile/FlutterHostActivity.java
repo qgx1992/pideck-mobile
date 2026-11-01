@@ -1,10 +1,16 @@
 package dev.pideck.mobile;
 
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
+import android.util.Base64;
 import android.util.Log;
 
+import java.util.HashMap;
 import java.util.Map;
+
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 
 import org.json.JSONObject;
 
@@ -33,6 +39,11 @@ import io.flutter.plugin.common.MethodChannel;
  *   chatAction(s)      → 聊天页上的动作（发消息 / 取消 / 切模型…）回传给 WebView
  *   getSidebar()       → 取最近一次侧栏快照（Drawer 首帧直接用，不等往返）
  *   sidebarAction(s)   → 侧栏上的动作（开会话 / 切分段 / 搜索…）回传给 WebView
+ *   pickImage()        → 弹系统相册，回 `{data, mimeType, width, height, bytes, name}`
+ *                        （`data` 是裸 base64，已按 1600px / 0.82 压过）
+ *   saveFile({name, mime, data}) → 存到「下载/PiDeck」，回 `{location}`
+ *   openWebSheet(name) → 关掉本页并让 WebView 打开指定弹层（扫码配对这类只有
+ *                        WebView 侧有实现的流程走这条，别在 Flutter 里重写一遍）
  *   close()            → 关掉 Flutter 页，回到 WebView
  *
  * 反向（原生 → Dart）：`setSettings(json)` / `setChat(json)` / `showNotice(text)`，由
@@ -51,12 +62,19 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
 
     private MethodChannel channel;
 
+    /** 选图是异步的：结果先存在这里，选完（或取消）再回给 Dart。 */
+    private MethodChannel.Result pendingPick;
+    private ActivityResultLauncher<String> imagePicker;
+
     private String route = "";
     private String sessionId = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // 系统相册选择器（GetContent 不需要任何权限；API 33+ 系统会自动换成照片选择器）
+        imagePicker = registerForActivityResult(
+                new ActivityResultContracts.GetContent(), this::handlePickedImage);
         // getIntent() 在 onCreate 之后可能被替换（singleTask 的重入），这里只取一次
         Intent intent = getIntent();
         route = safe(intent.getStringExtra(EXTRA_ROUTE));
@@ -156,6 +174,22 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
                     FlutterLauncherPlugin.dispatchSidebarAction(settingsJsonFrom(call));
                     result.success(null);
                     break;
+                case "pickImage":
+                    requestPick(result);
+                    break;
+                case "saveFile":
+                    saveFileAsync(call, result);
+                    break;
+                case "openWebSheet": {
+                    Object args = call.arguments();
+                    Object raw = args instanceof Map ? ((Map<?, ?>) args).get("name") : null;
+                    String sheet = stringOf(raw);
+                    result.success(null);
+                    // 先让 JS 把弹层准备好，再关自己 —— 反过来的话弹层会在没人看的页面上播动画
+                    FlutterLauncherPlugin.dispatchWebSheet(sheet);
+                    finish();
+                    break;
+                }
                 case "close":
                     result.success(null);
                     finish();
@@ -166,6 +200,92 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
             }
         });
         channel = methodChannel;
+    }
+
+    /** Dart 请求选图：弹系统相册，选完（或取消）再把图回给它。 */
+    private void requestPick(MethodChannel.Result result) {
+        if (pendingPick != null) {
+            result.error("pickImage", "已经有一个选图正在进行", null);
+            return;
+        }
+        if (imagePicker == null) {
+            result.error("pickImage", "选图器没有初始化", null);
+            return;
+        }
+        pendingPick = result;
+        try {
+            imagePicker.launch("image/*");
+        } catch (Exception error) {
+            pendingPick = null;
+            result.error("pickImage", "打不开相册: " + error.getMessage(), null);
+        }
+    }
+
+    /** 相册回调：取消就回 null（Dart 侧当成「用户放弃」）。 */
+    private void handlePickedImage(Uri uri) {
+        MethodChannel.Result pending = pendingPick;
+        pendingPick = null;
+        if (pending == null) return;
+        if (uri == null) {
+            pending.success(null);
+            return;
+        }
+        // 解码 + 压缩在主线程会卡几百毫秒，放后台线程
+        new Thread(() -> {
+            try {
+                Map<String, Object> image = FlutterFiles.readImage(getApplicationContext(), uri);
+                runOnUiThread(() -> pending.success(image));
+            } catch (Exception error) {
+                String message = error.getMessage();
+                runOnUiThread(() -> pending.error(
+                        "pickImage",
+                        message == null || message.isEmpty() ? "读取图片失败" : message,
+                        null));
+            }
+        }, "pideck-pick-image").start();
+    }
+
+    /** Dart 请求保存文件：解码 + 落盘放后台线程。 */
+    private void saveFileAsync(MethodCall call, MethodChannel.Result result) {
+        Object args = call.arguments();
+        if (!(args instanceof Map)) {
+            result.error("saveFile", "参数缺失", null);
+            return;
+        }
+        Map<?, ?> map = (Map<?, ?>) args;
+        String name = stringOf(map.get("name"));
+        String mime = stringOf(map.get("mime"));
+        String data = stringOf(map.get("data"));
+        if (name.isEmpty()) {
+            result.error("saveFile", "文件名不能为空", null);
+            return;
+        }
+        if (data.isEmpty()) {
+            result.error("saveFile", "内容为空", null);
+            return;
+        }
+        final String type = mime.isEmpty() ? "text/plain" : mime;
+        new Thread(() -> {
+            try {
+                byte[] bytes = Base64.decode(data, Base64.NO_WRAP);
+                String location = SavedFiles.save(getApplicationContext(), bytes, name, type);
+                Map<String, Object> payload = new HashMap<>();
+                payload.put("location", location);
+                runOnUiThread(() -> result.success(payload));
+            } catch (IllegalArgumentException error) {
+                runOnUiThread(() -> result.error("saveFile", "内容解码失败", null));
+            } catch (Exception error) {
+                String message = error.getMessage();
+                runOnUiThread(() -> result.error(
+                        "saveFile",
+                        message == null || message.isEmpty() ? "保存失败" : message,
+                        null));
+            }
+        }, "pideck-save-file").start();
+    }
+
+    private static String stringOf(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     /**

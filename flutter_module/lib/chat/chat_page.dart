@@ -44,6 +44,12 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _composer = TextEditingController();
   final FocusNode _composerFocus = FocusNode();
 
+  /// 一条消息最多带几张图，与 `app/src/ui/image-attach-model.ts` 的 `MAX_IMAGES` 一致。
+  static const int _maxImages = 4;
+
+  /// 已经选好、还没发出去的图（缩略图行从它渲染）。
+  final List<PickedImage> _images = <PickedImage>[];
+
   bool _stick = true;
   String _lastRequestId = '';
   String _pendingDraft = '';
@@ -156,12 +162,40 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _send() async {
-    final String text = _composer.text.trim();
+    final String typed = _composer.text.trim();
+    // 只发图不写字时给服务端一句自然的话：/prompt 的 message 不能为空（与 WebView 版同口径）
+    final String text = typed.isEmpty && _images.isNotEmpty ? '看下这张图' : typed;
     if (text.isEmpty) return;
+    final List<Map<String, Object?>> images = _images
+        .map((PickedImage image) => <String, Object?>{
+              'data': image.data,
+              'mimeType': image.mimeType,
+            })
+        .toList(growable: false);
     _composer.clear();
     _composerFocus.unfocus();
-    setState(() => _stick = true);
-    await sendChatAction(<String, Object?>{'type': 'send', 'text': text});
+    setState(() {
+      _stick = true;
+      _images.clear();
+    });
+    await sendChatAction(<String, Object?>{
+      'type': 'send',
+      'text': text,
+      if (images.isNotEmpty) 'images': images,
+    });
+  }
+
+  /// 选图：解码与压缩都在原生侧做，这里只收结果。
+  Future<void> _pickImage() async {
+    if (_images.length >= _maxImages) {
+      _notice('最多 $_maxImages 张图');
+      return;
+    }
+    final PickedImage? image = await pickImage();
+    if (!mounted || image == null) return;
+    setState(() {
+      if (_images.length < _maxImages) _images.add(image);
+    });
   }
 
   Future<void> _respond(Map<String, Object?> response) async {
@@ -914,6 +948,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _composerBar(PiColors c, ChatSnapshot snapshot) {
     final bool running = snapshot.isRunning;
+    final bool canSend = _composer.text.trim().isNotEmpty || _images.isNotEmpty;
     return Container(
       decoration: BoxDecoration(
         color: c.background,
@@ -921,59 +956,118 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       child: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: <Widget>[
-              Expanded(
-                child: TextField(
-                  controller: _composer,
-                  focusNode: _composerFocus,
-                  minLines: 1,
-                  maxLines: 6,
-                  textInputAction: TextInputAction.newline,
-                  style: TextStyle(color: c.text, fontSize: 14.5),
-                  decoration: InputDecoration(
-                    hintText: running ? '运行中，可继续输入（会排队）' : '发消息…',
-                    hintStyle: TextStyle(color: c.textMuted, fontSize: 13.5),
-                    filled: true,
-                    fillColor: c.surface,
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: BorderSide(color: c.divider),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: BorderSide(color: c.divider),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            if (_images.isNotEmpty) _attachmentRow(c),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(6, 8, 8, 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: <Widget>[
+                  IconButton(
+                    tooltip: '添加图片',
+                    visualDensity: VisualDensity.compact,
+                    color: c.textMuted,
+                    icon: const Icon(Icons.add_photo_alternate_outlined, size: 22),
+                    onPressed: _images.length >= _maxImages ? null : _pickImage,
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: _composer,
+                      focusNode: _composerFocus,
+                      minLines: 1,
+                      maxLines: 6,
+                      textInputAction: TextInputAction.newline,
+                      style: TextStyle(color: c.text, fontSize: 14.5),
+                      decoration: InputDecoration(
+                        hintText: running ? '运行中，可继续输入（会排队）' : '发消息…',
+                        hintStyle: TextStyle(color: c.textMuted, fontSize: 13.5),
+                        filled: true,
+                        fillColor: c.surface,
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide(color: c.divider),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide(color: c.divider),
+                        ),
+                      ),
+                      onChanged: (String _) => setState(() {}),
                     ),
                   ),
-                  onChanged: (String _) => setState(() {}),
-                ),
+                  const SizedBox(width: 6),
+                  if (running)
+                    IconButton.filled(
+                      tooltip: '停止',
+                      style: IconButton.styleFrom(backgroundColor: c.surfaceAlt, foregroundColor: c.danger),
+                      icon: const Icon(Icons.stop_rounded),
+                      onPressed: () => sendChatAction(<String, Object?>{'type': 'stop'}),
+                    )
+                  else
+                    IconButton.filled(
+                      tooltip: '发送',
+                      style: IconButton.styleFrom(
+                        backgroundColor: canSend ? c.accent : c.surfaceAlt,
+                        foregroundColor: canSend ? Colors.white : c.textMuted,
+                      ),
+                      icon: const Icon(Icons.arrow_upward_rounded),
+                      onPressed: canSend ? _send : null,
+                    ),
+                ],
               ),
-              const SizedBox(width: 6),
-              if (running)
-                IconButton.filled(
-                  tooltip: '停止',
-                  style: IconButton.styleFrom(backgroundColor: c.surfaceAlt, foregroundColor: c.danger),
-                  icon: const Icon(Icons.stop_rounded),
-                  onPressed: () => sendChatAction(<String, Object?>{'type': 'stop'}),
-                )
-              else
-                IconButton.filled(
-                  tooltip: '发送',
-                  style: IconButton.styleFrom(
-                    backgroundColor: _composer.text.trim().isEmpty ? c.surfaceAlt : c.accent,
-                    foregroundColor: _composer.text.trim().isEmpty ? c.textMuted : Colors.white,
-                  ),
-                  icon: const Icon(Icons.arrow_upward_rounded),
-                  onPressed: _composer.text.trim().isEmpty ? null : _send,
-                ),
-            ],
-          ),
+            ),
+          ],
         ),
+      ),
+    );
+  }
+
+  /// 待发送图片的缩略图行（与 WebView 版的 `.attachments` 同位置：输入框上方）。
+  Widget _attachmentRow(PiColors c) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: <Widget>[
+          for (int index = 0; index < _images.length; index++)
+            Stack(
+              clipBehavior: Clip.none,
+              children: <Widget>[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.memory(
+                    _images[index].bytesOf,
+                    width: 56,
+                    height: 56,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+                ),
+                Positioned(
+                  top: -6,
+                  right: -6,
+                  child: GestureDetector(
+                    onTap: () => setState(() => _images.removeAt(index)),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: c.surfaceAlt,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: c.divider),
+                      ),
+                      padding: const EdgeInsets.all(2),
+                      child: Icon(Icons.close_rounded, size: 14, color: c.textSecondary),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+        ],
       ),
     );
   }
@@ -1294,16 +1388,89 @@ class _ToolCardState extends State<_ToolCard> {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SelectableText(
-                  widget.detail,
-                  style: TextStyle(fontSize: 11.5, fontFamily: 'monospace', height: 1.4, color: c.textSecondary),
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SelectableText(
+                      widget.detail,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontFamily: 'monospace',
+                        height: 1.4,
+                        color: c.textSecondary,
+                      ),
+                    ),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: <Widget>[
+                      _MiniIconButton(
+                        icon: Icons.copy_rounded,
+                        tooltip: '复制',
+                        onTap: () {
+                          Clipboard.setData(ClipboardData(text: widget.detail));
+                          _notice(context, '已复制');
+                        },
+                      ),
+                      _MiniIconButton(
+                        icon: Icons.save_alt_rounded,
+                        tooltip: '保存到手机',
+                        onTap: () => _saveOutput(context),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
         ],
       ),
+    );
+  }
+
+  /// 工具输出动辄几十 KB，给个落盘入口，不用长按选中再复制。
+  Future<void> _saveOutput(BuildContext context) async {
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    final DateTime now = DateTime.now();
+    String two(int value) => value.toString().padLeft(2, '0');
+    final String stamp =
+        '${now.year}${two(now.month)}${two(now.day)}-${two(now.hour)}${two(now.minute)}${two(now.second)}';
+    final String safeName = widget.name.replaceAll(RegExp(r'[^A-Za-z0-9_.-]'), '_');
+    final String? location = await saveTextFile(name: 'tool-$safeName-$stamp.txt', text: widget.detail);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(location == null ? '保存失败' : '已保存到 $location'),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _notice(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(milliseconds: 900)),
+    );
+  }
+}
+
+/// 工具卡右下角那种 22px 的小图标按钮。
+class _MiniIconButton extends StatelessWidget {
+  const _MiniIconButton({required this.icon, required this.tooltip, required this.onTap});
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
+    return IconButton(
+      visualDensity: VisualDensity.compact,
+      iconSize: 15,
+      tooltip: tooltip,
+      color: c.textMuted,
+      icon: Icon(icon),
+      onPressed: onTap,
     );
   }
 }

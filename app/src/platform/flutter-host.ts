@@ -43,6 +43,10 @@ export interface FlutterHostBridge {
     eventName: "sidebarAction",
     listener: (data: { json: string }) => void,
   ): Promise<{ remove: () => Promise<void> }>;
+  addListener(
+    eventName: "webSheet",
+    listener: (data: { name: string }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
 }
 
 const bridge = Capacitor.isNativePlatform() ? registerPlugin<FlutterHostBridge>("FlutterHost") : null;
@@ -220,8 +224,33 @@ export async function onFlutterSidebarAction(
   return subscribeAction("sidebarAction", handler, "侧栏动作");
 }
 
-/** 三种动作事件长得一模一样，订阅/解析/降级只写一遍。 */
-async function subscribeAction(
+/**
+ * 订阅「Flutter 页请 WebView 打开某个弹层」的请求。
+ *
+ * 现在只有扫码配对用：`@capacitor-mlkit/barcode-scanning` 的 `BarcodeScanner.scan()`
+ * 靠 Capacitor bridge 接 ActivityResult，在 `FlutterHostActivity` 里拿不到结果，
+ * 所以不在 Flutter 里重写 ML Kit + CameraX，而是关掉 Flutter 页、让 WebView
+ * 打开原来的连接面板（扫码按钮就在里面）。
+ *
+ * @param name 面板名，目前只有 `"connection"`
+ */
+export async function onFlutterWebSheet(handler: (name: string) => void): Promise<() => void> {
+  if (!bridge || Capacitor.getPlatform() !== "android") return () => undefined;
+  try {
+    const handle = await bridge.addListener("webSheet", (data) => {
+      const name = typeof data?.name === "string" ? data.name : "";
+      if (name) handler(name);
+    });
+    return () => {
+      void handle.remove();
+    };
+  } catch (error) {
+    console.warn("[flutter-host] 订阅网页弹层请求失败", error);
+    return () => undefined;
+  }
+}
+
+/** 三种动作事件长得一模一样，订阅/解析/降级只写一遍。 */async function subscribeAction(
   eventName: "settingsAction" | "chatAction" | "sidebarAction",
   handler: (action: Record<string, unknown>) => void,
   label: string,

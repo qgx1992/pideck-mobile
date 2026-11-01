@@ -213,6 +213,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
           ),
         ),
+        // 扫码走 WebView 的原连接面板，不在这里重写：`qr-scan.ts` 用的是
+        // `@capacitor-mlkit/barcode-scanning` 的 `BarcodeScanner.scan()`，它靠 Capacitor
+        // bridge 接 ActivityResult，在 Flutter 宿主的 Activity 里拿不到结果。
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: _PillButton(
+            label: '扫码配对 / 连接设置',
+            onTap: () => openWebSheet('connection'),
+          ),
+        ),
       ],
     );
   }

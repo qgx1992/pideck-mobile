@@ -157,6 +157,16 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 用户点了聊天页的「返回网页版」就置 `chatUseWebView = true`，之后点侧栏会话直接 `openSession()`，
   **不写 localStorage**（重启回默认的 Flutter 版）。改 `renderSidebarInner` 的 `onOpenSession` 时
   必须保留 `onEndpoint(run, …)` 那层包装，否则多设备下会连错端点。
+- 文件落盘只允许走 `SavedFiles.save()`（`app/android/app/src/main/java/dev/pideck/mobile/SavedFiles.java`）：
+  WebView 的 `FileSaverPlugin` 与 Flutter 通道的 `saveFile` 共用它。**不要**在任一入口另写一份
+  MediaStore 代码 —— 两边规则一旦不同，就会出现「网页版能存、Flutter 版报错」。
+- 选图只走 `FlutterFiles.readImage()`：压缩参数（`MAX_EDGE = 1600` / `JPEG_QUALITY = 82` /
+  `MAX_FILE_BYTES = 8 MB`）与 `app/src/ui/image-attach-model.ts` 保持一致，且**必须按 EXIF 旋转**
+  （浏览器 canvas 自动应用 EXIF，`BitmapFactory` 不会，少了这步竖拍照片会躺着）。Dart 侧不许
+  自己 `decodeImage` 后缩放（大图会 OOM，原生是解码时降采样）。
+- 扫码**不在 Flutter 里重写**：`BarcodeScanner.scan()` 靠 Capacitor bridge 接 ActivityResult，
+  Flutter 宿主的 Activity 拿不到结果。走 `openWebSheet('connection')` → 原生先发 `webSheet`
+  事件再 `finish()` → JS 侧 `leaveFlutterThen(() => openConnectionSheet())`。**顺序不能反**。
 
 ## 改动完成后必须跑的验证
 

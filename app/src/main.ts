@@ -184,6 +184,7 @@ import {
   onFlutterPageVisibility,
   onFlutterSettingsAction,
   onFlutterSidebarAction,
+  onFlutterWebSheet,
   openFlutterPage,
   pushFlutterChat,
   pushFlutterNotice,
@@ -1173,6 +1174,14 @@ function renderMain(): void {
   // Flutter 侧栏上的一次操作（点会话 / 切分段 / 搜索 / 长按菜单）。
   void onFlutterSidebarAction((action) => {
     dispatchFlutterSidebarAction(action);
+  }).then((detach) => disposers.push(detach));
+
+  // Flutter 页要把某个弹层交给 WebView 开（目前只有扫码配对）。
+  // 必须走 leaveFlutterThen：先关掉 Flutter 页，否则弹层开在看不见的 WebView 上。
+  void onFlutterWebSheet((name) => {
+    leaveFlutterThen(() => {
+      if (name === "connection") openConnectionSheet();
+    });
   }).then((detach) => disposers.push(detach));
 
   // 窄屏手势：左右两个抽屉由同一个控制器管理，保证互斥——
@@ -5441,6 +5450,35 @@ async function openFlutterChatPage(sessionId: string): Promise<boolean> {
  * 发消息就是往输入框写进去再调 `send()`，停止就是 `stop()`，
  * 这样两个界面的行为不会分叉（包括计划模式、排队/插话这些分支）。
  */
+/**
+ * Flutter 侧传过来的 `[{ data, mimeType, width, height }]` → `PendingImage[]`。
+ *
+ * Dart 那边发的是**裸** base64（原生压完直接给的），这里补回 data URL 前缀，
+ * 后面就走与 Web 版完全相同的 `send()`。`bytes` 由 base64 长度反推 ——
+ * 只为在缩略图下面显示体积，不必精确到字节。
+ */
+function attachmentsOf(raw: unknown): PendingImage[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PendingImage[] = [];
+  for (const item of raw) {
+    if (out.length >= MAX_IMAGES) break;
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const data = typeof record.data === "string" ? record.data : "";
+    if (!data) continue;
+    const mimeType = typeof record.mimeType === "string" && record.mimeType ? record.mimeType : "image/jpeg";
+    const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+    out.push({
+      dataUrl: `data:${mimeType};base64,${data}`,
+      mimeType,
+      width: typeof record.width === "number" ? record.width : 0,
+      height: typeof record.height === "number" ? record.height : 0,
+      bytes: Math.max(0, Math.floor((data.length * 3) / 4) - padding),
+    });
+  }
+  return out;
+}
+
 function dispatchFlutterChatAction(action: Record<string, unknown>): void {
   if (!runtime) return;
   const type = typeof action.type === "string" ? action.type : "";
@@ -5458,7 +5496,17 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
       return;
     case "send": {
       const body = text("text").trim();
-      if (!body || !refs) return;
+      if (!refs) return;
+      // Flutter 侧只能把图当 base64 传过来（原生已按 1600px/0.82 压过）。
+      // 塞进 currentImages() 之后复用与 Web 版完全相同的发送链路。
+      const images = attachmentsOf(action.images);
+      if (images.length > 0) {
+        const list = currentImages();
+        list.length = 0;
+        list.push(...images);
+        renderAttachments();
+      }
+      if (!body && images.length === 0) return;
       refs.composer.value = body;
       autosize(refs.composer);
       void send();

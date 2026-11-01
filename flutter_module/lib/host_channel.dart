@@ -140,3 +140,93 @@ Future<void> sendSidebarAction(Map<String, Object?> action) async {
     /* 宿主已经不在时忽略 */
   }
 }
+
+/// 宿主选回来的一张图。
+class PickedImage {
+  const PickedImage({
+    required this.data,
+    this.mimeType = 'image/jpeg',
+    this.width = 0,
+    this.height = 0,
+    this.bytes = 0,
+    this.name = '',
+  });
+
+  /// **裸** base64（不带 `data:` 前缀），已经由原生按 1600px / 0.82 压过。
+  final String data;
+  final String mimeType;
+  final int width;
+  final int height;
+  final int bytes;
+  final String name;
+
+  /// 给 `Image.memory` 用。
+  Uint8List get bytesOf => base64Decode(data);
+
+  /// 给 WebView 侧用（那边存的是 data URL）。
+  String get dataUrl => 'data:$mimeType;base64,$data';
+
+  static PickedImage? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final String data = '${raw['data'] ?? ''}';
+    if (data.isEmpty) return null;
+    return PickedImage(
+      data: data,
+      mimeType: '${raw['mimeType'] ?? 'image/jpeg'}',
+      width: raw['width'] is int ? raw['width'] as int : 0,
+      height: raw['height'] is int ? raw['height'] as int : 0,
+      bytes: raw['bytes'] is int ? raw['bytes'] as int : 0,
+      name: '${raw['name'] ?? ''}',
+    );
+  }
+}
+
+/// 弹系统相册选一张图。用户取消（或宿主不支持）时返回 null。
+///
+/// 解码与压缩都在原生侧做（`FlutterFiles.readImage`）：Dart 里整张进内存再缩放，
+/// 手机上一张 4000×3000 的照片很容易 OOM，而 `BitmapFactory.inSampleSize` 是解码时就降采样。
+Future<PickedImage?> pickImage() async {
+  try {
+    final Object? raw = await hostChannel.invokeMethod<Object?>('pickImage');
+    return PickedImage.fromJson(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 把一段文本存到手机（「下载/PiDeck」）。返回落地位置，失败返回 null。
+///
+/// 走原生 `SavedFiles`，与 WebView 的 `FileSaver` 插件同一份实现 —— 两条入口各写一份
+/// MediaStore 代码迟早会出现「网页版能存、Flutter 版报错」。
+Future<String?> saveTextFile({
+  required String name,
+  required String text,
+  String mime = 'text/plain',
+}) async {
+  try {
+    final Object? raw = await hostChannel.invokeMethod<Object?>('saveFile', <String, Object?>{
+      'name': name,
+      'mime': mime,
+      'data': base64Encode(utf8.encode(text)),
+    });
+    if (raw is Map) {
+      final Object? location = raw['location'];
+      return location == null ? null : '$location';
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 关掉本页并让 WebView 打开一个弹层（现在只有扫码配对用）。
+///
+/// 扫码走的是 Capacitor 的 `BarcodeScanner.scan()`：它靠 bridge 接 ActivityResult，
+/// 在 Flutter 宿主 Activity 里拿不到结果，所以不在这里重写一遍 ML Kit + CameraX。
+Future<void> openWebSheet(String name) async {
+  try {
+    await hostChannel.invokeMethod<void>('openWebSheet', <String, Object?>{'name': name});
+  } catch (_) {
+    /* 忽略 */
+  }
+}

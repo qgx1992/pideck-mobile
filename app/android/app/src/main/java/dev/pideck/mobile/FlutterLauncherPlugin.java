@@ -1,6 +1,7 @@
 package dev.pideck.mobile;
 
 import android.content.Intent;
+import android.util.Log;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -17,6 +18,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  */
 @CapacitorPlugin(name = "FlutterHost")
 public class FlutterLauncherPlugin extends Plugin {
+
+    private static final String TAG = "PiDeckFlutterHost";
 
     /** 事件名：Flutter 页打开/关闭。JS 侧用它把「WebView 被盖住」和「App 真在后台」区分开。 */
     static final String EVENT_PAGE_VISIBILITY = "pageVisibility";
@@ -45,6 +48,15 @@ public class FlutterLauncherPlugin extends Plugin {
      * `ui/sidebar-tabs-model.ts`），Flutter 只画。所以它只需要“给数据 + 收回动作”两个方法。
      */
     static final String EVENT_SIDEBAR_ACTION = "sidebarAction";
+
+    /**
+     * 事件名：Flutter 页要求「关掉我，并让 WebView 开某个弹层」。
+     *
+     * 现在只有扫码配对用这条：`BarcodeScanner.scan()` 是 Google 原生全屏扫描器，
+     * 它靠 Capacitor bridge 接 ActivityResult，在 FlutterHostActivity 里拿不到结果，
+     * 重写一份 ML Kit + CameraX 不值得 —— 关页回 WebView 弹原来的面板更省事也不分叉。
+     */
+    static final String EVENT_WEB_SHEET = "webSheet";
 
     /** Capacitor 只创建一个插件实例，这里存一份给 FlutterHostActivity 回传生命周期用。 */
     private static FlutterLauncherPlugin instance;
@@ -88,6 +100,19 @@ public class FlutterLauncherPlugin extends Plugin {
 
     static String currentSidebar() {
         return lastSidebarJson;
+    }
+
+    /** Flutter 页要一个只有 WebView 侧实现的弹层（扫码配对等）。 */
+    static void dispatchWebSheet(String name) {
+        FlutterLauncherPlugin plugin = instance;
+        if (plugin == null) return;
+        JSObject data = new JSObject();
+        data.put("name", name == null ? "" : name);
+        try {
+            plugin.notifyListeners(EVENT_WEB_SHEET, data);
+        } catch (Exception error) {
+            Log.w(TAG, "webSheet 下发失败: " + error.getMessage());
+        }
     }
 
     /**

@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_theme.dart';
+import '../host_channel.dart';
 import 'markdown.dart';
 
 class MarkdownView extends StatelessWidget {
@@ -190,6 +191,65 @@ class _CodeBlock extends StatelessWidget {
   final String code;
   final PiColors colors;
 
+  /// 存到手机「下载/PiDeck」。落盘规则与 WebView 的 FileSaver 插件共用同一份
+  /// 原生实现（`SavedFiles`），所以两边保存位置、重名策略完全一致。
+  Future<void> _save(BuildContext context) async {
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    final String name = 'snippet-${_stamp()}.${_extensionOf(lang)}';
+    final String? location = await saveTextFile(name: name, text: code);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(location == null ? '保存失败' : '已保存到 $location'),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  static String _stamp() {
+    final DateTime now = DateTime.now();
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${now.year}${two(now.month)}${two(now.day)}-${two(now.hour)}${two(now.minute)}${two(now.second)}';
+  }
+
+  /// 代码块的语言标记 → 文件扩展名（认不出来就用 .txt，不猜）。
+  static String _extensionOf(String lang) {
+    switch (lang.toLowerCase()) {
+      case 'dart':
+        return 'dart';
+      case 'ts':
+      case 'typescript':
+        return 'ts';
+      case 'js':
+      case 'javascript':
+        return 'js';
+      case 'json':
+        return 'json';
+      case 'py':
+      case 'python':
+        return 'py';
+      case 'sh':
+      case 'bash':
+      case 'shell':
+        return 'sh';
+      case 'java':
+        return 'java';
+      case 'kt':
+      case 'kotlin':
+        return 'kt';
+      case 'html':
+        return 'html';
+      case 'css':
+        return 'css';
+      case 'sql':
+        return 'sql';
+      case 'yml':
+      case 'yaml':
+        return 'yaml';
+      default:
+        return 'txt';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final TextStyle mono = TextStyle(
@@ -227,6 +287,13 @@ class _CodeBlock extends StatelessWidget {
                     // 直接用 Flutter 自带的 Clipboard。
                     Clipboard.setData(ClipboardData(text: code));
                   },
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 16,
+                  tooltip: '保存到手机',
+                  icon: Icon(Icons.save_alt_rounded, color: colors.textMuted),
+                  onPressed: () => _save(context),
                 ),
               ],
             ),

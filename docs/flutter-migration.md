@@ -459,6 +459,51 @@ Dart 侧只负责「怎么画」（danger 标红）和「哪两步要本地确�
 `onEndpoint(run, …)` 那层包装 —— 多设备场景下 `run` 负责切端点，丢了就会出现「点 A 设备的会话，
 连的还是 B 设备」。
 
+## 文件保存 / 选图 / 扫码（0.1.30）：把「插件」也搬过来
+
+这一轮搬的不是页面，而是聊天/设置里三处「点一下就要跟系统打交道」的能力。
+迁移顺序里第 4 项原本写的是「文件保存 / 选图 / 扫码」，实际做下来分成了两类：
+
+| 能力 | 结论 | 为什么 |
+|---|---|---|
+| 保存文件 | 原生共用一份实现 | 落盘规则（`Downloads/PiDeck`、重名加后缀、API<29 退私有目录）已经是 `FileSaverPlugin` 里的产品决策，复制一份必然漂移 |
+| 选图 | 原生共用一份实现 | `MAX_EDGE=1600` / `JPEG_QUALITY=82` / 8MB 上限在 `image-attach-model.ts` 里；且 `BitmapFactory.inSampleSize` 是**解码时**降采样，Dart 里整张进内存再缩放容易 OOM |
+| 扫码 | **不迁**，回 WebView 开面板 | `BarcodeScanner.scan()` 靠 Capacitor bridge 接 ActivityResult，在 `FlutterHostActivity` 里拿不到结果 |
+
+### 保存：抽出 `SavedFiles`
+
+`FileSaverPlugin`（WebView 的 `FileSaver.save`）与 Flutter 通道的 `saveFile` 现在都调
+`SavedFiles.save(Context, byte[], name, mime)`：MediaStore `Downloads/PiDeck` + `IS_PENDING` 两段式写入、
+失败删空条目、API<29 退 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`。
+Dart 侧只有一句 `saveTextFile({name, text, mime})`，内部 `base64Encode(utf8.encode(text))`。
+
+入口两处：代码块右上角「保存到手机」（文件名按语言标记给扩展名，认不出给 `.txt`）、
+工具卡展开后的「保存到手机」（几十 KB 的输出，长按选中复制很难受）。
+
+### 选图：为什么用 `GetContent` 而不是相册库
+
+`registerForActivityResult(new ActivityResultContracts.GetContent())` 一行就够，
+系统选择器自带多来源（相册/文件/截图），也不用申请存储权限。
+代价是拿不到「多选」——但产品上限本来就是 4 张（`MAX_IMAGES`），先单张多次添加。
+
+解码在 `FlutterFiles.readImage()` 里做，三步都不能省：
+
+1. `inJustDecodeBounds` 先取尺寸，按 `longest / (sample*2) >= MAX_EDGE` 定 `inSampleSize`；
+2. 缩放后再 `compress(JPEG, 82)`；
+3. **按 EXIF 旋转**。浏览器 canvas 会自动应用 EXIF，`BitmapFactory` 不会 —— 少了这步竖拍照片会躺着。
+
+回给 Dart 的是裸 base64（不带 `data:` 前缀），`PickedImage.dataUrl` 才拼前缀；
+WebView 侧需要 `data:` 开头，所以 `main.ts` 的 `attachmentsOf()` 负责补。
+
+### 扫码：`openWebSheet` 通道方法
+
+Dart 点「扫码配对」→ `openWebSheet('connection')` → 原生先 `notifyListeners("webSheet")`
+再 `finish()` 自己 → `main.ts` 收到后 `leaveFlutterThen(() => openConnectionSheet())`。
+**顺序不能反**：先关 Flutter 页再开弹层，否则弹层开在被盖住的 WebView 上。
+
+> 这也是 `leaveFlutterThen()` 存在的第三个理由（前两个是工作区选择器和各种 sheet）。
+> 判断标准很简单：这个界面依赖 WebView 的插件或 DOM 弹层吗？是就走这条。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
@@ -514,3 +559,8 @@ Dart 侧只负责「怎么画」（danger 标红）和「哪两步要本地确�
 - [ ] 真机：长按一条提问 → 菜单五项齐全、删除标红并二次确认、编辑能改内容后重发（0.1.29）
 - [ ] 真机：长按一条回答 → 只有「复制文本 / 分叉会话」两项（ACP 会话只有「复制文本」）
 - [ ] 真机：点侧栏里的会话 → 直接进 Flutter 聊天页且是该会话；点「返回网页版」后再点侧栏会话不再弹 Flutter 页
+- [x] `flutter test` 56 项全绿（`host_channel_test.dart` 新增 8 项：选图解析 / 取消 / 报错、`PickedImage.fromJson` 兜底、`saveTextFile` 的 base64 与 mime、`openWebSheet` 只传名字）
+- [ ] 真机：聊天页点「+」选一张竖拍照片 → 缩略图不躺倒、发出后 WebView 侧缩略图与消息里都正常（0.1.30）
+- [ ] 真机：只选图不写字直接发 → 服务端收到「看下这张图」+ 图片
+- [ ] 真机：代码块点「保存到手机」→ 通知栏/文件管理器里 `下载/PiDeck/snippet-*.txt` 内容完整；工具卡同理
+- [ ] 真机：设置页「扫码配对 / 连接设置」→ 回到 WebView 并弹出连接面板，扫码能扫
