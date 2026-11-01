@@ -167,6 +167,14 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 扫码**不在 Flutter 里重写**：`BarcodeScanner.scan()` 靠 Capacitor bridge 接 ActivityResult，
   Flutter 宿主的 Activity 拿不到结果。走 `openWebSheet('connection')` → 原生先发 `webSheet`
   事件再 `finish()` → JS 侧 `leaveFlutterThen(() => openConnectionSheet())`。**顺序不能反**。
+- 顶栏与输入框附属面板（0.1.31 起）同理：`ChatHeaderView`（`app/src/platform/flutter-chat-header.ts`）
+  里只有「画什么」，**Dart 侧不许出现 `if (backend === "acp")` 这类能力判断** —— 那是
+  `composerToolChips()` / `buildHeaderView()` 的事。`chips[].key` 就是动作名，
+  新增一个 chip 必须同时在 `dispatchFlutterChatAction` 里加 `case "chip"` 的分支。
+- 选择面板（模型 / 思考 / 安全 / 提示词 / 上下文）跟着 `ChatSnapshot.picker` 一起推，
+  **不要**另开 `setChatPicker` 通道；Dart 侧用内联面板渲染，不用 `showModalBottomSheet`
+  （弹层状态归 `Navigator` 管、内容归快照管，不同步就会出现「关了又弹」）。
+  搜索在 Dart 本地过滤，只在回车时发一次 `pickerQuery`。
 
 ## 改动完成后必须跑的验证
 

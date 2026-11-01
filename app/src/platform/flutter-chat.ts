@@ -17,6 +17,7 @@ import { splitThinking } from "../ui/thinking-tags.ts";
 import { collectImageSources } from "../ui/image-attach-model.ts";
 import { actionsForRole } from "../ui/message-actions-model.ts";
 import type { PerfMetrics } from "../ui/perf-metrics.ts";
+import type { ChatHeaderView, ChatPickerView } from "./flutter-chat-header.ts";
 
 /** 一条已落盘的历史消息（Flutter 侧只认这个形状，不认 WireMessage）。 */
 export interface ChatHistoryItem {
@@ -60,6 +61,20 @@ export interface ChatSnapshot {
    * 后端能力一变（比如 ACP 不能分叉）两边就会分叉。
    */
   messageMenus: { user: ChatMenuItem[]; assistant: ChatMenuItem[] };
+  /**
+   * 顶栏（标题 / meta / chips / 上下文 / 发送模式 / 待办与子代理摘要）。
+   *
+   * 由 `platform/flutter-chat-header.ts` 的 `buildChatHeaderView()` 组装，
+   * 规则全在 `ui/header-model.ts` 等模块里 —— Dart 只画。
+   */
+  header: ChatHeaderView;
+  /**
+   * 当前要显示的选择面板（模型 / 思考 / 安全 / 提示词 / 上下文）；null = 不显示。
+   *
+   * 跟随快照一起推，不另开通道：面板内容本来就是 WebView 算好的，
+   * 多一条通道只会多一处不同步。
+   */
+  picker: ChatPickerView | null;
 }
 
 /** 长按菜单里的一项。 */
@@ -176,6 +191,10 @@ export interface ChatSnapshotInput {
   perf?: PerfMetrics | null;
   /** 当前会话的后端（`activeBackend()`）；决定长按菜单能出现哪些动作 */
   backend?: unknown;
+  /** 顶栏快照（`buildChatHeaderView()` 的结果）；缺省给一份安全的空顶栏 */
+  header?: ChatHeaderView;
+  /** 当前选择面板；缺省 null */
+  picker?: ChatPickerView | null;
 }
 
 /** 组装快照（纯函数，方便单测）。 */
@@ -199,6 +218,25 @@ export function buildChatSnapshot(input: ChatSnapshotInput): ChatSnapshot {
       user: menuItemsFor("user", input.backend),
       assistant: menuItemsFor("assistant", input.backend),
     },
+    header: input.header ?? emptyHeader(),
+    picker: input.picker ?? null,
+  };
+}
+
+/** 没传 header 时的兜底：没有任何 chip，标题留空。 */
+function emptyHeader(): ChatHeaderView {
+  return {
+    title: "",
+    meta: "",
+    running: false,
+    chips: [],
+    context: null,
+    sendMode: "queue",
+    showSendMode: false,
+    canSteer: false,
+    promptCount: 0,
+    todo: null,
+    subagents: null,
   };
 }
 

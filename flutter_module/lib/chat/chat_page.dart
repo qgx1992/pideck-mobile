@@ -42,6 +42,9 @@ class _ChatScreenState extends State<ChatScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final ScrollController _scroll = ScrollController();
   final TextEditingController _composer = TextEditingController();
+  final TextEditingController _pickerSearch = TextEditingController();
+  /// 当前面板的种类，用来判断要不要清空搜索框（换面板时清）
+  String _pickerKind = '';
   final FocusNode _composerFocus = FocusNode();
 
   /// 一条消息最多带几张图，与 `app/src/ui/image-attach-model.ts` 的 `MAX_IMAGES` 一致。
@@ -417,6 +420,7 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: <Widget>[
+          _headerBar(c, snapshot.header),
           Expanded(
             child: Stack(
               children: <Widget>[
@@ -455,7 +459,10 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
           ),
-          _composerBar(c, snapshot),
+          if (snapshot.picker != null)
+            _pickerPanel(c, snapshot.picker!)
+          else
+            _composerBar(c, snapshot),
         ],
       ),
     );
@@ -946,6 +953,267 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /* ----------------------------- 输入栏 ----------------------------- */
 
+  /// 顶栏：meta、chips、待办/子代理摘要。
+  ///
+  /// 这里**不做任何判断** —— chips 是 WebView 按后端能力算好之后给的，
+  /// 该不该出现「模型」入口由 `composerToolChips()` 决定，Dart 只管画。
+  Widget _headerBar(PiColors c, ChatHeaderView header) {
+    final List<Widget> chips = <Widget>[];
+    for (final ChatChip chip in header.chips) {
+      chips.add(_headerChip(
+        c,
+        label: chip.label,
+        muted: chip.muted,
+        active: chip.active,
+        onTap: () => sendChatAction(<String, Object?>{'type': 'chip', 'key': chip.key}),
+      ));
+    }
+    final ChatContextChip? context = header.context;
+    if (context != null) {
+      chips.add(_headerChip(
+        c,
+        label: context.compacting ? '压缩中…' : '${context.percent}%',
+        muted: !context.overflow && context.percent < 60,
+        active: context.overflow,
+        onTap: () => sendChatAction(<String, Object?>{'type': 'context'}),
+      ));
+    }
+    if (header.showSendMode) {
+      chips.add(_headerChip(
+        c,
+        label: header.sendMode == 'steer' ? '插话' : '排队',
+        onTap: () => sendChatAction(<String, Object?>{'type': 'sendMode'}),
+      ));
+    }
+    if (chips.isEmpty && header.meta.isEmpty && header.todo == null && header.subagents == null) {
+      return const SizedBox.shrink();
+    }
+    final ChatTodoSummary? todo = header.todo;
+    final ChatSubagentSummary? subagents = header.subagents;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 2, 12, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          if (header.meta.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                header.meta,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11.5, color: c.textMuted),
+              ),
+            ),
+          if (chips.isNotEmpty) Wrap(spacing: 6, runSpacing: 6, children: chips),
+          if (todo != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                todo.current.isEmpty
+                    ? '任务 ${todo.done}/${todo.total}'
+                    : '任务 ${todo.done}/${todo.total} · ${todo.current}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: c.textMuted),
+              ),
+            ),
+          if (subagents != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                subagents.active > 0
+                    ? '子代理 ${subagents.active}/${subagents.total} 进行中'
+                    : '子代理 ${subagents.total} 个已结束',
+                style: TextStyle(fontSize: 11, color: c.textMuted),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _headerChip(
+    PiColors c, {
+    required String label,
+    required VoidCallback onTap,
+    bool muted = false,
+    bool active = false,
+  }) {
+    final Color color = active ? c.accent : (muted ? c.textMuted : c.textSecondary);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: active ? c.accent.withValues(alpha: 0.16) : c.surface,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: active ? c.accent : c.divider),
+        ),
+        child: Text(label, style: TextStyle(fontSize: 12, color: color)),
+      ),
+    );
+  }
+
+  /// 选择面板（模型 / 思考 / 安全 / 提示词 / 上下文）。
+  ///
+  /// 用内联面板而不是 `showModalBottomSheet`：面板内容是 WebView 异步推过来的，
+  /// 弹层的开合状态跟着快照走很容易出现「关了又弹」。内联面板是纯函数式的 ——
+  /// `picker == null` 就收起，没有中间状态。
+  Widget _pickerPanel(PiColors c, ChatPickerView picker) {
+    if (_pickerKind != picker.kind) {
+      _pickerKind = picker.kind;
+      _pickerSearch.clear();
+    }
+    final String query = _pickerSearch.text.trim().toLowerCase();
+    final List<ChatPickerItem> items = query.isEmpty
+        ? picker.items
+        : picker.items
+            .where((ChatPickerItem item) =>
+                item.label.toLowerCase().contains(query) ||
+                item.description.toLowerCase().contains(query))
+            .toList(growable: false);
+
+    final List<Widget> rows = <Widget>[];
+    String section = '';
+    for (final ChatPickerItem item in items) {
+      if (item.section.isNotEmpty && item.section != section) {
+        section = item.section;
+        rows.add(Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+          child: Text(section, style: TextStyle(fontSize: 11, color: c.textMuted)),
+        ));
+      }
+      rows.add(InkWell(
+        key: ValueKey<String>('picker:${picker.kind}:${item.id}'),
+        onTap: () => sendChatAction(
+          <String, Object?>{'type': 'pickerSelect', 'kind': picker.kind, 'id': item.id},
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      item.label,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        color: item.danger ? c.danger : c.text,
+                        fontWeight: item.selected ? FontWeight.w600 : FontWeight.w400,
+                      ),
+                    ),
+                    if (item.description.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          item.description,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 11.5, color: c.textMuted),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (item.selected) Icon(Icons.check_rounded, size: 16, color: c.accent),
+            ],
+          ),
+        ),
+      ));
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border(top: BorderSide(color: c.divider)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 6, 0),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      picker.title,
+                      style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: c.text),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    icon: Icon(Icons.close_rounded, size: 18, color: c.textMuted),
+                    onPressed: () => sendChatAction(<String, Object?>{'type': 'closePicker'}),
+                  ),
+                ],
+              ),
+            ),
+            if (picker.subtitle.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    picker.subtitle,
+                    style: TextStyle(fontSize: 11, color: c.textMuted),
+                  ),
+                ),
+              ),
+            if (picker.searchable)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                child: TextField(
+                  controller: _pickerSearch,
+                  style: TextStyle(fontSize: 13, color: c.text),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: '搜索',
+                    hintStyle: TextStyle(fontSize: 13, color: c.textMuted),
+                    filled: true,
+                    fillColor: c.surfaceAlt,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  ),
+                  onChanged: (String value) => setState(() {}),
+                  onSubmitted: (String value) => sendChatAction(
+                    <String, Object?>{'type': 'pickerQuery', 'kind': picker.kind, 'query': value},
+                  ),
+                ),
+              ),
+            if (rows.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 6, 14, 16),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    picker.empty.isEmpty ? '没有可选项' : picker.empty,
+                    style: TextStyle(fontSize: 12, color: c.textMuted),
+                  ),
+                ),
+              )
+            else
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.42,
+                ),
+                child: ListView(shrinkWrap: true, children: rows),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _composerBar(PiColors c, ChatSnapshot snapshot) {
     final bool running = snapshot.isRunning;
     final bool canSend = _composer.text.trim().isNotEmpty || _images.isNotEmpty;
@@ -972,6 +1240,14 @@ class _ChatScreenState extends State<ChatScreen> {
                     icon: const Icon(Icons.add_photo_alternate_outlined, size: 22),
                     onPressed: _images.length >= _maxImages ? null : _pickImage,
                   ),
+                  if (snapshot.header.promptCount > 0)
+                    IconButton(
+                      tooltip: '提示词模板',
+                      visualDensity: VisualDensity.compact,
+                      color: c.textMuted,
+                      icon: const Icon(Icons.bolt_outlined, size: 22),
+                      onPressed: () => sendChatAction(<String, Object?>{'type': 'prompts'}),
+                    ),
                   Expanded(
                     child: TextField(
                       controller: _composer,

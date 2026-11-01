@@ -24,7 +24,7 @@ export interface ModelPickerSection {
   models: ModelOption[];
 }
 
-const LEVEL_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+export const LEVEL_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export function modelKey(provider: string, modelId: string): string {
   return `${provider}\u0000${modelId}`;

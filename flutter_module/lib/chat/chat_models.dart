@@ -292,6 +292,8 @@ class ChatSnapshot {
     this.pending,
     this.perf,
     this.messageMenus = const <String, List<ChatMenuItem>>{},
+    this.header = const ChatHeaderView(),
+    this.picker,
   });
 
   final String sessionId;
@@ -314,6 +316,14 @@ class ChatSnapshot {
   /// 这里**不维护**一份自己的动作表 —— 后端能力一变两边就会分叉。
   final Map<String, List<ChatMenuItem>> messageMenus;
 
+  /// 顶栏（标题 / meta / chips / 上下文 / 发送模式 / 待办与子代理摘要）。
+  ///
+  /// 规则全在 WebView 的 `ui/header-model.ts` 等模块里算好，这里只负责画。
+  final ChatHeaderView header;
+
+  /// 当前要显示的选择面板；null 表示不显示。
+  final ChatPickerView? picker;
+
   /// 取某个角色能用的菜单项（工具条不给菜单）。
   List<ChatMenuItem> menusFor(String role) {
     if (role == 'tool') return const <ChatMenuItem>[];
@@ -331,6 +341,8 @@ class ChatSnapshot {
     final Object? pending = json['pending'];
     final Object? perf = json['perf'];
     final Object? empty = json['empty'];
+    final Object? header = json['header'];
+    final Object? picker = json['picker'];
     return ChatSnapshot(
       sessionId: str(json['sessionId']),
       title: str(json['title']),
@@ -347,6 +359,8 @@ class ChatSnapshot {
       pending: pending is Map<Object?, Object?> ? ChatPending.fromJson(mapOf(pending)) : null,
       perf: perf is Map<Object?, Object?> ? ChatPerf.fromJson(mapOf(perf)) : null,
       messageMenus: _menusOf(json['messageMenus']),
+      header: header is Map<Object?, Object?> ? ChatHeaderView.fromJson(mapOf(header)) : const ChatHeaderView(),
+      picker: picker is Map<Object?, Object?> ? ChatPickerView.fromJson(mapOf(picker)) : null,
     );
   }
 }
@@ -454,4 +468,197 @@ String batchAnswerLabel(Object? value) {
   if (value is bool) return value ? '是' : '否';
   if (value is List) return value.map(str).join('、');
   return str(value);
+}
+
+
+/// 顶栏上的一个 chip。`key` 同时是点击时回传给 WebView 的动作名。
+class ChatChip {
+  const ChatChip({required this.key, required this.label, this.muted = false, this.active = false});
+
+  final String key;
+  final String label;
+
+  /// 灰色：还没选（模型占位 / 思考未设 / 安全未设）
+  final bool muted;
+
+  /// 高亮：计划模式开着
+  final bool active;
+
+  factory ChatChip.fromJson(Map<String, Object?> json) => ChatChip(
+        key: str(json['key']),
+        label: str(json['label']),
+        muted: json['muted'] == true,
+        active: json['active'] == true,
+      );
+}
+
+/// 上下文用量 chip。
+class ChatContextChip {
+  const ChatContextChip({
+    this.percent = 0,
+    this.overflow = false,
+    this.compacting = false,
+    this.label = '',
+  });
+
+  final int percent;
+  final bool overflow;
+  final bool compacting;
+
+  /// 「12.3K / 128K」
+  final String label;
+
+  factory ChatContextChip.fromJson(Map<String, Object?> json) => ChatContextChip(
+        percent: intOrNull(json['percent']) ?? 0,
+        overflow: json['overflow'] == true,
+        compacting: json['compacting'] == true,
+        label: str(json['label']),
+      );
+}
+
+/// 待办摘要（顶栏下面那一行）。
+class ChatTodoSummary {
+  const ChatTodoSummary({this.open = 0, this.done = 0, this.current = ''});
+
+  final int open;
+  final int done;
+  final String current;
+
+  int get total => open + done;
+
+  factory ChatTodoSummary.fromJson(Map<String, Object?> json) => ChatTodoSummary(
+        open: intOrNull(json['open']) ?? 0,
+        done: intOrNull(json['done']) ?? 0,
+        current: str(json['current']),
+      );
+}
+
+/// 子代理摘要。
+class ChatSubagentSummary {
+  const ChatSubagentSummary({this.active = 0, this.total = 0});
+
+  final int active;
+  final int total;
+
+  factory ChatSubagentSummary.fromJson(Map<String, Object?> json) => ChatSubagentSummary(
+        active: intOrNull(json['active']) ?? 0,
+        total: intOrNull(json['total']) ?? 0,
+      );
+}
+
+/// 顶栏快照。
+class ChatHeaderView {
+  const ChatHeaderView({
+    this.title = '',
+    this.meta = '',
+    this.running = false,
+    this.chips = const <ChatChip>[],
+    this.context,
+    this.sendMode = 'queue',
+    this.showSendMode = false,
+    this.canSteer = false,
+    this.promptCount = 0,
+    this.todo,
+    this.subagents,
+  });
+
+  final String title;
+  final String meta;
+  final bool running;
+  final List<ChatChip> chips;
+  final ChatContextChip? context;
+
+  /// `queue`（排队） / `steer`（插话）
+  final String sendMode;
+  final bool showSendMode;
+  final bool canSteer;
+
+  /// 提示词模板数量；0 表示没导入，按钮不显示
+  final int promptCount;
+  final ChatTodoSummary? todo;
+  final ChatSubagentSummary? subagents;
+
+  factory ChatHeaderView.fromJson(Map<String, Object?> json) {
+    final Object? context = json['context'];
+    final Object? todo = json['todo'];
+    final Object? subagents = json['subagents'];
+    return ChatHeaderView(
+      title: str(json['title']),
+      meta: str(json['meta']),
+      running: json['running'] == true,
+      chips: listOf(json['chips'])
+          .whereType<Map<Object?, Object?>>()
+          .map((Map<Object?, Object?> item) => ChatChip.fromJson(mapOf(item)))
+          .toList(growable: false),
+      context: context is Map<Object?, Object?> ? ChatContextChip.fromJson(mapOf(context)) : null,
+      sendMode: str(json['sendMode'], 'queue'),
+      showSendMode: json['showSendMode'] == true,
+      canSteer: json['canSteer'] == true,
+      promptCount: intOrNull(json['promptCount']) ?? 0,
+      todo: todo is Map<Object?, Object?> ? ChatTodoSummary.fromJson(mapOf(todo)) : null,
+      subagents:
+          subagents is Map<Object?, Object?> ? ChatSubagentSummary.fromJson(mapOf(subagents)) : null,
+    );
+  }
+}
+
+/// 选择面板里的一项。
+class ChatPickerItem {
+  const ChatPickerItem({
+    required this.id,
+    required this.label,
+    this.description = '',
+    this.selected = false,
+    this.danger = false,
+    this.section = '',
+  });
+
+  final String id;
+  final String label;
+  final String description;
+  final bool selected;
+  final bool danger;
+
+  /// 分组标题（模型面板按 provider 分组）
+  final String section;
+
+  factory ChatPickerItem.fromJson(Map<String, Object?> json) => ChatPickerItem(
+        id: str(json['id']),
+        label: str(json['label']),
+        description: str(json['description']),
+        selected: json['selected'] == true,
+        danger: json['danger'] == true,
+        section: str(json['section']),
+      );
+}
+
+/// 选择面板（模型 / 思考 / 安全 / 提示词 / 上下文）。
+class ChatPickerView {
+  const ChatPickerView({
+    this.kind = '',
+    this.title = '',
+    this.subtitle = '',
+    this.searchable = false,
+    this.empty = '',
+    this.items = const <ChatPickerItem>[],
+  });
+
+  final String kind;
+  final String title;
+  final String subtitle;
+  final bool searchable;
+  final String empty;
+  final List<ChatPickerItem> items;
+
+  factory ChatPickerView.fromJson(Map<String, Object?> json) => ChatPickerView(
+        kind: str(json['kind']),
+        title: str(json['title']),
+        subtitle: str(json['subtitle']),
+        searchable: json['searchable'] == true,
+        empty: str(json['empty']),
+        items: listOf(json['items'])
+            .whereType<Map<Object?, Object?>>()
+            .map((Map<Object?, Object?> item) => ChatPickerItem.fromJson(mapOf(item)))
+            .toList(growable: false),
+      );
 }

@@ -504,6 +504,80 @@ Dart 点「扫码配对」→ `openWebSheet('connection')` → 原生先 `notify
 > 这也是 `leaveFlutterThen()` 存在的第三个理由（前两个是工作区选择器和各种 sheet）。
 > 判断标准很简单：这个界面依赖 WebView 的插件或 DOM 弹层吗？是就走这条。
 
+## 顶栏与输入框附属面板（0.1.31）：把「算出来的东西」也推过去
+
+设置页、聊天页、侧栏、文件能力都搬完之后，聊天页里最后一层「点一下闪回网页版」的东西是
+顶栏（模型 / 思考 / 安全 / 计划 / 上下文）和输入框的附属面板（提示词 / 上下文用量）。
+
+这一层和前面几页的区别：**它的内容不是数据，是判断**。要不要显示「模型」入口取决于
+`composerToolChips(backend)`（ACP 会话没有模型概念），思考档位文案取决于 `thinkingLabel()`，
+安全级别取决于「全局默认 + 本会话覆盖」两级状态。所以做法比侧栏更彻底：
+
+> Dart 侧一个判断都不写。`ChatHeaderView` 里只有「画什么」，没有任何 `if (backend === "acp")`。
+
+### 数据契约
+
+顶栏跟着聊天快照一起推（`ChatSnapshot.header`），选择面板也跟着推（`ChatSnapshot.picker`）：
+
+```jsonc
+{
+  "header": {
+    "title": "会话标题", "meta": "PiDeck · 运行中", "running": true,
+    "chips": [
+      { "key": "model", "label": "claude-sonnet" },
+      { "key": "thinking", "label": "思考 高" },
+      { "key": "security", "label": "标准", "muted": true },
+      { "key": "plan", "label": "计划", "active": true }
+    ],
+    "context": { "percent": 95, "overflow": true, "compacting": false, "label": "190K / 200K" },
+    "sendMode": "steer", "showSendMode": true, "canSteer": true, "promptCount": 3,
+    "todo": { "open": 2, "done": 1, "current": "搬侧栏" },
+    "subagents": { "active": 1, "total": 2 }
+  },
+  "picker": {
+    "kind": "model", "title": "选择模型", "searchable": true,
+    "items": [{ "id": "anthropic\u0000claude-sonnet", "label": "Claude Sonnet", "section": "anthropic", "selected": true }]
+  }
+}
+```
+
+`chips[].key` 同时是点击时回传的动作名（`{"type":"chip","key":"model"}`），所以
+**新增一个 chip 必须同时在 `dispatchFlutterChatAction` 里加分支** —— 这是这套设计唯一的
+「两处要一起改」的地方，写在 `flutter-chat-header.ts` 的注释里了。
+
+### 选择面板放在快照里，而不是另开通道
+
+面板内容（模型列表、提示词模板）都是 WebView 异步取回来的，本来就要经过一次
+`setChat`。另开一条 `setChatPicker` 通道的代价是：两处 `flutterPicker` 状态、两处去重、
+以及「面板开了但快照还没到」的中间态。塞进同一个快照就全没了 —— `FlutterChatMirror`
+本来就在做 40ms 合并与内容去重。
+
+### 面板用内联的，不用 `showModalBottomSheet`
+
+弹层的开合状态由 Dart 自己的 `Navigator` 管，而面板内容由快照推 —— 两边一旦不同步就会出现
+「关了又弹」：用户点了关闭，`closePicker` 还没到，下一份快照里 `picker` 仍在，弹层又被拉起来。
+内联面板是纯函数式的：`picker == null` 就收起，没有中间状态。搜索框在 Dart 本地过滤
+（模型几十条、模板几十条，不值得为每次按键过一次桥），只在回车时发一次 `pickerQuery`。
+
+### 提示词数量是懒加载的
+
+「提示词」按钮只在 `promptCount > 0` 时出现，而模板列表要发一次 `/runtime/commands`。
+所以 `openFlutterChatPage()` 里顺手拉一次（失败就当 0，按钮不显示，不阻塞开页）。
+这条规则来自 `prompt-picker-model.ts` 的注释：模板正文不在 Web API 里，选中只能插 `/名字 `，
+**不要**自己拉正文。
+
+### 动作清单（`chatAction` 里新增的 `type`）
+
+| type | 载荷 | 行为 |
+|---|---|---|
+| `chip` | `key` | `plan` 直接切计划模式；`dsh` 走 `leaveFlutterThen(openDshToolsSheet)`；其余开对应面板 |
+| `context` | — | 开上下文面板（百分比明细 + 「压缩上下文」） |
+| `prompts` | — | 开提示词面板（插 `/名字 ` 到输入框） |
+| `sendMode` | — | 切换排队 / 插话 |
+| `pickerQuery` | `kind`, `query` | 重新取一次面板内容（模型 / 提示词） |
+| `pickerSelect` | `kind`, `id` | 先关面板再落地（压缩上下文要好几秒，面板开着会让人以为没点中） |
+| `closePicker` | — | 收起面板 |
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
@@ -530,12 +604,15 @@ Dart 点「扫码配对」→ `openWebSheet('connection')` → 原生先 `notify
    引 pub 包等于把它们重实现一遍；而扫码的 `BarcodeScanner.scan()` 本来就得靠 Capacitor 的
    bridge 接 ActivityResult，在 Flutter 宿主的 Activity 里拿不到结果，索性回 WebView 开面板。
 
-**剩下没迁的**（都是聊天页里的附属面板与顶栏控件，不阻塞主路径）：
-启动页 `splash.ts`、空态建议 `empty-suggestions.ts`、顶栏（标题 / 模型 / 思考 / 历史 / 上下文 /
-安全级别 / 计划模式 / DSH / 待办条 / 子代理条）、输入框附属面板（提示词、斜杠命令、@提及、
-发送模式、上下文用量）、十七个 sheet（连接、端点、主题、安全、DSH 工具、模型、思考、用量、
-工作区选择器、后端、重命名、编辑消息、历史、提及、斜杠、上下文、发送历史）、
+5. ~~**顶栏 + 输入框附属面板**~~ —— **0.1.31 已完成**（见上一节）：顶栏 chips、上下文用量、
+   模型 / 思考 / 安全 / 提示词面板、排队与插话切换都进了 Flutter。
+
+**剩下没迁的**：
+启动页 `splash.ts`、空态建议 `empty-suggestions.ts`、斜杠命令 `slash-model.ts`、@提及
+`mention-model.ts`、输入历史 `history-*`、以及十七个 sheet（连接、端点、主题、安全、DSH 工具、
+用量、工作区选择器、后端、重命名、编辑消息、历史、提及、斜杠、上下文、发送历史）、
 图片查看器 `image-lightbox.ts`、扫码覆盖层 `scan-overlay.ts`、文件引用/下载。
+这些都不在主路径上：点它们会 `leaveFlutterThen()` 回 WebView 开原生弹层，行为一致，只是闪一下。
 
 各插件对应关系：
 
@@ -558,6 +635,11 @@ Dart 点「扫码配对」→ `openWebSheet('connection')` → 原生先 `notify
 - [x] 真机：进 Flutter 页期间 RunWatch 通知判定仍然正确（0.1.20 修：`isAppInBackground` 单测覆盖 4 种组合）
 - [ ] 真机：点齿轮直接进 Flutter 设置页，主题 / 通知 / 设备 / 概况 / 技能 / 扩展 / DSH 七个分区都能显示（0.1.21）
 - [ ] 真机：改主题、关通知、切设备、刷概况、开关技能/扩展、DSH 运行/停止、DSH 安装（含错误 ID 校验）均生效且提示正常
+- [x] `flutter test` 59 项（`chat_models_test.dart` 覆盖顶栏 chips / 上下文 / 待办 / 子代理 / 选择面板解析）
+- [x] `app/tests/flutter-chat-header.test.ts` 13 项（chip 顺序、能力收敛、上下文短标签、三种面板的组装）
+- [ ] 真机：顶栏 chip 点开模型 / 思考 / 安全面板，选完 chip 文案立刻变（0.1.31）
+- [ ] 真机：上下文 chip 显示百分比，点开能看到明细并触发「压缩上下文」
+- [ ] 真机：ACP 会话顶栏只剩标题（没有模型 / 思考 / 计划 chip）
 - [ ] 真机：返回键与页内返回都能回 WebView，且回来后会话列表/聊天页状态未丢
 - [x] `flutter test` 40 项全绿（新增 `chat_models_test.dart` 12 项、`markdown_test.dart` 11 项）
 - [x] 聊天桥的纯逻辑：`app/tests/flutter-chat.test.ts` 15 项（历史条目转换 / thinking 剥离 / 工具状态 / 快照组装 / 40ms 合并 / 去重）

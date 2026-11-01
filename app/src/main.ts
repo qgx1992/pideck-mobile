@@ -149,6 +149,8 @@ import {
   modelSubtitle,
   thinkingHint,
   thinkingLabel,
+  LEVEL_ORDER,
+  modelKey,
 } from "./ui/model-picker.ts";
 import type { ModelPickerSection } from "./ui/model-picker.ts";
 import { h, clear, toast } from "./ui/dom.ts";
@@ -193,6 +195,14 @@ import {
 } from "./platform/flutter-host.ts";
 import { FlutterChatMirror, buildChatSnapshot } from "./platform/flutter-chat.ts";
 import { buildSidebarSnapshot } from "./platform/flutter-sidebar.ts";
+import {
+  buildChatHeaderView,
+  buildModelPicker,
+  buildSecurityPicker,
+  buildThinkingPicker,
+  shortTokens,
+} from "./platform/flutter-chat-header.ts";
+import type { ChatHeaderView, ChatPickerView } from "./platform/flutter-chat-header.ts";
 import {
   modelChipLabel,
   modelChipTitle,
@@ -2632,6 +2642,7 @@ function renderTodoStrip(): void {
   // 用户手动收起过就听用户的；否则有「进行中」就自动展开
   const collapsed = remembered ?? !shouldAutoExpand(todoView);
   refs.todoStrip.update(todoView, { collapsed });
+  syncFlutterChat();
 }
 
 /* ---------------------------- 子代理活动条 ---------------------------- */
@@ -2696,6 +2707,7 @@ function renderSubagentStrip(): void {
   const remembered = sessionId ? subagentCollapsed.get(epKey(sessionId)) : undefined;
   const collapsed = remembered ?? true;
   refs.subagentStrip.update(subagentView, { collapsed });
+  syncFlutterChat();
 }
 
 /* ---------------------------- 上下文用量 ---------------------------- */
@@ -2784,6 +2796,7 @@ function renderContextChip(): void {
   refs.contextBtn.title = contextChipTitle(usage);
   refs.contextBtn.setAttribute("aria-label", contextChipTitle(usage));
   refs.contextRing.style.setProperty("--ctx-pct", String(ringPercent(usage)));
+  syncFlutterChat();
 }
 
 /** 上下文用量面板：大号百分比 + 明细 + 压缩按钮（对齐 Web 端 ContextUsageSheetBody）。 */
@@ -5415,8 +5428,226 @@ function syncFlutterChat(): void {
       pending: activeSessionId && runtime ? runtime.store.pendingFor(activeSessionId) : [],
       perf: perfMetrics,
       backend: activeBackend(),
+      header: chatHeaderView(),
+      picker: flutterPicker,
     }),
   );
+}
+
+/* ------------------------- 顶栏快照与选择面板 ------------------------- */
+
+/**
+ * 顶栏快照。
+ *
+ * 数据源与 Web 版顶栏、输入框 chips 完全同一套（`buildHeaderView()` /
+ * `resolveSessionPrefs()` / `securityChoices()` / `contextUsage` / `todoView` /
+ * `subagentView`），这里只做摊平 —— 不在 Flutter 侧重新判断「ACP 有没有模型入口」
+ * 这类事，否则后端能力一变两边就会分叉。
+ */
+function chatHeaderView(): ChatHeaderView {
+  const sessionId = activeSessionId;
+  const session = sessionId && runtime ? runtime.store.session(sessionId) : undefined;
+  const backend = session?.backend;
+  const caps = backendCapabilities(backend);
+  const securityState = runtime ? parseSecurityState(runtime.store.state.security) : null;
+  const chips = composerToolChips(backend, securityState, sessionId !== null);
+  const prefs = resolveSessionPrefs(session, sessionId ? learnedPrefs.get(epKey(sessionId)) : undefined);
+  const header = runtime
+    ? buildHeaderView(
+        runtime.store.state,
+        sessionId,
+        session?.projectId ?? null,
+        sessionId ? learnedPrefs.get(epKey(sessionId)) : undefined,
+      )
+    : { title: session?.title ?? "", meta: "", isRunning: false };
+
+  const securityLevel = securityState ? securityLevelFor(securityState, sessionId).level : null;
+  const todos = todoView;
+  const current = todos?.items.find((item) => item.status === "in_progress");
+
+  return buildChatHeaderView({
+    title: header.title,
+    meta: header.meta,
+    running: header.isRunning,
+    caps: {
+      model: caps.model,
+      thinking: caps.thinking,
+      plan: caps.plan,
+      steer: caps.steer,
+      dsh: chips.dsh,
+    },
+    model: { label: modelChipLabel(prefs, 18), placeholder: prefs.placeholder },
+    thinking: { level: prefs.thinkingLevel, label: thinkingLabel(prefs.thinkingLevel) },
+    security: chips.security
+      ? { label: securityChipLabel(securityLevel), muted: !securityLevel }
+      : null,
+    dsh: chips.dsh,
+    planOn: planModeOn,
+    context: contextUsage,
+    sendMode,
+    promptCount: promptTemplateCount,
+    todo:
+      todos && todos.total > 0
+        ? { open: todos.total - todos.done, done: todos.done, ...(current ? { current: current.text } : {}) }
+        : null,
+    subagents:
+      subagentView.length > 0
+        ? {
+            active: subagentView.filter((item) => item.active).length,
+            total: subagentView.length,
+          }
+        : null,
+  });
+}
+
+/** 当前推给 Flutter 的选择面板（null = 不显示）。 */
+let flutterPicker: ChatPickerView | null = null;
+/** 已导入的提示词模板数量（`openPromptPicker()` 成功拉过一次后才有值）。 */
+let promptTemplateCount = 0;
+
+function setFlutterPicker(view: ChatPickerView | null): void {
+  flutterPicker = view;
+  syncFlutterChat();
+}
+
+/**
+ * 在 Flutter 里打开一个选择面板。
+ *
+ * 模型 / 思考 / 安全 / 提示词四类数据都要异步取（模型列表、运行时命令表），
+ * 所以这里先推一个「加载中」再推真实内容 —— 手机上看不出差别，但不会出现
+ * 点了 chip 之后弹层里空着一秒的错觉。
+ */
+async function openFlutterPicker(kind: string, query = ""): Promise<void> {
+  if (!runtime || !activeSessionId) return;
+  const session = runtime.store.session(activeSessionId);
+  const prefs = resolveSessionPrefs(session, learnedPrefs.get(epKey(activeSessionId)));
+
+  if (kind === "model") {
+    setFlutterPicker({ kind, title: "选择模型", searchable: true, empty: "正在加载模型列表…", items: [] });
+    let sections: ModelPickerSection[];
+    try {
+      sections = await loadModelSections();
+    } catch (error) {
+      setFlutterPicker({ kind, title: "选择模型", empty: `模型列表加载失败：${describeError(error)}`, items: [] });
+      return;
+    }
+    const filtered = query.trim() ? filterModelSections(sections, query) : sections;
+    setFlutterPicker(buildModelPicker(filtered, modelKey(prefs.provider, prefs.modelId)));
+    return;
+  }
+
+  if (kind === "thinking") {
+    // 服务端没有「这个模型支持哪些档位」的同步来源，全列出来让用户自己试 ——
+    // 与 Web 版一致：选了不支持的档位，服务端会忽略它。
+    const levels = LEVEL_ORDER;
+    setFlutterPicker(buildThinkingPicker(levels, prefs.thinkingLevel, thinkingLabel, thinkingHint));
+    return;
+  }
+
+  if (kind === "security") {
+    const state = parseSecurityState(runtime.store.state.security);
+    setFlutterPicker(buildSecurityPicker(securityChoices(state, activeSessionId)));
+    return;
+  }
+
+  if (kind === "prompt") {
+    setFlutterPicker({ kind, title: "提示词", searchable: true, empty: "正在读取提示词…", items: [] });
+    const entries = await loadPromptEntries();
+    promptTemplateCount = entries.length;
+    const filtered = filterPromptEntries(entries, query);
+    setFlutterPicker({
+      kind,
+      title: "提示词",
+      subtitle: entries.length > 0 ? `共 ${entries.length} 个模板，选中后插入输入框` : undefined,
+      searchable: true,
+      empty: entries.length === 0 ? PROMPT_EMPTY_HINT : "没有匹配的提示词",
+      items: filtered.map((entry) => ({
+        id: entry.name,
+        label: `/${entry.name}`,
+        description: entry.description || undefined,
+      })),
+    });
+    return;
+  }
+
+  if (kind === "context") {
+    const usage = contextUsage;
+    setFlutterPicker({
+      kind,
+      title: "上下文用量",
+      subtitle: usage ? contextChipLabel(usage) : "还没有拿到上下文数据",
+      items: [
+        {
+          id: "info",
+          label: usage ? `已用 ${usage.contextPercent.toFixed(1)}%` : "未知",
+          description: usage
+            ? [
+                `输入 ${shortTokens(usage.inputTokens ?? 0)}`,
+                `输出 ${shortTokens(usage.outputTokens ?? 0)}`,
+                usage.cacheHitPercent === undefined ? "" : `缓存命中 ${usage.cacheHitPercent.toFixed(0)}%`,
+              ]
+                .filter(Boolean)
+                .join(" · ")
+            : "跑一轮之后才有数据",
+          selected: true,
+        },
+        {
+          id: "compact",
+          label: "压缩上下文",
+          description: "把历史压成摘要，腾出窗口（当前轮结束后才生效）",
+          danger: usage ? usage.contextOverflow : false,
+        },
+      ],
+    });
+  }
+}
+
+/** 读一次运行时命令表里的提示词模板（`source: "prompt"`）。 */
+async function loadPromptEntries(): Promise<PromptEntry[]> {
+  if (!runtime) return [];
+  const { client, store } = runtime;
+  const sourceSession = promptCommandSource(store.state.runtimes, activeSessionId);
+  const target = sourceSession ? store.targetOf(sourceSession) : undefined;
+  if (!sourceSession || !target) return [];
+  try {
+    const commands = await client.listRuntimeCommands(sourceSession, target);
+    return importedPrompts(commands);
+  } catch {
+    return [];
+  }
+}
+
+/** 选中一个面板项之后落地（模型 / 思考 / 安全 / 提示词 / 上下文）。 */
+async function applyFlutterPickerChoice(kind: string, id: string): Promise<void> {
+  if (!runtime || !activeSessionId) return;
+  if (kind === "model") {
+    const sections = await loadModelSections();
+    const option = sections.flatMap((section) => section.models).find((model) => model.key === id);
+    if (!option) {
+      pushFlutterNotice("这个模型已经不在列表里了");
+      return;
+    }
+    await applyModel(option.provider, option.modelId, option.name);
+    return;
+  }
+  if (kind === "thinking") {
+    await applyThinking(id);
+    return;
+  }
+  if (kind === "security") {
+    await applySecurityLevel(id === "" ? null : id);
+    return;
+  }
+  if (kind === "prompt") {
+    const entry = (await loadPromptEntries()).find((item) => item.name === id);
+    if (!entry) return;
+    insertAtCursor(promptInsertText(entry));
+    pushFlutterNotice(`已插入 /${entry.name}`);
+    return;
+  }
+  if (kind === "context" && id === "compact") {
+    await compactContext(activeSessionId);
+  }
 }
 
 /**
@@ -5433,6 +5664,14 @@ async function openFlutterChatPage(sessionId: string): Promise<boolean> {
   syncFlutterChat();
   flutterChatMirror.flush();
   syncFlutterSidebar();
+  // 提示词模板数量决定「提示词」按钮出不出现：这里顺手拉一次，
+  // 拉不到就保持 0（按钮不显示），不阻塞开页。
+  void loadPromptEntries().then((entries) => {
+    if (entries.length !== promptTemplateCount) {
+      promptTemplateCount = entries.length;
+      syncFlutterChat();
+    }
+  });
   const opened = await openFlutterPage("chat", sessionId);
   if (!opened) {
     flutterChatOpen = false;
@@ -5552,6 +5791,54 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
     }
     case "refresh":
       if (activeSessionId) void reloadHistory(activeSessionId);
+      return;
+    case "chip": {
+      // 顶栏 chip：计划模式直接切，其余弹选择面板
+      const key = text("key");
+      if (key === "plan") {
+        planModeOn = !planModeOn;
+        renderComposerState();
+        syncFlutterChat();
+        void pushFlutterNotice(planModeOn ? "计划模式已开启：本轮只做只读分析并给计划" : "已切回普通模式");
+        return;
+      }
+      if (key === "dsh") {
+        leaveFlutterThen(() => void openDshToolsSheet());
+        return;
+      }
+      if (key === "model" || key === "thinking" || key === "security") void openFlutterPicker(key);
+      return;
+    }
+    case "context":
+      void openFlutterPicker("context");
+      return;
+    case "prompts":
+      void openFlutterPicker("prompt");
+      return;
+    case "sendMode":
+      sendMode = toggleSendMode(sendMode);
+      renderComposerState();
+      syncFlutterChat();
+      void pushFlutterNotice(sendModeSwitchToast(sendMode));
+      return;
+    case "pickerQuery": {
+      const kind = text("kind");
+      const query = text("query");
+      if (!kind) return;
+      void openFlutterPicker(kind, query);
+      return;
+    }
+    case "pickerSelect": {
+      const kind = text("kind");
+      const id = text("id");
+      if (!kind) return;
+      // 先关面板再执行：压缩上下文要好几秒，面板一直开着会让人以为没点中
+      setFlutterPicker(null);
+      void applyFlutterPickerChoice(kind, id).then(() => syncFlutterChat());
+      return;
+    }
+    case "closePicker":
+      setFlutterPicker(null);
       return;
     default:
       return;

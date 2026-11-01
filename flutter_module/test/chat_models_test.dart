@@ -197,5 +197,95 @@ void main() {
       expect(snapshot.menusFor('assistant'), isEmpty);
       expect(ChatSnapshot.fromJson(<String, Object?>{}).menusFor('user'), isEmpty);
     });
+
+    test('顶栏：chips / 上下文 / 待办 / 子代理 都能解析', () {
+      final ChatSnapshot snapshot = ChatSnapshot.fromJson(<String, Object?>{
+        'sessionId': 's1',
+        'header': <String, Object?>{
+          'title': '会话标题',
+          'meta': 'PiDeck · 运行中',
+          'running': true,
+          'chips': <Object?>[
+            <String, Object?>{'key': 'model', 'label': 'claude-sonnet'},
+            <String, Object?>{'key': 'thinking', 'label': '思考 高'},
+            <String, Object?>{'key': 'plan', 'label': '计划', 'active': true},
+          ],
+          'context': <String, Object?>{
+            'percent': 95,
+            'overflow': true,
+            'compacting': false,
+            'label': '190K / 200K',
+          },
+          'sendMode': 'steer',
+          'showSendMode': true,
+          'canSteer': true,
+          'promptCount': 3,
+          'todo': <String, Object?>{'open': 2, 'done': 1, 'current': '搬侧栏'},
+          'subagents': <String, Object?>{'active': 1, 'total': 2},
+        },
+      });
+      final ChatHeaderView header = snapshot.header;
+      expect(header.title, '会话标题');
+      expect(header.meta, 'PiDeck · 运行中');
+      expect(header.running, isTrue);
+      expect(header.chips.length, 3);
+      expect(header.chips[1].label, '思考 高');
+      expect(header.chips[2].active, isTrue);
+      expect(header.context?.percent, 95);
+      expect(header.context?.overflow, isTrue);
+      expect(header.context?.label, '190K / 200K');
+      expect(header.sendMode, 'steer');
+      expect(header.showSendMode, isTrue);
+      expect(header.promptCount, 3);
+      expect(header.todo?.total, 3);
+      expect(header.todo?.current, '搬侧栏');
+      expect(header.subagents?.active, 1);
+      expect(header.subagents?.total, 2);
+    });
+
+    test('顶栏缺失时给一份安全默认（不炸、也不显示 chip）', () {
+      final ChatSnapshot snapshot = ChatSnapshot.fromJson(<String, Object?>{'sessionId': 's1'});
+      expect(snapshot.header.chips, isEmpty);
+      expect(snapshot.header.context, isNull);
+      expect(snapshot.header.todo, isNull);
+      expect(snapshot.header.subagents, isNull);
+      expect(snapshot.header.sendMode, 'queue');
+      expect(snapshot.header.promptCount, 0);
+      expect(snapshot.picker, isNull);
+    });
+
+    test('选择面板：分组标题、selected、danger、搜索开关', () {
+      final ChatSnapshot snapshot = ChatSnapshot.fromJson(<String, Object?>{
+        'sessionId': 's1',
+        'picker': <String, Object?>{
+          'kind': 'model',
+          'title': '选择模型',
+          'subtitle': '共 2 个',
+          'searchable': true,
+          'empty': '没有可用模型',
+          'items': <Object?>[
+            <String, Object?>{
+              'id': 'anthropic claude-sonnet',
+              'label': 'Claude Sonnet',
+              'description': 'anthropic · 200K 上下文',
+              'section': 'anthropic',
+              'selected': true,
+            },
+            <String, Object?>{'id': 'openai gpt-5', 'label': 'GPT-5', 'section': 'openai'},
+          ],
+        },
+      });
+      final ChatPickerView picker = snapshot.picker!;
+      expect(picker.kind, 'model');
+      expect(picker.searchable, isTrue);
+      expect(picker.subtitle, '共 2 个');
+      expect(picker.empty, '没有可用模型');
+      expect(picker.items.length, 2);
+      expect(picker.items.first.section, 'anthropic');
+      expect(picker.items.first.selected, isTrue);
+      expect(picker.items.first.description, 'anthropic · 200K 上下文');
+      expect(picker.items.last.selected, isFalse);
+      expect(picker.items.last.danger, isFalse);
+    });
   });
 }
