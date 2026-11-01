@@ -524,8 +524,18 @@ Dart 点「扫码配对」→ `openWebSheet('connection')` → 原生先 `notify
 3. **聊天页**：**0.1.27 已打通「视图迁移」链路**，**0.1.28 补齐侧栏 `Drawer`**，
    **0.1.29 补齐长按消息菜单 + 会话点击直达**（见上两节）。剩下的是打磨。
    流式仍由原生 `SsePlugin` 读、WebView 的 `ChatReducer` 算，Dart 只渲染（0.1.26 定案）。
-4. **文件保存 / 扫码**：`file_picker` + `mobile_scanner` 两个 pub 包，`FileSaverPlugin` 里
-   MediaStore 的那套要换成 `path_provider` + `share_plus`，行为差异最大，放最后。
+4. ~~**文件保存 / 选图 / 扫码**~~ —— **0.1.30 已完成**，但做法和当初的设想不一样：没有引 `file_picker` /
+   `mobile_scanner` 两个 pub 包，而是把 `SavedFiles` / `FlutterFiles` 抽成原生共用实现（详见上一节）。
+   理由：压缩参数与落盘规则已经是 `image-attach-model.ts` / `FileSaverPlugin` 里的产品决策，
+   引 pub 包等于把它们重实现一遍；而扫码的 `BarcodeScanner.scan()` 本来就得靠 Capacitor 的
+   bridge 接 ActivityResult，在 Flutter 宿主的 Activity 里拿不到结果，索性回 WebView 开面板。
+
+**剩下没迁的**（都是聊天页里的附属面板与顶栏控件，不阻塞主路径）：
+启动页 `splash.ts`、空态建议 `empty-suggestions.ts`、顶栏（标题 / 模型 / 思考 / 历史 / 上下文 /
+安全级别 / 计划模式 / DSH / 待办条 / 子代理条）、输入框附属面板（提示词、斜杠命令、@提及、
+发送模式、上下文用量）、十七个 sheet（连接、端点、主题、安全、DSH 工具、模型、思考、用量、
+工作区选择器、后端、重命名、编辑消息、历史、提及、斜杠、上下文、发送历史）、
+图片查看器 `image-lightbox.ts`、扫码覆盖层 `scan-overlay.ts`、文件引用/下载。
 
 各插件对应关系：
 
@@ -533,7 +543,7 @@ Dart 点「扫码配对」→ `openWebSheet('connection')` → 原生先 `notify
 |---|---|
 | `SsePlugin` | 不换：原生读流，过桥给 Dart 渲染（探针实测后台 0 帧，见上） |
 | `NavigationBarPlugin` | `SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(systemNavigationBarColor: ..., systemNavigationBarIconBrightness: ...))` |
-| `FileSaverPlugin` | `path_provider` + `share_plus`（或自写 MethodChannel 复用现成 Java 代码） |
+| `FileSaverPlugin` | 已解决：抽出 `SavedFiles` 共用，Flutter 通道直接调（0.1.30） |
 | `RunWatchPlugin` | `flutter_local_notifications` + 自写 MethodChannel；前台服务那段 Java 建议直接复用 |
 
 **复用现成 Java 代码是允许的**：`MainActivity` 里已注册的插件都是普通 Capacitor 类，
