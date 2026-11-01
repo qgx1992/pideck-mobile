@@ -934,6 +934,15 @@ body.barcode-scanner-active .scan-overlay {
   border: 1px solid color-mix(in oklab, #a06bff 42%, transparent);
 }
 
+/* ACP 会话：背后是电脑上的外部 agent CLI，用青绿色跟 DSH(蓝) / 生图(紫) 区分 */
+.sbadge--acp {
+  color: #6fd6bd;
+  background: var(--bg-elev);
+  background: color-mix(in oklab, #33c0a0 20%, transparent);
+  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklab, #33c0a0 45%, transparent);
+}
+
 /* 设备徽章：一机连多台时标出会话属于哪台 */
 .sbadge--device {
   max-width: 30vw;
@@ -970,6 +979,30 @@ body.barcode-scanner-active .scan-overlay {
 /* 激活态的左侧竖条对 DSH 也保持蓝色，但更亮 */
 .session--dsh.is-active::before {
   background: #4f8cff;
+}
+
+/* ACP 会话整行淡青底：一眼能看出这个会话不归本机 pi 管 */
+.session--acp {
+  background: var(--bg-elev);
+  background: color-mix(in oklab, #33c0a0 6%, transparent);
+  border-color: var(--border);
+  border-color: color-mix(in oklab, #33c0a0 15%, transparent);
+}
+
+.session--acp:hover {
+  background: var(--bg-elev);
+  background: color-mix(in oklab, #33c0a0 11%, transparent);
+}
+
+.session--acp.is-active {
+  background: var(--bg-elev);
+  background: color-mix(in oklab, #33c0a0 14%, transparent);
+  border-color: var(--border);
+  border-color: color-mix(in oklab, #33c0a0 38%, transparent);
+}
+
+.session--acp.is-active::before {
+  background: #33c0a0;
 }
 
 .sname {

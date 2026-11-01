@@ -14,7 +14,7 @@ import { ChatReducer } from "./api/frames.ts";
 import { PiDeckClient } from "./api/client.ts";
 import type { StreamingBehavior } from "./api/client.ts";
 import { isAuthError } from "./api/errors.ts";
-import type { ImageAttachment, RuntimeTarget } from "./types.ts";
+import type { ImageAttachment, RuntimeTarget, SendPromptResult } from "./types.ts";
 
 export type ChannelStatus =
   | "idle"
@@ -173,7 +173,7 @@ export class SessionChannel {
       streamingBehavior?: StreamingBehavior;
       extra?: Record<string, unknown>;
     } = {},
-  ): Promise<unknown> {
+  ): Promise<SendPromptResult> {
     if (!this.running) this.start();
     await this.waitConnected(4_000);
 

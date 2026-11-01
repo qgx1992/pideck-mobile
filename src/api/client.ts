@@ -29,6 +29,7 @@ import type {
   PendingUiRequest,
   Project,
   RuntimeTarget,
+  SendPromptResult,
   SessionSummary,
   CommandInfo,
   FileNode,
@@ -551,7 +552,7 @@ export class PiDeckClient {
   /* ------------------------------------------------------------------ */
 
   /** 只负责「投递」。内容必须从 /stream 或 /api/chat 的流里读。 */
-  async sendPrompt(sessionId: string, input: PromptInput): Promise<unknown> {
+  async sendPrompt(sessionId: string, input: PromptInput): Promise<SendPromptResult> {
     const body: Record<string, unknown> = {
       requestId: input.requestId,
       message: input.message,
@@ -559,7 +560,7 @@ export class PiDeckClient {
       ...(input.streamingBehavior ? { streamingBehavior: input.streamingBehavior } : {}),
       ...(input.extra ?? {}),
     };
-    const response = await this.requestJson<{ result: unknown }>(
+    const response = await this.requestJson<{ result: SendPromptResult }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/prompt`,
       { method: "POST", body },
     );

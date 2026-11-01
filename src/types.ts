@@ -16,7 +16,15 @@ export interface HealthInfo {
   port: number;
 }
 
-export type BackendKind = "pi" | "dsh" | "imagegen";
+/**
+ * 会话后端。
+ *
+ * `acp` = 由电脑上的外部 ACP agent CLI（gemini --acp / kimi acp / codex-acp …）驱动，
+ * 手机端只是它的远端界面：能看流、能发、能批权限，但改不了模型/模式（那是
+ * `session/set_config_option`，桌面端只走 IPC）。可用的能力见
+ * `app/src/ui/backend-capabilities.ts`。
+ */
+export type BackendKind = "pi" | "dsh" | "acp" | "imagegen";
 
 export interface Project {
   id: string;
@@ -37,6 +45,8 @@ export interface SessionSummary {
   model?: { provider?: string; modelId?: string; modelName?: string } | null;
   thinkingLevel?: string | null;
   backend?: BackendKind | string;
+  /** acp 会话绑定的 CLI 工具 id（对应 `/api/state` 的 acpTools） */
+  acpToolId?: string | null;
   updatedAt?: number;
   parentSessionId?: string | null;
   forked?: boolean;
@@ -96,11 +106,40 @@ export interface PiDeckState {
   sessions: SessionSummary[];
   runtimes: RuntimeInfo[];
   pendingUiRequests: PendingUiRequest[];
-  /** 0.9.9 起的工具调用快照（桌面端 ACP 工具面板用）；手机端暂不展示，但别丢字段 */
-  acpTools?: unknown[];
+  /**
+   * 0.9.9 起：**已登记的 ACP CLI 工具清单**（`{id,name}[]`），不是工具调用快照。
+   * 桌面端已按 `acpEnabled` + 单个工具 `enabled` 门控；空数组 = 这台电脑没开 ACP，
+   * 不能据此判定「会话绑定的工具被删了」。command/args/env 不下发。
+   */
+  acpTools?: AcpToolInfo[];
   /** 0.9.9 起的安全级别投影：只有等级选择需要的字段，没有工具规则/正则 */
   security?: WebSecurityState;
 }
+
+/** `/api/state.acpTools` 的一项：只够画「选哪个 CLI」，不含启动命令与环境变量。 */
+export interface AcpToolInfo {
+  id: string;
+  name: string;
+  [key: string]: unknown;
+}
+
+/**
+ * `/api/sessions/:id/prompt` 的投递结果。
+ *
+ * `accepted: false` 时正文一行都不会产出：`delivery === "rejected"` 是确定没发出去
+ * （可安全撤掉乐观气泡），`"unknown"` 是服务端也不确定（别撤）。文案在 `i18nKey`/
+ * `i18nParams` 里，由渲染层本地化，见 `app/src/ui/acp-notice.ts`。
+ */
+export type SendPromptResult =
+  | { accepted: true; [key: string]: unknown }
+  | ({
+      accepted: false;
+      error?: string;
+      delivery?: "rejected" | "unknown";
+      i18nKey?: string;
+      i18nParams?: Record<string, unknown>;
+      debugDetails?: string;
+    } & Record<string, unknown>);
 
 /** `/api/state` 的 `security` 字段（只下发等级选择所需的信息）。 */
 export interface WebSecurityState {

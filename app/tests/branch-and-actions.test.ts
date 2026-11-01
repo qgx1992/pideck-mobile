@@ -112,3 +112,22 @@ test("删除需要二次确认文案", () => {
   assert.match(confirmTextFor("delete"), /不可恢复/);
   assert.equal(confirmTextFor("edit"), "");
 });
+
+test("ACP 会话只给「复制」：历史由 agent CLI 主导，没有 fork / 编辑 / 删除", () => {
+  for (const role of ["user", "assistant"]) {
+    assert.deepEqual(
+      actionsForRole(role, "acp").map((a) => a.id),
+      ["copy"],
+      `${role} 在 ACP 会话上只该有复制`,
+    );
+  }
+  // 工具/系统消息在 ACP 上同样没有菜单
+  assert.deepEqual(actionsForRole("tool", "acp"), []);
+  assert.equal(hasActions("tool", "acp"), false);
+  // 其它后端不受影响
+  assert.deepEqual(
+    actionsForRole("user", "dsh").map((a) => a.id),
+    ["copy", "edit", "resend", "fork", "delete"],
+  );
+  assert.deepEqual(actionsForRole("user", undefined).map((a) => a.id), ["copy", "edit", "resend", "fork", "delete"]);
+});

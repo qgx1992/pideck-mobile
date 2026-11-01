@@ -4,6 +4,7 @@
  */
 
 import type { SessionSummary } from "@core/types.ts";
+import { acpToolNameOf, backendBadge, backendBadgeHint, normalizeBackend } from "./backend-capabilities.ts";
 import { h, fmtTime } from "./dom.ts";
 import { createChevron } from "./chevron.ts";
 import { attachPressable } from "./press.ts";
@@ -29,6 +30,8 @@ export interface SidebarViewContext {
   expandedProjects?: ReadonlySet<string>;
   /** 正在运行的会话 id（来自 state.runtimes 中 status=running 的项） */
   runningSessionIds?: ReadonlySet<string>;
+  /** `/api/state.acpTools`：用来把 acpToolId 翻成用户认识的 CLI 名字 */
+  acpTools?: unknown;
 }
 
 /** 每个项目默认显示最近几个会话，其余折叠。 */
@@ -87,6 +90,7 @@ export function renderProjectGroup(group: ProjectGroupView, ctx: SidebarViewCont
       list.append(
         renderSessionRow(session, session.id === ctx.activeSessionId, handlers, {
           running: ctx.runningSessionIds?.has(session.id) === true,
+          ...(ctx.acpTools ? { acpToolName: acpToolNameOf(ctx.acpTools, session.acpToolId) } : {}),
         }),
       );
     }
@@ -116,22 +120,25 @@ export function renderProjectGroup(group: ProjectGroupView, ctx: SidebarViewCont
   return h("section", { class: `project-group${group.collapsed ? " is-collapsed" : ""}` }, [head, list]);
 }
 
-/** 后端徽章文案：pi 后端不显示，避免噪音。 */
-const BACKEND_BADGE: Record<string, string> = {
-  dsh: "DSH",
-  imagegen: "生图",
-};
-
+/** 后端徽章文案：pi 后端不显示，避免噪音（见 ui/backend-capabilities.ts）。 */
 export function renderSessionRow(
   session: SessionSummary,
   isActive: boolean,
   handlers: Pick<SidebarViewHandlers, "onOpenSession" | "onSessionMenu">,
-  options: { running?: boolean; projectLabel?: string; endpointLabel?: string } = {},
+  options: {
+    running?: boolean;
+    projectLabel?: string;
+    endpointLabel?: string;
+    /** ACP 会话绑定工具的显示名（用户得知道背后是哪个 CLI） */
+    acpToolName?: string | null;
+  } = {},
 ): HTMLElement {
   const isRunning = options.running === true;
   const backend = typeof session.backend === "string" ? session.backend : "";
-  const badge = BACKEND_BADGE[backend] ?? "";
+  const badge = backendBadge(backend);
+  const badgeHint = backendBadgeHint(backend, options.acpToolName);
   const isDsh = backend === "dsh";
+  const isAcp = normalizeBackend(backend) === "acp";
 
   const meta = [options.projectLabel ?? "", fmtTime(session.updatedAt)].filter(Boolean).join(" · ");
 
@@ -144,8 +151,8 @@ export function renderSessionRow(
   const row = h(
     "button",
     {
-      class: `session${isActive ? " is-active" : ""}${isDsh ? " session--dsh" : ""}${isRunning ? " session--running" : ""}`,
-      title: `${isRunning ? "运行中 · " : ""}${badge ? `${badge} 后端 · ` : ""}长按可重命名 / 复制 / 删除`,
+      class: `session${isActive ? " is-active" : ""}${isDsh ? " session--dsh" : ""}${isAcp ? " session--acp" : ""}${isRunning ? " session--running" : ""}`,
+      title: `${isRunning ? "运行中 · " : ""}${badgeHint ? `${badgeHint} · ` : ""}长按可重命名 / 复制 / 删除`,
     },
     [
       nameRow,
@@ -214,6 +221,7 @@ export function renderFlatSection(
           running: row.running === true || ctx.runningSessionIds?.has(row.session.id) === true,
           ...(row.projectLabel ? { projectLabel: row.projectLabel } : {}),
           ...(row.endpointLabel ? { endpointLabel: row.endpointLabel } : {}),
+          ...(ctx.acpTools ? { acpToolName: acpToolNameOf(ctx.acpTools, row.session.acpToolId) } : {}),
         }),
       );
     }

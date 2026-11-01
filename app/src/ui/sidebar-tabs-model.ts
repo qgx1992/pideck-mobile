@@ -160,6 +160,8 @@ export interface EndpointState {
   label: string;
   state: Pick<PiDeckState, "projects" | "sessions" | "runtimes"> & {
     pendingUiRequests?: PiDeckState["pendingUiRequests"];
+    /** 侧栏徽标要把 acpToolId 翻成 CLI 名字（多端点时每台机器一份清单） */
+    acpTools?: PiDeckState["acpTools"];
   };
 }
 

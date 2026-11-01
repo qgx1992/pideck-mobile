@@ -48,6 +48,8 @@ import { ChatView } from "./ui/chat-view.ts";
 import { messageText } from "./ui/chat-view.ts";
 import { actionsForRole, confirmTextFor } from "./ui/message-actions-model.ts";
 import type { MessageAction } from "./ui/message-actions-model.ts";
+import { acpToolNameOf, backendCapabilities, normalizeBackend } from "./ui/backend-capabilities.ts";
+import { isPromptRejection, rejectionMessage, shouldRollbackRejection } from "./ui/acp-notice.ts";
 import { branchNodes, shortBranchTitle, shouldShowBranchBar } from "./ui/branch-model.ts";
 import {
   buildSidebarGroups,
@@ -1138,6 +1140,11 @@ function renderMain(): void {
   attachPressable(queueSendBtn, {
     onTap: () => void send(),
     onLongPress: () => {
+      // ACP 没有「插话」：只有一个排队行为，长按切换只会给人假选择
+      if (!backendCapabilities(activeBackend()).steer) {
+        toast("这个后端不支持插话，运行中只能排队");
+        return;
+      }
       sendMode = toggleSendMode(sendMode);
       renderComposerState();
       toast(sendModeSwitchToast(sendMode));
@@ -1360,6 +1367,12 @@ function renderHeader(state: PiDeckState): void {
   if (!refs || !runtime) return;
   const learned = activeSessionId ? learnedPrefs.get(epKey(activeSessionId)) : undefined;
   const view = buildHeaderView(state, activeSessionId, activeProjectId, learned);
+  // ACP 会话：标题旁必须说清楚背后是哪个 CLI，否则看标题根本不知道在跟谁对话
+  const acpSession = activeSessionId ? runtime.store.session(activeSessionId) : undefined;
+  if (normalizeBackend(acpSession?.backend) === "acp") {
+    const tool = acpToolNameOf(state.acpTools, acpSession?.acpToolId);
+    view.meta = [`ACP${tool ? ` · ${tool}` : ""}`, view.meta].filter(Boolean).join(" · ");
+  }
 
   if (refs.headerTitle.textContent !== view.title) refs.headerTitle.textContent = view.title;
 
@@ -1439,6 +1452,8 @@ function renderSidebar(state: PiDeckState): void {
       runningSessionIds: new Set(
         ownState.runtimes.filter((item) => item.status === "running").map((item) => item.sessionId),
       ),
+      // acp 会话列表里只能看到 acpToolId，徽标要靠它翻成 CLI 名字
+      acpTools: ownState.acpTools,
       handlers: {
         onToggleProject: (projectId: string) => toggleProject(projectId),
         onOpenSession: (sessionId: string) => onEndpoint(run, () => void openSession(sessionId)),
@@ -1674,13 +1689,17 @@ function openEndpointSheet(): void {
 function renderComposerState(): void {
   if (!refs || !runtime) return;
   const session = activeSessionId ? runtime.store.session(activeSessionId) : undefined;
+  // 后端能力：ACP 会话的模型/思考/计划入口都是假的（点了没变化，或必被拒），整行隐藏
+  const caps = backendCapabilities(session?.backend);
 
   const prefs = resolveSessionPrefs(session, activeSessionId ? learnedPrefs.get(epKey(activeSessionId)) : undefined);
+  refs.modelBtn.classList.toggle("is-hidden", !caps.model);
   refs.modelBtn.textContent = modelChipLabel(prefs, 18);
   refs.modelBtn.title = modelChipTitle(prefs);
   refs.modelBtn.classList.toggle("chip--muted", prefs.placeholder);
 
   const level = prefs.thinkingLevel;
+  refs.thinkingBtn.classList.toggle("is-hidden", !caps.thinking);
   refs.thinkingBtn.textContent = level ? `思考 ${thinkingLabel(level)}` : "思考";
   refs.thinkingBtn.title = level ? `思考档位：${level}（${thinkingHint(level)}）` : "选择思考档位";
   refs.thinkingBtn.classList.toggle("chip--muted", !level);
@@ -1703,6 +1722,12 @@ function renderComposerState(): void {
 
   // 运行中 + 输入框有东西（文字或图片）时，才在「历史」左侧出现「排队 / 插话」
   const running = isRunActive();
+  // 计划模式：给 agent 注入隐藏指令，ACP 侧必被拒（acp.hostInstructionsUnsupported），直接不给入口
+  if (!caps.plan && planModeOn) {
+    planModeOn = false;
+    if (activeSessionId) planModeBySession.set(epKey(activeSessionId), false);
+  }
+  refs.planBtn.classList.toggle("is-hidden", !caps.plan);
   // 计划模式按钮：开启时高亮，标题说明「发完自动关」
   refs.planBtn.classList.toggle("is-active", planModeOn);
   refs.planBtn.title = planModeOn
@@ -1712,11 +1737,16 @@ function renderComposerState(): void {
 
   const hasContent = refs.composer.value.trim().length > 0 || currentImages().length > 0;
   const showRunningSend = shouldShowRunningSend(running, hasContent);
+  // ACP 没有插话：一律降级成排队，按钮文案也跟着改，免得用户以为戳进去会插话
+  const effectiveMode: SendMode = caps.steer ? sendMode : "queue";
   refs.queueSendBtn.classList.toggle("is-hidden", !showRunningSend);
-  refs.queueSendBtn.classList.toggle("is-steer", sendMode === "steer");
-  refs.queueSendBtn.textContent = sendModeLabel(sendMode);
-  refs.queueSendBtn.title = `${sendModeHint(sendMode)}；长按切换模式`;
-  refs.queueSendBtn.setAttribute("aria-label", `${sendModeActionLabel(sendMode)}（长按切换模式）`);
+  refs.queueSendBtn.classList.toggle("is-steer", effectiveMode === "steer");
+  refs.queueSendBtn.textContent = sendModeLabel(effectiveMode);
+  refs.queueSendBtn.title = `${sendModeHint(effectiveMode)}${caps.steer ? "；长按切换模式" : ""}`;
+  refs.queueSendBtn.setAttribute(
+    "aria-label",
+    `${sendModeActionLabel(effectiveMode)}${caps.steer ? "（长按切换模式）" : ""}`,
+  );
 
   renderPrimaryButton();
 }
@@ -2380,6 +2410,13 @@ function renderTodoHistory(): void {
 
 async function refreshTodo(sessionId: string): Promise<void> {
   if (!runtime || sessionId !== activeSessionId) return;
+  // ACP 会话没有 pi 条目：/api/sessions/:id/todo 恒为 null（清单在 CLI 自己手里），
+  // 不再打这个必然空转的接口，条带自然不显示
+  if (!backendCapabilities(runtime.store.session(sessionId)?.backend).todo) {
+    todoView = null;
+    renderTodoStrip();
+    return;
+  }
   try {
     const raw = await runtime.client.getTodo(sessionId);
     if (sessionId !== activeSessionId) return;
@@ -2655,6 +2692,13 @@ function backendOf(sessionId: string): "pi" | "dsh" {
   return runtime?.store.session(sessionId)?.backend === "dsh" ? "dsh" : "pi";
 }
 
+/** 当前活跃会话的 backend（没会话时 undefined，能力矩阵按 pi 处理）。 */
+function activeBackend(): string | undefined {
+  const session = activeSessionId ? runtime?.store.session(activeSessionId) : undefined;
+  const kind = session?.backend;
+  return typeof kind === "string" ? kind : undefined;
+}
+
 function renderUsageBody(body: HTMLElement, view: UsageView | null, loading: boolean): void {
   clear(body);
   if (loading) {
@@ -2691,8 +2735,16 @@ function renderUsageBody(body: HTMLElement, view: UsageView | null, loading: boo
  * 手动刷新有 30s 冷却，避免连点。
  */
 function buildUsageSection(sessionId: string, usage: ContextUsage | null): HTMLElement {
-  const provider = providerOf(sessionId, usage);
   const box = h("div", { class: "usage-box" });
+  // ACP 会话的 provider 是转发层名 "acp"，供应商计费接口查不到任何东西（桌面端 Web 也不渲染）
+  if (!backendCapabilities(runtime?.store.session(sessionId)?.backend).usage) {
+    box.append(h("div", { class: "usage-title", text: "供应商额度" }));
+    box.append(
+      h("div", { class: "usage-hint", text: "这个会话由电脑上的外部 agent CLI 记账，PiDeck 这边没有供应商额度可查" }),
+    );
+    return box;
+  }
+  const provider = providerOf(sessionId, usage);
   if (!provider) {
     box.append(h("div", { class: "usage-title", text: "供应商额度" }));
     box.append(h("div", { class: "usage-hint", text: "当前会话没有模型供应商信息" }));
@@ -2932,12 +2984,28 @@ async function send(): Promise<void> {
     chatView?.clearLive({ keepClock: continuingTurn });
     chatView?.appendLocalUser(typed || submission.message, images.map((image) => image.dataUrl));
     if (!continuingTurn) chatView?.startTurn();
-    await current.send(submission.message, {
-      // 运行中才带：空闲时排队/插话都等于普通发送
-      streamingBehavior: streamingBehaviorFor(isRunActive(), sendMode),
+    const caps = backendCapabilities(activeBackend());
+    const result = await current.send(submission.message, {
+      // 运行中才带：空闲时排队/插话都等于普通发送；不支持插话的后端一律降级成排队
+      streamingBehavior: streamingBehaviorFor(isRunActive(), caps.steer ? sendMode : "queue"),
       ...(images.length > 0 ? { images: images.map(toImageAttachment) } : {}),
       ...(submission.agentMessage ? { extra: { agentMessage: submission.agentMessage } } : {}),
     });
+    // 服务端可能压根没收：以前这里不看返回值，于是出现「气泡上屏了但什么都没发生」的幽灵提问。
+    // ACP 尤其容易撞上（回合中发消息、带图、计划模式注入）。
+    if (isPromptRejection(result)) {
+      const message = rejectionMessage(result);
+      if (shouldRollbackRejection(result)) {
+        chatView?.dropLocalEcho();
+        // 图还在输入框里，方便直接重试
+        toast(message);
+      } else {
+        // 服务端也不确定发没发出去：气泡留着，等历史落盘再校正
+        toast(`${message}\n（这条可能已经发出去了，稍后以历史为准）`);
+      }
+      renderComposerState();
+      return;
+    }
     // 发出去了才清掉缩略图（发送失败时图还在，可以直接重试）
     clearCurrentImages();
     renderAttachments();
@@ -4428,7 +4496,8 @@ async function copyText(text: string): Promise<void> {
 }
 
 function openMessageActions(messageId: string, role: string): void {
-  const actions = actionsForRole(role);
+  // ACP 会话只给「复制」：历史由 agent CLI 的归档主导，运行时没有 fork/改/删命令
+  const actions = actionsForRole(role, activeBackend());
   if (actions.length === 0) return;
   const message = findMessageById(messageId);
   const text = message ? messageText(message) : "";

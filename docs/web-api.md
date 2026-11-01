@@ -40,7 +40,7 @@
   "sessions": [{
     "id": "…", "projectId": "…", "title": "…", "status": "active|draft|closed|error",
     "projectPath": "…", "model": { "provider": "…", "modelId": "…", "modelName": "…" },
-    "thinkingLevel": "…", "backend": "pi|dsh|imagegen", "updatedAt": 0,
+    "thinkingLevel": "…", "backend": "pi|dsh|acp|imagegen", "acpToolId": null, "updatedAt": 0,
     "parentSessionId": null, "forked": false, "createdAt": 0, "permissionPreset": "…"
   }],
   "runtimes": [{
@@ -53,8 +53,35 @@
     "method": "select|confirm|input|editor|batch_ask", "title": "…",
     "options": ["…"], "placeholder": "…", "prefill": "…", "allowOther": false,
     "batchQuestions": [], "batchReview": false
-  }]
+  }],
+  "acpTools": [{ "id": "…", "name": "Gemini CLI" }],
+  "security": { "enabled": true, "defaultLevelId": "…", "levels": [] }
 }
+```
+
+`acpTools` 是**已登记的 ACP CLI 工具清单**（不是工具调用快照）：桌面端已按
+`acpEnabled` + 单个工具 `enabled` 门控，`command` / `args` / `env` 不下发。
+空数组只说明这台电脑没开 ACP，**不能**据此判定「会话绑定的工具被删了」。
+
+### ACP 会话（`backend: "acp"`）
+
+会话由电脑上的外部 agent CLI（`gemini --acp`、`kimi acp`、`codex-acp` …）驱动，
+手机端只是它的远端界面。行为差异（手机端据此藏掉假入口，见
+`app/src/ui/backend-capabilities.ts`）：
+
+| 能力 | 是否可用 | 原因 |
+|---|---|---|
+| 流式正文 / 思考 / 工具卡 | 是，零改动 | 桌面端把 ACP 快照差分成与 pi 同形状的事件（`AcpChannelToPiEvents`） |
+| 权限审批卡 | 是，零改动 | `session/request_permission` → `pendingUiRequests` 的 `method:"select"` |
+| 模型 / 思考 / 模式切换 | **否** | ACP 用 `session/set_config_option`，桌面端只走 IPC；`/runtime/model` 与 `/runtime/thinking` 对它 no-op，`/runtime/models` 恒 `[]` |
+| 计划模式（`agentMessage`） | **否** | 必被 `acp.hostInstructionsUnsupported` 拒 |
+| 回合中插话（`steer`） | **否** | 无 steer，回合中发消息一律 `acp.turnBusy` |
+| fork / 改消息 / 删消息 | **否** | 历史由 CLI 归档主导 |
+| 供应商额度 | **否** | provider 是转发层名 `"acp"`，探针查不到 |
+| 待办（`/api/sessions/:id/todo`） | **否**（恒 null） | 依赖 pi 会话条目的 `filePath` |
+
+建会话已支持：`POST /api/sessions { projectId, backend: "acp", acpToolId }`，
+会话中途改绑定走 `/api/sessions/:id/update`。
 ```
 
 ### 项目
@@ -119,6 +146,11 @@ data: [DONE]
 行为要点：
 
 1. `/prompt` 只是投递，正文必须从流里读。
+2. **`result.accepted === false` 表示这条请求压根没收**：不会有一帧正文。此时 `i18nKey` + `i18nParams`
+   给出原因（`acp.turnBusy` / `acp.imagesNotSupported` / `acp.hostInstructionsUnsupported` /
+   `acp.processNotRunning` / `acp.toolNotInstalled` / `acp.toolMissing` / `acp.startupTimeout` /
+   `acp.turnTimeout` / `acp.authRequired` …），由客户端本地化。`delivery:"unknown"` 表示服务端也不确定
+   发没发出去，别把乐观上屏的气泡撤掉。手机端实现见 `app/src/ui/acp-notice.ts`。
 2. 打开 `/stream` 会**回放当前轮**已产出的帧（文本/思考增量已合并），随后继续推增量。
 3. 一轮结束推 `finish` + `[DONE]`，但 `keepAlive` 流不关闭。
 4. **不支持 `Last-Event-ID`**：断线重连必须重新拉历史 + 重开流，不要自己拼断线期间的文本。

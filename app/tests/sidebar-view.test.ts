@@ -221,3 +221,52 @@ test("搜索时也按 6 个截断（结果多时同样可展开）", () => {
   assert.equal(node.querySelectorAll(".session").length, 6);
   assert.ok(node.querySelector(".sessions-more"));
 });
+
+test("ACP 会话带青绿徽章，title 里带上 CLI 名字", () => {
+  const acpSessions = [
+    { id: "a1", projectId: "p-a", title: "ACP 对话", updatedAt: 500, backend: "acp", acpToolId: "tool-1" },
+  ];
+  const groups = buildSidebarGroups({ projects, sessions: acpSessions }, "", new Set());
+  const ctx = {
+    activeSessionId: null,
+    activeProjectId: null,
+    acpTools: [{ id: "tool-1", name: "Gemini CLI" }],
+    handlers: {
+      onToggleProject: () => {},
+      onOpenSession: () => {},
+      onCreateSession: () => {},
+      onSessionMenu: () => {},
+      onProjectMenu: () => {},
+      onToggleSessions: () => {},
+    },
+  };
+  const row = renderProjectGroup(groups[1]!, ctx as never).querySelector<HTMLElement>(".session")!;
+  assert.ok(row.classList.contains("session--acp"), "ACP 行要有 session--acp");
+  const badge = row.querySelector(".sbadge");
+  assert.equal(badge?.textContent, "ACP");
+  assert.ok(badge?.classList.contains("sbadge--acp"));
+  assert.match(row.title, /ACP 后端 · Gemini CLI/, "title 要说清背后是哪个 CLI");
+});
+
+test("ACP 会话取不到工具名时也不显示裸 id", () => {
+  const acpSessions = [
+    { id: "a2", projectId: "p-a", title: "ACP", updatedAt: 500, backend: "acp", acpToolId: "gone" },
+  ];
+  const groups = buildSidebarGroups({ projects, sessions: acpSessions }, "", new Set());
+  const ctx = {
+    activeSessionId: null,
+    activeProjectId: null,
+    acpTools: [],
+    handlers: {
+      onToggleProject: () => {},
+      onOpenSession: () => {},
+      onCreateSession: () => {},
+      onSessionMenu: () => {},
+      onProjectMenu: () => {},
+      onToggleSessions: () => {},
+    },
+  };
+  const row = renderProjectGroup(groups[1]!, ctx as never).querySelector<HTMLElement>(".session")!;
+  assert.match(row.title, /ACP 后端/);
+  assert.ok(!row.title.includes("gone"), "不能让用户看到 acpToolId 原值");
+});

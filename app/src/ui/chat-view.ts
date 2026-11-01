@@ -130,6 +130,17 @@ export class ChatView {
     this.localEcho = null;
   }
 
+  /**
+   * 撤掉乐观上屏的那条用户气泡（服务端拒收时用）。
+   *
+   * `accepted:false` 意味着正文一行都不会产出，气泡留着就成了幽灵：
+   * 用户以为发出去了，实际会话里根本没这条。历史落盘后本来也会消失，
+   * 但那是几秒后的事，中间这段时间足够让人做错判断。
+   */
+  dropLocalEcho(): void {
+    this.clearLocalEcho();
+  }
+
   /** 清空当前轮的流式区（轮次结束后调用，避免工具卡片一直挂着）。 */
   clearLive(options: { keepClock?: boolean } = {}): void {
     clear(this.liveEl);

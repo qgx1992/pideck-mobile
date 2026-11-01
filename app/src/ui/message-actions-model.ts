@@ -8,7 +8,8 @@
  *   - 分叉：以这条消息为起点开一个新会话（runtime/fork）
  *
  * 哪些动作能出现在菜单里由 role 决定 —— 助手消息不能「编辑」，
- * 工具/系统消息根本不该给菜单。
+ * 工具/系统消息根本不该给菜单。附加的 `backend` 再收一层：ACP 会话的历史
+ * 由 agent CLI 的归档主导，运行时没有 fork/编辑/删除命令，只留「复制」。
  */
 
 import type { WireMessage } from "@core/types.ts";
@@ -22,7 +23,8 @@ export interface MessageActionItem {
   danger?: boolean;
 }
 
-const USER_ACTIONS: readonly MessageActionItem[] = [
+/** @deprecated 固定菜单已换成 actionsForRole(role, backend?)；保留导出只为老测试 */
+export const USER_ACTIONS: readonly MessageActionItem[] = [
   { id: "copy", label: "复制文本" },
   { id: "edit", label: "编辑这条消息" },
   { id: "resend", label: "改完重发" },
@@ -35,16 +37,29 @@ const ASSISTANT_ACTIONS: readonly MessageActionItem[] = [
   { id: "fork", label: "从这里分叉" },
 ];
 
-/** 未知/工具/系统消息不给菜单。 */
-export function actionsForRole(role: string): MessageActionItem[] {
+/** ACP 会话只能复制：历史由 agent CLI 的归档主导，运行时根本没有 fork/编辑/删除命令。 */
+const ACP_ACTIONS: readonly MessageActionItem[] = [{ id: "copy", label: "复制文本" }];
+
+/**
+ * 这条消息能出现哪些动作。
+ *
+ * `backend` 省略时按 pi 处理（老调用点行为不变）；ACP 只给「复制」——
+ * 桌面端 WebTimeline 同样是 `canManageMessages={acp ? false : …}`。
+ */
+export function actionsForRole(role: string, backend?: unknown): MessageActionItem[] {
   const value = role.toLowerCase();
+  if (isAcpBackend(backend)) return value === "user" || value === "assistant" ? [...ACP_ACTIONS] : [];
   if (value === "user") return [...USER_ACTIONS];
   if (value === "assistant") return [...ASSISTANT_ACTIONS];
   return [];
 }
 
-export function hasActions(role: string): boolean {
-  return actionsForRole(role).length > 0;
+export function hasActions(role: string, backend?: unknown): boolean {
+  return actionsForRole(role, backend).length > 0;
+}
+
+function isAcpBackend(backend: unknown): boolean {
+  return typeof backend === "string" && backend.trim().toLowerCase() === "acp";
 }
 
 /**
