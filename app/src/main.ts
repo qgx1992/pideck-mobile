@@ -33,7 +33,7 @@ import {
   pairingLabel,
 } from "./platform/storage.ts";
 import type { SavedPairing } from "./platform/storage.ts";
-import { createAppFetch } from "./platform/fetch.ts";
+import { createAppFetch, isNativeSseEnabled } from "./platform/fetch.ts";
 import { compressImageFile } from "./platform/image.ts";
 import { canAddImage, formatBytes, imageFileProblem, MAX_IMAGES, toImageAttachment } from "./ui/image-attach-model.ts";
 import type { PendingImage } from "./ui/image-attach-model.ts";
@@ -4791,6 +4791,7 @@ function settingsData(): SettingsData {
       token: runtime?.pairing.token ?? "",
       status: runtime?.store.getStatus() ?? "closed",
       version: APP_VERSION,
+      sseNative: isNativeSseEnabled(),
     },
     devices: endpoints.map((endpoint) => ({
       id: endpoint.id,

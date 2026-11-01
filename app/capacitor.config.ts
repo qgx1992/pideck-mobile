@@ -17,8 +17,8 @@ const config: CapacitorConfig = {
   plugins: {
     CapacitorHttp: {
       // 必须保持 false：enabled=true 会让 Capacitor 接管 window.fetch，
-      // 而原生 HTTP 不支持流式响应体，SSE 会直接断掉。
-      // 我们只在 src/platform/fetch.ts 里对非 GET 显式调用 CapacitorHttp.request()。
+      // 而它把响应整体缓冲，流式增量（含 SSE）就没了。
+      // 我们自己在 src/platform/fetch.ts 里分流：SSE 走 SsePlugin，其余显式调 CapacitorHttp.request()。
       enabled: false,
     },
   },

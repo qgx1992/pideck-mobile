@@ -13,7 +13,7 @@ app/
 ├─ capacitor.config.ts   原生壳配置（含 CapacitorHttp）
 ├─ src/
 │  ├─ main.ts            接线：配对/主界面/发送/停止/通知/返回键/后台恢复
-│  ├─ platform/          fetch 分流、主题、安全区、导航栏、本地通知、后台看护、返回键、扫码
+│  ├─ platform/          fetch 分流（SSE 走原生 SsePlugin）、主题、安全区、导航栏、本地通知、后台看护、返回键、扫码
 │  ├─ ui/                侧栏（活动/聊天/项目、多设备聚合）、对话、Markdown、语法高亮、
 │  │                     ask 卡片、工作区、模型选择、上下文用量、任务清单、抽屉手势
 │  └─ ...
@@ -159,7 +159,7 @@ keytool -genkey -v -keystore pideck.keystore -alias pideck -keyalg RSA -keysize 
 
 iOS 需要 macOS + Xcode：`npx cap add ios`。
 
-### 为什么 POST 要走 CapacitorHttp
+### 为什么要绕开 WebView 的 fetch
 
 PiDeck 的 CORS 预检只放行 `content-type`，不放行 `authorization`。
 WebView 里跨域 POST 带 Bearer 会被浏览器拦掉；而带 `?token=` 的 GET 属于「简单请求」，不触发预检。
@@ -167,9 +167,12 @@ WebView 里跨域 POST 带 Bearer 会被浏览器拦掉；而带 `?token=` 的 G
 
 | 场景 | 走法 | 原因 |
 |---|---|---|
-| GET / HEAD | WebView `fetch` | SSE 需要流式响应体，CapacitorHttp 会缓冲 |
-| POST 等 | `CapacitorHttp.request` | 原生 HTTP 栈，无 CORS 约束 |
+| SSE（`Accept: text/event-stream`） | `SsePlugin` 原生读流 | WebView 的 fetch 受 CORS 约束，且 App 切后台就被冻结 |
+| 其它所有请求（GET / POST …） | `CapacitorHttp.request` | 原生 HTTP 栈，无 CORS 约束、无预检往返 |
 | 浏览器 dev | 普通 `fetch` + Vite 代理 | 同源，不存在跨域 |
+
+SSE 这条链路：`SsePlugin.java`（`HttpURLConnection`）→ 四个桥事件 →
+`sse-stream.ts` 拼成 `ReadableStream` → `Response`。上游 `src/api/client.ts` 不用改。
 
 ## 配对页扫码
 

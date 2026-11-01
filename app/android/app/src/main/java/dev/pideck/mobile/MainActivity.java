@@ -18,6 +18,9 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NavigationBarPlugin.class);
         registerPlugin(RunWatchPlugin.class);
         registerPlugin(FileSaverPlugin.class);
+        // SSE 走原生栈：CapacitorHttp 不支持流式响应体，所以自己读流
+        // （见 platform/sse-stream.ts 与 SsePlugin.java 的注释）
+        registerPlugin(SsePlugin.class);
         super.onCreate(savedInstanceState);
 
         // 扫码（BarcodeScanner.startScan）时相机预览铺在 WebView 之下，

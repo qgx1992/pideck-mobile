@@ -27,7 +27,7 @@ export interface SettingsDeviceRow {
 export interface SettingsData {
   theme: { mode: string; options: ReadonlyArray<{ value: string; label: string }> };
   notify: { enabled: boolean };
-  connection: { serviceUrl: string; token: string; status: string; version: string };
+  connection: { serviceUrl: string; token: string; status: string; version: string; sseNative?: boolean };
   devices: SettingsDeviceRow[];
   models: ModelRow[];
   skills: SkillSection[];
@@ -418,6 +418,14 @@ export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {  
         row("服务地址", data.connection.serviceUrl),
         row("访问令牌", maskToken(data.connection.token), { sub: "明文存在本机，上架前需换原生加密存储" }),
         row("连接状态", data.connection.status),
+        // 排查「流式对话到底走没走原生栈」：旧包 / 浏览器环境会退化到 WebView
+        ...(data.connection.sseNative === undefined
+          ? []
+          : [
+              row("数据流通道", data.connection.sseNative ? "原生 SSE" : "WebView", {
+                sub: data.connection.sseNative ? undefined : "WebView 受后台冻结影响，息屏后可能断流",
+              }),
+            ]),
       ]),
     );
   };

@@ -286,7 +286,13 @@ WebView 是跨域环境，而 PiDeck 的 CORS 有两个限制（已在 `app/src/
 1. 预检只放行 `content-type`，不放行 `authorization` → GET 用 `?token=`，POST 走原生栈。
 2. `workspace` 路由（files / prompts / skills / git）**实际响应不带 CORS 头** → 这些请求必须走 `CapacitorHttp`。
 
-分流规则：**SSE 留在 WebView**（要流式响应体），其余全部走 `CapacitorHttp`（没有 CORS 概念）。
+分流规则：**SSE 走原生 `SsePlugin`**，其余全部走 `CapacitorHttp`（没有 CORS 概念）。
+
+- `SsePlugin`（`app/android/app/src/main/java/dev/pideck/mobile/SsePlugin.java`）用 `HttpURLConnection` 读流，按 16ms 窗口合并成 `sseOpen / sseData / sseEnd / sseError` 四个桥事件；
+  JS 侧（`app/src/platform/sse-stream.ts`）把事件拼成 `ReadableStream`，交给 `Response`。
+- 上游零改动：`client.streamSse` 只认 `response.ok` / `response.body.getReader()`，字节流还是原来的 `Utf8StreamDecoder`。
+- 拿不到插件（浏览器开发 / 手机装的是老包）时 `isNativeSseAvailable()` 为假，自动退回 WebView 的 `fetch`，不会断流。
+- 原生侧不设读超时（`readTimeoutMs = 0`）：假死交给 `SessionChannel` 的 50s 看门狗，服务端每 15s 一次 `: ping` 喂活它。
 
 另外两处只有在原生侧才能做的事：
 

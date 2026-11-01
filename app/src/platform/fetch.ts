@@ -10,16 +10,31 @@
  *      但第 1 条的预检限制依旧，所以分流继续保留：原生栈省掉预检往返，也少一层抖动。
  *
  * 因此分流规则：
- *   - SSE（Accept: text/event-stream）：必须走 WebView，原生栈不支持流式响应体
+ *   - SSE（Accept: text/event-stream）：走 SsePlugin 原生栈（见 platform/sse-stream.ts），
+ *     拿不到插件时（浏览器开发 / 旧版 APK）退回 WebView 的 fetch
  *   - 其它所有请求：走 CapacitorHttp 原生栈，没有 CORS 概念
  *   - 浏览器开发时：全部走普通 fetch，配合 Vite 的 /api 同源代理
  */
 
 import { Capacitor, CapacitorHttp } from "@capacitor/core";
+import { createCapacitorSseTransport, createNativeSseFetch, isNativeSseAvailable } from "./sse-stream.ts";
 
 export function createAppFetch(): typeof fetch {
   if (!Capacitor.isNativePlatform()) return globalThis.fetch.bind(globalThis);
   return nativeFetch as typeof fetch;
+}
+
+/** 原生 SSE 是否在用（设置页 / 排查用）。 */
+export function isNativeSseEnabled(): boolean {
+  return isNativeSseAvailable();
+}
+
+let nativeSseFetch: typeof fetch | null = null;
+
+function getNativeSseFetch(): typeof fetch | null {
+  if (!isNativeSseAvailable()) return null;
+  nativeSseFetch ??= createNativeSseFetch(createCapacitorSseTransport());
+  return nativeSseFetch;
 }
 
 function toUrl(input: RequestInfo | URL): string {
@@ -52,8 +67,11 @@ async function nativeFetch(input: RequestInfo | URL, init?: RequestInit): Promis
   const method = (init?.method ?? (typeof input === "object" && "method" in input ? input.method : "GET")).toUpperCase();
   const headers = headersToRecord(init?.headers);
 
-  // SSE 只能留在 WebView：原生 HTTP 会把响应整体缓冲，流式增量就没了
+  // SSE 走原生栈（原生 HTTP 读流，不受 CORS 与 WebView 冻结影响）；
+  // 拿不到 SsePlugin 时退回 WebView，旧包不至于直接断流
   if (isStreamingRequest(headers)) {
+    const native = getNativeSseFetch();
+    if (native) return native(input as RequestInfo, init);
     return globalThis.fetch(input as RequestInfo, init);
   }
 
