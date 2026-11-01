@@ -142,6 +142,14 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   内容不变不推），**不要**在渲染路径里直接 `pushFlutterChat()` 每帧过桥。
 - 聊天页里任何「每 40ms 会重建」的部件都不能在 `build` 里创建状态：提问卡的输入框用常驻
   `TextEditingController`、多选的临时选择放 State（0.1.27 踩过：每次重建光标跳回开头、勾选被清空）。
+- 侧栏（0.1.28 起）是**最彻底的视图迁移**：分组 / 折叠 / 搜索 / 预览截断 / 多设备分块全部只在
+  `src/ui/sidebar-model.ts` 与 `src/ui/sidebar-tabs-model.ts` 里算，Dart 侧
+  （`flutter_module/lib/sidebar/`）只实现 `flat` / `device` / `group` 三种段的通用渲染器，
+  **不许在 Dart 里判任何规则**（尤其「展开其余 N 个」的截断与「当前会话被截断时临时展开」）。
+- 侧栏动作里 `toggleSection` 必须按 key 前缀分派：`project:<id>` → `toggleSessionsExpanded()`，
+  其余 → `toggleFlat()`。两个展开集合（`expandedSessions` / `flatExpanded`）互不相干。
+- WebView 的弹层（工作区选择器、会话/项目长按菜单）被 Flutter 页盖着看不见，需要它们的动作
+  一律走 `leaveFlutterThen()`：先 `closeFlutterPage()` 再开弹层，不要指望在 Flutter 页上显示。
 
 ## 改动完成后必须跑的验证
 

@@ -372,6 +372,54 @@ SSE（原生 SsePlugin）→ src/api/frames.ts（ChatReducer，唯一状态机�
 `openFlutterChatPage(activeSessionId)`，要求当前已经有打开的会话（WebView 必须先把这个会话
 开起来：历史、SSE、reducer 都在它身上）。
 
+## 侧栏 Drawer（0.1.28）：比聊天页更彻底的视图迁移
+
+侧栏是聊天页的抽屉，所以跟着聊天页一起迁。这一页的分支比聊天页还多
+（分段 / 搜索 / 项目折叠 / 预览截断 / 多设备分块 / 徽标），因此策略更进一步：
+**Dart 里一行规则判断都不写**，只实现一个通用渲染器，画 `flat` / `device` / `group` 三种段。
+
+```
+src/ui/sidebar-model.ts + sidebar-tabs-model.ts   ← 分组/折叠/截断/计数的唯一实现
+  → app/src/platform/flutter-sidebar.ts buildSidebarSnapshot()
+  → app/src/main.ts syncFlutterSidebar()（在 renderSidebar() 末尾，内容相同就跳过）
+  → 通道 pushSidebar → Dart SidebarDrawer（只画）→ 动作回传 sidebarAction
+```
+
+**为什么不把 `buildSidebarGroups` 翻成 Dart**：它是纯函数、单测覆盖得很好，翻一份就等于
+维护两套「展开其余 N 个」的截断规则。踩过的具体分歧点：当前会话被截断时该组要**临时展开**
+（不写回用户的显式意图），如果 Dart 自己算，「展开其余」按钮就会指向错的数量。
+
+### 动作清单（`sidebarAction` 的 `type`）
+
+| type | 参数 | 谁执行 |
+|---|---|---|
+| `openSession` | `id` | `openSession(id)`（Flutter 页不关，快照跟着换） |
+| `toggleTab` | `tab` | `sidebarTab = tab` + 持久化 + 重画 |
+| `search` | `query` | `sidebarQuery` + 重画 |
+| `toggleProject` | `projectId` | `toggleProject()` |
+| `toggleSection` | `key` | `project:` 前缀 → `toggleSessionsExpanded()`，否则 `toggleFlat()` |
+| `createSession` | `projectId` | `createSession(projectId)` |
+| `sessionRename` | `id`、`title` | `runSessionAction(id,"update",{title})`（空标题回推提示） |
+| `sessionCopy` / `sessionDelete` | `id` | `runSessionAction()` |
+| `sessionExport` | `id` | `exportSessionHtml(id)` |
+| `sessionMore` / `projectMenu` / `newSession` | `id` | **先关 Flutter 页**再开对应的 WebView 弹层 |
+| `openSettings` | — | `openSettings()`（会开 Flutter 设置页） |
+| `close` | — | 关页回 WebView |
+
+`toggleSection` 的两条分支必须分开：项目组的「展开全部会话」用的是
+`expandedSessions`，扁平段的「展开其余」用的是 `flatExpanded`，两个集合互不相干。
+
+### 三个必须照抄的行为
+
+1. **搜索框 controller 常驻**：`didUpdateWidget` 里只在「内容不同**且**没聚焦」时同步，
+   否则宿主每推一份新快照就会把光标和输入法组合状态冲掉（聊天页提问卡踩过同一个坑）。
+2. **长按菜单在 Flutter 里重做**：WebView 的弹层长在 DOM 上，被 Flutter 页盖着根本看不见。
+   「更多操作（回网页版）」这一项就是给这种情况留的出口 —— 先 `closeFlutterPage()` 再开 WebView 菜单。
+3. **`clipped()` 展开时也要返回 `hiddenCount`**：否则 Dart 侧拿不到「收起」入口，
+   点开「展开其余 6 个」之后就再也收不回去。
+
+调试入口：从「聊天页预览」进去，左上角汉堡键。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：

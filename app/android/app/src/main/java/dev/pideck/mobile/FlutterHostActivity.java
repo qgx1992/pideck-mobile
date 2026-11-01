@@ -31,6 +31,8 @@ import io.flutter.plugin.common.MethodChannel;
  *   settingsAction(s)  → 把用户在 Flutter 页上的动作回传给 WebView 执行
  *   getChat()          → 宿主缓存的聊天页视图模型 JSON（同上，首帧用）
  *   chatAction(s)      → 聊天页上的动作（发消息 / 取消 / 切模型…）回传给 WebView
+ *   getSidebar()       → 取最近一次侧栏快照（Drawer 首帧直接用，不等往返）
+ *   sidebarAction(s)   → 侧栏上的动作（开会话 / 切分段 / 搜索…）回传给 WebView
  *   close()            → 关掉 Flutter 页，回到 WebView
  *
  * 反向（原生 → Dart）：`setSettings(json)` / `setChat(json)` / `showNotice(text)`，由
@@ -96,6 +98,13 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
         activity.invokeOnFlutter("setChat", json);
     }
 
+    /** JS 推来新的侧栏快照时由插件调用（`FlutterHost.pushSidebar`）。 */
+    static void pushSidebarToFlutter(String json) {
+        FlutterHostActivity activity = current;
+        if (activity == null) return;
+        activity.invokeOnFlutter("setSidebar", json);
+    }
+
     /** JS 要求弹一句提示时由插件调用（`FlutterHost.pushNotice`）。 */
     static void pushNoticeToFlutter(String text) {
         FlutterHostActivity activity = current;
@@ -138,6 +147,13 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
                     break;
                 case "chatAction":
                     FlutterLauncherPlugin.dispatchChatAction(settingsJsonFrom(call));
+                    result.success(null);
+                    break;
+                case "getSidebar":
+                    result.success(FlutterLauncherPlugin.currentSidebar());
+                    break;
+                case "sidebarAction":
+                    FlutterLauncherPlugin.dispatchSidebarAction(settingsJsonFrom(call));
                     result.success(null);
                     break;
                 case "close":

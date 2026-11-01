@@ -38,6 +38,14 @@ public class FlutterLauncherPlugin extends Plugin {
      */
     static final String EVENT_CHAT_ACTION = "chatAction";
 
+    /**
+     * 事件名：侧栏（Drawer）上的一次操作。
+     *
+     * 侧栏快照的分段/折叠/搜索规则全在 WebView（`ui/sidebar-model.ts` 与
+     * `ui/sidebar-tabs-model.ts`），Flutter 只画。所以它只需要“给数据 + 收回动作”两个方法。
+     */
+    static final String EVENT_SIDEBAR_ACTION = "sidebarAction";
+
     /** Capacitor 只创建一个插件实例，这里存一份给 FlutterHostActivity 回传生命周期用。 */
     private static FlutterLauncherPlugin instance;
 
@@ -57,6 +65,9 @@ public class FlutterLauncherPlugin extends Plugin {
      */
     private static volatile String lastChatJson = "{}";
 
+    /** 最近一次由 JS 推来的侧栏快照 JSON（打开 Drawer 时立刻有东西可画）。 */
+    private static volatile String lastSidebarJson = "{}";
+
     @Override
     public void load() {
         instance = this;
@@ -73,6 +84,10 @@ public class FlutterLauncherPlugin extends Plugin {
 
     static String currentChat() {
         return lastChatJson;
+    }
+
+    static String currentSidebar() {
+        return lastSidebarJson;
     }
 
     /**
@@ -125,6 +140,19 @@ public class FlutterLauncherPlugin extends Plugin {
         }
     }
 
+    /** Flutter 侧栏把动作回传给 WebView（`sendSidebarAction`）。 */
+    static void dispatchSidebarAction(String json) {
+        FlutterLauncherPlugin plugin = instance;
+        if (plugin == null) return;
+        try {
+            JSObject data = new JSObject();
+            data.put("json", json == null ? "{}" : json);
+            plugin.notifyListeners(EVENT_SIDEBAR_ACTION, data);
+        } catch (Exception ignored) {
+            /* WebView 已经销毁时忽略 */
+        }
+    }
+
     /** JS 推一份最新的设置数据（`pushFlutterSettings`）。 */
     @PluginMethod
     public void pushSettings(PluginCall call) {
@@ -142,6 +170,16 @@ public class FlutterLauncherPlugin extends Plugin {
         if (json == null || json.isEmpty()) json = "{}";
         lastChatJson = json;
         FlutterHostActivity.pushChatToFlutter(json);
+        call.resolve();
+    }
+
+    /** JS 推一份最新的侧栏快照（`pushFlutterSidebar`）。 */
+    @PluginMethod
+    public void pushSidebar(PluginCall call) {
+        String json = call.getString("json", "{}");
+        if (json == null || json.isEmpty()) json = "{}";
+        lastSidebarJson = json;
+        FlutterHostActivity.pushSidebarToFlutter(json);
         call.resolve();
     }
 

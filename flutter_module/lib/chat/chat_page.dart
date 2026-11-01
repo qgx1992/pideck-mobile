@@ -18,6 +18,8 @@ import 'package:flutter/services.dart';
 
 import '../app_theme.dart';
 import '../host_channel.dart';
+import '../sidebar/sidebar_drawer.dart';
+import '../sidebar/sidebar_models.dart';
 import 'chat_models.dart';
 import 'markdown_view.dart';
 
@@ -36,6 +38,8 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   ChatSnapshot _snapshot = const ChatSnapshot();
+  SidebarSnapshot _sidebar = SidebarSnapshot.none;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final ScrollController _scroll = ScrollController();
   final TextEditingController _composer = TextEditingController();
   final FocusNode _composerFocus = FocusNode();
@@ -56,6 +60,7 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     bindHostChannel(
       onChat: _applyJson,
+      onSidebar: _applySidebar,
       onNotice: _notice,
     );
     _scroll.addListener(_onScroll);
@@ -64,6 +69,19 @@ class _ChatScreenState extends State<ChatScreen> {
       if (json == '{}' || json == widget.initialJson) return;
       _applyJson(json);
     });
+    loadInitialSidebar().then((String json) {
+      if (json == '{}') return;
+      _applySidebar(json);
+    });
+  }
+
+  /// 侧栏快照。分组 / 折叠 / 搜索全部在 WebView 侧算完（`buildSidebarSnapshot()`），
+  /// 这里只存下来给抽屉画，**不**做任何规则判断。
+  void _applySidebar(String json) {
+    if (json.isEmpty) return;
+    final SidebarSnapshot next = SidebarSnapshot.parse(json);
+    if (!mounted) return;
+    setState(() => _sidebar = next);
   }
 
   @override
@@ -209,14 +227,21 @@ class _ChatScreenState extends State<ChatScreen> {
     final int liveCount = live?.blocks.length ?? 0;
 
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: c.background,
+      drawer: SidebarDrawer(
+        snapshot: _sidebar,
+        onAction: sendSidebarAction,
+        onClose: () => _scaffoldKey.currentState?.closeDrawer(),
+      ),
       appBar: AppBar(
         backgroundColor: c.background,
         elevation: 0,
         titleSpacing: 0,
         leading: IconButton(
-          icon: Icon(Icons.arrow_back_rounded, color: c.text),
-          onPressed: () => closeHost(),
+          tooltip: '会话列表',
+          icon: Icon(Icons.menu_rounded, color: c.text),
+          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
         ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -242,6 +267,11 @@ class _ChatScreenState extends State<ChatScreen> {
             tooltip: '刷新',
             icon: Icon(Icons.refresh_rounded, color: c.textMuted),
             onPressed: () => sendChatAction(<String, Object?>{'type': 'refresh'}),
+          ),
+          IconButton(
+            tooltip: '返回网页版',
+            icon: Icon(Icons.open_in_browser_rounded, color: c.textMuted),
+            onPressed: () => closeHost(),
           ),
         ],
       ),

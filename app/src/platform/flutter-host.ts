@@ -21,6 +21,8 @@ export interface FlutterHostBridge {
   pushSettings(options: { json: string }): Promise<void>;
   /** 推一份最新的聊天页快照（JSON 字符串），同样会被原生缓存。 */
   pushChat(options: { json: string }): Promise<void>;
+  /** 推一份最新的侧栏快照（JSON 字符串），同样会被原生缓存。 */
+  pushSidebar(options: { json: string }): Promise<void>;
   /** 让 Flutter 页弹一句提示（WebView 的 toast 在 Flutter 页上不可见）。 */
   pushNotice(options: { text: string }): Promise<void>;
   /** 主动关掉 Flutter 页（handler 里要切到别的界面时）。 */
@@ -35,6 +37,10 @@ export interface FlutterHostBridge {
   ): Promise<{ remove: () => Promise<void> }>;
   addListener(
     eventName: "chatAction",
+    listener: (data: { json: string }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
+  addListener(
+    eventName: "sidebarAction",
     listener: (data: { json: string }) => void,
   ): Promise<{ remove: () => Promise<void> }>;
 }
@@ -185,9 +191,45 @@ export async function pushFlutterChat(json: string): Promise<void> {
 export async function onFlutterChatAction(
   handler: (action: Record<string, unknown>) => void,
 ): Promise<() => void> {
+  return subscribeAction("chatAction", handler, "聊天动作");
+}
+
+/**
+ * 把侧栏快照推给 Flutter（`SidebarSnapshot` 的 JSON）。
+ *
+ * 分段 / 折叠 / 搜索 / 预览截断全在 `app/src/platform/flutter-sidebar.ts` 算完，
+ * Dart 侧只画不判。推送时机由 `app/src/main.ts` 的 `syncFlutterSidebar()` 控制，
+ * 在 `renderSidebar()` 末尾调用（侧栏只在状态变化时重画，不需要节流）。
+ */
+export async function pushFlutterSidebar(json: string): Promise<void> {
+  if (!bridge || Capacitor.getPlatform() !== "android") return;
+  try {
+    await bridge.pushSidebar({ json });
+  } catch (error) {
+    console.warn("[flutter-host] 推送侧栏数据失败", error);
+  }
+}
+
+/**
+ * 订阅 Flutter 侧栏回传的动作（点会话 / 切分段 / 搜索 / 长按菜单）。
+ * 动作由 `app/src/main.ts` 的 `dispatchFlutterSidebarAction()` 分发。
+ */
+export async function onFlutterSidebarAction(
+  handler: (action: Record<string, unknown>) => void,
+): Promise<() => void> {
+  return subscribeAction("sidebarAction", handler, "侧栏动作");
+}
+
+/** 三种动作事件长得一模一样，订阅/解析/降级只写一遍。 */
+async function subscribeAction(
+  eventName: "settingsAction" | "chatAction" | "sidebarAction",
+  handler: (action: Record<string, unknown>) => void,
+  label: string,
+): Promise<() => void> {
   if (!bridge || Capacitor.getPlatform() !== "android") return () => undefined;
   try {
-    const handle = await bridge.addListener("chatAction", (data) => {
+    // addListener 是三个独立重载，并集传不进去，只能逐个字面量分支
+    const onPayload = (data: { json: string }): void => {
       const raw = typeof data?.json === "string" ? data.json : "";
       if (!raw) return;
       try {
@@ -196,14 +238,20 @@ export async function onFlutterChatAction(
           handler(parsed as Record<string, unknown>);
         }
       } catch (error) {
-        console.warn("[flutter-host] 聊天动作解析失败", error);
+        console.warn(`[flutter-host] ${label}解析失败`, error);
       }
-    });
+    };
+    const handle =
+      eventName === "settingsAction"
+        ? await bridge.addListener("settingsAction", onPayload)
+        : eventName === "chatAction"
+          ? await bridge.addListener("chatAction", onPayload)
+          : await bridge.addListener("sidebarAction", onPayload);
     return () => {
       void handle.remove();
     };
   } catch (error) {
-    console.warn("[flutter-host] 订阅聊天动作失败", error);
+    console.warn(`[flutter-host] 订阅${label}失败`, error);
     return () => undefined;
   }
 }

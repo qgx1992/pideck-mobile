@@ -183,12 +183,15 @@ import {
   onFlutterChatAction,
   onFlutterPageVisibility,
   onFlutterSettingsAction,
+  onFlutterSidebarAction,
   openFlutterPage,
   pushFlutterChat,
   pushFlutterNotice,
   pushFlutterSettings,
+  pushFlutterSidebar,
 } from "./platform/flutter-host.ts";
 import { FlutterChatMirror, buildChatSnapshot } from "./platform/flutter-chat.ts";
+import { buildSidebarSnapshot } from "./platform/flutter-sidebar.ts";
 import {
   modelChipLabel,
   modelChipTitle,
@@ -370,6 +373,9 @@ let flutterChatOpen = false;
 
 /** 聊天页快照的推送器（只在 Flutter 聊天页打开期间存在）。 */
 let flutterChatMirror: FlutterChatMirror | null = null;
+
+/** 上一次推给 Flutter 的侧栏 JSON；用来跳过完全相同的重复推送。 */
+let flutterSidebarJson = "";
 
 /** 历史加载失败的提示；快照里的 error 取自这里。 */
 let chatError: { title: string; detail?: string; hint?: string } | null = null;
@@ -1143,6 +1149,8 @@ function renderMain(): void {
       // 镜像器没有别的持有者，关页就释放；不然下一次开页会叠一个在上面
       flutterChatMirror?.dispose();
       flutterChatMirror = null;
+      // 侧栏快照跟着页一起失效，下次开页要重新推一份
+      flutterSidebarJson = "";
     }
   }).then((detach) => disposers.push(detach));
 
@@ -1154,6 +1162,11 @@ function renderMain(): void {
   // Flutter 聊天页上的一次操作（发消息 / 停止 / 回答 / 长按菜单）。
   void onFlutterChatAction((action) => {
     dispatchFlutterChatAction(action);
+  }).then((detach) => disposers.push(detach));
+
+  // Flutter 侧栏上的一次操作（点会话 / 切分段 / 搜索 / 长按菜单）。
+  void onFlutterSidebarAction((action) => {
+    dispatchFlutterSidebarAction(action);
   }).then((detach) => disposers.push(detach));
 
   // 窄屏手势：左右两个抽屉由同一个控制器管理，保证互斥——
@@ -1510,6 +1523,13 @@ function isSessionsExpanded(projectId: string, state: PiDeckState): boolean {
 }
 
 function renderSidebar(state: PiDeckState): void {
+  renderSidebarInner(state);
+  // 侧栏只有一个入口，在这里统一同步给 Flutter 的抽屉最省心 ——
+  // 折叠、搜索、切分段、会话增删都走 renderSidebar，不用每处都记得推。
+  syncFlutterSidebar();
+}
+
+function renderSidebarInner(state: PiDeckState): void {
   if (!refs || !runtime) return;
   renderSideTabs(state);
   renderDeviceChip();
@@ -5206,6 +5226,137 @@ function mirrorChatView(view: ChatView): void {
   }
 }
 
+/**
+ * 把侧栏当前状态推给 Flutter 的抽屉（没开 Flutter 聊天页时什么都不做）。
+ *
+ * 侧栏只在状态变化时重画，所以这里不做节流：`renderSidebar()` 已经天然被合并。
+ * 内容没变就跳过（`flutterSidebarJson` 去重），避免重复过桥。
+ */
+function syncFlutterSidebar(): void {
+  if (!flutterChatOpen || !runtime) return;
+  const json = JSON.stringify(
+    buildSidebarSnapshot({
+      tab: sidebarTab,
+      query: sidebarQuery,
+      endpoints: endpointStates(),
+      activeEndpointId: runtime.id,
+      activeSessionId,
+      activeProjectId,
+      collapsedProjects,
+      expandedSessions,
+      flatExpanded,
+    }),
+  );
+  if (json === flutterSidebarJson) return;
+  flutterSidebarJson = json;
+  void pushFlutterSidebar(json);
+}
+
+/** 关掉 Flutter 页再执行 —— 给「只能在 WebView 里看」的界面用（工作区选择器、菜单弹层）。 */
+function leaveFlutterThen(action: () => void): void {
+  flutterChatOpen = false;
+  flutterSidebarJson = "";
+  flutterChatMirror?.dispose();
+  flutterChatMirror = null;
+  void closeFlutterPage().then(() => action());
+}
+
+/**
+ * Flutter 侧栏回传的动作。
+ *
+ * 分工：纯状态的（切分段 / 搜索 / 折叠）直接改本地状态再重画；
+ * 需要 WebView 界面配合的（工作区选择器、会话菜单、项目菜单）先关掉 Flutter 页
+ * —— 那些弹层长在 WebView 的 DOM 上，被 Flutter 页盖着就看不见。
+ */
+function dispatchFlutterSidebarAction(action: Record<string, unknown>): void {
+  if (!runtime) return;
+  const type = typeof action.type === "string" ? action.type : "";
+  const text = (key: string): string => (typeof action[key] === "string" ? (action[key] as string) : "");
+
+  switch (type) {
+    case "close":
+      leaveFlutterThen(() => undefined);
+      return;
+    case "openSession": {
+      const id = text("id");
+      if (id) void openSession(id);
+      return;
+    }
+    case "toggleTab": {
+      const tab = text("tab");
+      if (tab !== "active" && tab !== "chats" && tab !== "projects") return;
+      sidebarTab = tab;
+      saveSidebarTab(sidebarTab);
+      renderSidebar(runtime.store.state);
+      return;
+    }
+    case "search":
+      sidebarQuery = text("query");
+      renderSidebar(runtime.store.state);
+      return;
+    case "toggleProject": {
+      const projectId = text("projectId");
+      if (projectId) toggleProject(projectId);
+      return;
+    }
+    case "toggleSection": {
+      const key = text("key");
+      if (!key) return;
+      // 项目组走「展开全部会话」，扁平段走「展开其余」—— 两个状态集合不是一回事
+      if (key.startsWith("project:")) toggleSessionsExpanded(key.slice("project:".length));
+      else toggleFlat(key);
+      return;
+    }
+    case "createSession": {
+      const projectId = text("projectId");
+      void createSession(projectId || undefined);
+      return;
+    }
+    case "sessionRename": {
+      const id = text("id");
+      const title = text("title").trim();
+      if (!id) return;
+      if (!title) {
+        void pushFlutterNotice("标题不能为空");
+        return;
+      }
+      void runSessionAction(id, "update", "已重命名", { title });
+      return;
+    }
+    case "sessionCopy": {
+      const id = text("id");
+      if (id) void runSessionAction(id, "copy", "已复制会话");
+      return;
+    }
+    case "sessionExport": {
+      const id = text("id");
+      if (id) exportSessionHtml(id);
+      return;
+    }
+    case "sessionDelete": {
+      const id = text("id");
+      if (id) void runSessionAction(id, "delete", "已删除会话", {}, id);
+      return;
+    }
+    case "sessionMore": {
+      const id = text("id");
+      if (id) leaveFlutterThen(() => openSessionMenu(id));
+      return;
+    }
+    case "projectMenu": {
+      const projectId = text("projectId");
+      if (projectId) leaveFlutterThen(() => openProjectMenu(projectId));
+      return;
+    }
+    case "newSession":
+      leaveFlutterThen(() => openWorkspacePicker());
+      return;
+    case "openSettings":
+      openSettings();
+      return;
+  }
+}
+
 /** 把聊天页当前状态组装成快照推给 Flutter（没开 Flutter 页时什么都不做）。 */
 function syncFlutterChat(): void {
   const mirror = flutterChatMirror;
@@ -5237,8 +5388,10 @@ async function openFlutterChatPage(sessionId: string): Promise<boolean> {
   if (activeSessionId !== sessionId) await openSession(sessionId);
   flutterChatMirror = new FlutterChatMirror({ push: (json) => pushFlutterChat(json) });
   flutterChatOpen = true;
+  flutterSidebarJson = "";
   syncFlutterChat();
   flutterChatMirror.flush();
+  syncFlutterSidebar();
   const opened = await openFlutterPage("chat", sessionId);
   if (!opened) {
     flutterChatOpen = false;
@@ -5264,6 +5417,7 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
   switch (type) {
     case "close":
       flutterChatOpen = false;
+      flutterSidebarJson = "";
       flutterChatMirror?.dispose();
       flutterChatMirror = null;
       void closeFlutterPage();

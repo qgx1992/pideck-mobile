@@ -58,11 +58,23 @@ Future<String> loadInitialChat() async {
   }
 }
 
+/// 侧栏的首帧快照。侧栏是聊天页的 drawer，跟着聊天页一起起来，
+/// 所以宿主在打开聊天页之前就已经缓存过一份。
+Future<String> loadInitialSidebar() async {
+  try {
+    final raw = await hostChannel.invokeMethod<String>('getSidebar');
+    return raw == null || raw.isEmpty ? '{}' : raw;
+  } catch (_) {
+    return '{}';
+  }
+}
+
 /// 订阅宿主的推送。
 void bindHostChannel({
   void Function(String json)? onSettings,
   void Function(String text)? onNotice,
   void Function(String json)? onChat,
+  void Function(String json)? onSidebar,
 }) {
   hostChannel.setMethodCallHandler((call) async {
     final raw = call.arguments is String ? call.arguments as String : '';
@@ -70,6 +82,8 @@ void bindHostChannel({
       onSettings?.call(raw.isEmpty ? '{}' : raw);
     } else if (call.method == 'setChat') {
       onChat?.call(raw.isEmpty ? '{}' : raw);
+    } else if (call.method == 'setSidebar') {
+      onSidebar?.call(raw.isEmpty ? '{}' : raw);
     } else if (call.method == 'showNotice') {
       onNotice?.call(raw);
     }
@@ -108,6 +122,18 @@ Future<void> closeHost() async {
 Future<void> sendChatAction(Map<String, Object?> action) async {
   try {
     await hostChannel.invokeMethod<void>('chatAction', <String, Object?>{
+      'json': jsonEncode(action),
+    });
+  } catch (_) {
+    /* 宿主已经不在时忽略 */
+  }
+}
+
+/// 侧栏的动作回传。动作由 `app/src/main.ts` 的 `dispatchFlutterSidebarAction()` 分发，
+/// 只传 id / key / query，**不要**把整行或整组数据传回去。
+Future<void> sendSidebarAction(Map<String, Object?> action) async {
+  try {
+    await hostChannel.invokeMethod<void>('sidebarAction', <String, Object?>{
       'json': jsonEncode(action),
     });
   } catch (_) {
