@@ -91,6 +91,27 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 页面里的二维码用 `app/scripts/gen-qr.py` 生成、`app/scripts/verify-qr.mjs --expect <地址>` 校验。
 - 静态服务器没有 deny 规则，要挡住某个文件只能让它不在这棵目录树里。
 
+## Flutter 混合栈（add-to-app）
+
+客户端正在从「Capacitor WebView 外壳」逐步迁到 Flutter，**混合栈已经接通**（0.1.19 起）。
+细节见 `docs/flutter-migration.md`，这里只列必须记住的硬约束：
+
+- Flutter 模块在 `flutter_module/`，Gradle 通过 `app/android/settings.gradle` 里的
+  `evaluate(include_flutter.groovy)` 暴露成 `:flutter`；`app/android/app/build.gradle` 里
+  有 `implementation project(':flutter')`。**没有 Flutter SDK 的机器现在出不了包。**
+- 工具链版本是卡死的，不要随手降：Gradle **8.14.3**、AGP **8.11.1**、minSdk **24**、
+  NDK **28.2.13676358**（写在 `app/android/variables.gradle` 的 `ndkVersion`）。
+  少了 `ndkVersion` 这一行，AGP 不 strip，release 包会变成 **327 MB**（实测），strip 后 42 MB。
+- `flutter_module/.android/` 要提交（`include_flutter.groovy` 在里面），只忽略
+  `local.properties`（含本机 `flutter.sdk` 绝对路径）和 `build/`。
+- WebView 侧入口在 `app/src/platform/flutter-host.ts`（`openFlutterPage(route, sessionId?)`），
+  设置页「实验」区块只在原生插件可用时出现，浏览器里点不到。
+- 可见性判定已从 `MainActivity.onResume/onPause` 移到 `PiDeckApp`（`Application.ActivityLifecycleCallbacks`
+  + `startedCount`），新增 Activity 不需要再手动喂 `RunWatchService.setAppVisible`。
+- 国内出包：Gradle 直连 Google 仓库极慢（看起来像卡死）。本机用
+  `$env:GRADLE_OPTS="-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7897 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7897"`，
+  **不要**写进 `gradle.properties`（CI 没有代理会炸）。
+
 ## 改动完成后必须跑的验证
 
 ```bash

@@ -1,6 +1,12 @@
 ext {
-    minSdkVersion = 23
+    // 24 而不是 23：Flutter 3.47 的引擎要求 minSdk 24，宿主与 :flutter 模块的
+    // minSdk 不一致时 manifest merger 会直接失败。Android 6.0（API 23）因此不再支持。
+    minSdkVersion = 24
     compileSdkVersion = 35
+    // 必须显式指定 NDK：AGP 只在 ndkVersion 对应 NDK 已安装时才会跑 stripReleaseDebugSymbols，
+    // 否则 release 包会直接塞进未 strip 的 libflutter.so（实测 165 MB/ABI，包体飙到 327 MB）。
+    // 28.2.13676358 正是 Flutter 3.47 引擎要求的版本，:flutter 模块也在用它。
+    ndkVersion = '28.2.13676358'
     targetSdkVersion = 35
     androidxActivityVersion = '1.9.2'
     androidxAppCompatVersion = '1.7.0'

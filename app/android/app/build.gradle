@@ -16,6 +16,8 @@ def pideckVersionCode = (project.findProperty("pideckVersionCode") ?: "118").toS
 android {
     namespace "dev.pideck.mobile"
     compileSdk rootProject.ext.compileSdkVersion
+    // 与 :flutter 模块用同一个 NDK，strip 才能生效（见 variables.gradle 里的说明）
+    ndkVersion rootProject.ext.ndkVersion
     defaultConfig {
         // 安装身份与 Java 包名分开：namespace 仍是 dev.pideck.mobile（源码包不动），
         // 只把 applicationId 换成自己的域名，这样 release 包和旧的 debug 包能共存。
@@ -85,6 +87,8 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+    // Flutter add-to-app：flutter_module 经 include_flutter.groovy 暴露成 :flutter
+    implementation project(':flutter')
 }
 
 apply from: 'capacitor.build.gradle'

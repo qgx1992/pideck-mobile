@@ -21,6 +21,8 @@ public class MainActivity extends BridgeActivity {
         // SSE 走原生栈：CapacitorHttp 不支持流式响应体，所以自己读流
         // （见 platform/sse-stream.ts 与 SsePlugin.java 的注释）
         registerPlugin(SsePlugin.class);
+        // WebView → Flutter 页的开关（add-to-app）
+        registerPlugin(FlutterLauncherPlugin.class);
         super.onCreate(savedInstanceState);
 
         // 扫码（BarcodeScanner.startScan）时相机预览铺在 WebView 之下，
@@ -44,12 +46,12 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
-        RunWatchService.setAppVisible(true);
+        // 可见性不再在这里维护：加了 FlutterHostActivity 之后「一个 Activity」的假设不成立，
+        // 统一搬到 PiDeckApp 的 ActivityLifecycleCallbacks（按 started 计数）
     }
 
     @Override
     public void onPause() {
-        RunWatchService.setAppVisible(false);
         super.onPause();
     }
 

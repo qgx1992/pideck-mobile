@@ -12,6 +12,7 @@
 import { h, clear } from "./dom.ts";
 import { createChevron, setChevronExpanded } from "./chevron.ts";
 import { DESKTOP_ONLY_NOTE, dshPluginActionable, maskToken } from "./settings-model.ts";
+import { isFlutterHostAvailable, openFlutterPage } from "../platform/flutter-host.ts";
 import type { DshPluginRow, ExtensionRow, ModelRow, SkillSection } from "./settings-model.ts";
 
 export interface SettingsDeviceRow {
@@ -260,8 +261,13 @@ export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {  
     body,
   ]);
 
+  // 每次 update() 都会重画整页；异步探测 Flutter 插件的结果只许落到本轮渲染里，
+  // 否则连点刷新会出现两三个「实验」区块。
+  let renderToken = 0;
+
   const update = (data: SettingsData): void => {
     clear(body);
+    const token = ++renderToken;
 
     // ── 外观 ──
     const themeRow = h("div", { class: "settings-choice" });
@@ -410,6 +416,19 @@ export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {  
 
     // ── DSH 插件 ──
     body.append(dshPluginSection(data, handlers));
+
+    // ── 实验（仅 Android 原生壳里有 FlutterHost 插件时出现）──
+    void isFlutterHostAvailable().then((available) => {
+      if (!available || token !== renderToken) return;
+      body.append(
+        section("实验", [
+          row("Flutter 混合栈页面", "打开", {
+            sub: "混合栈试验页，用来验证 Capacitor 与 Flutter 能否共存",
+            onClick: () => void openFlutterPage("settings"),
+          }),
+        ]),
+      );
+    });
 
     // ── 关于 ──
     body.append(

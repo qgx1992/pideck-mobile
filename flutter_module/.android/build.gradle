@@ -1,0 +1,19 @@
+// Generated file. Do not edit.
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+
+android {
+    namespace = "top.caoayu.pideck_flutter"
+    compileSdk = 36
+    defaultConfig {
+        minSdk = 24
+        targetSdk = 36
+    }
+}
