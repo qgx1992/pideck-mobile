@@ -332,6 +332,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
             value: sseNative ? '原生 SSE' : 'WebView',
             sub: sseNative ? '' : 'WebView 受后台冻结影响，息屏后可能断流',
           ),
+        // 调试入口：验证 Dart 直连流式可行性的探针页（见 docs/flutter-migration.md）
+        Padding(
+          padding: const EdgeInsets.fromLTRB(2, 8, 2, 2),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => _act('sseProbe'),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 32),
+              ),
+              child: const Text('流式探针（调试）', style: TextStyle(fontSize: 12.5)),
+            ),
+          ),
+        ),
       ],
     );
   }

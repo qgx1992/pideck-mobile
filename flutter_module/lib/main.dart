@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'app_theme.dart';
 import 'host_channel.dart';
+import 'probe/sse_probe_page.dart';
 import 'settings/settings_models.dart';
 import 'settings/settings_page.dart';
 
@@ -13,23 +14,24 @@ Future<void> main() async {
   final args = await loadHostArgs();
   // 首帧就要是对的主题，否则浅色用户会先看到一下深色再跳过去。
   final initialJson = await loadInitialSettings();
+  final SettingsData? seed = _parse(initialJson);
   runApp(
     PiDeckFlutterApp(
       route: args.route,
       sessionId: args.sessionId,
       initialSettingsJson: initialJson,
-      initialThemeMode: _themeModeOf(initialJson),
+      initialThemeMode: themeModeFrom(seed?.theme.mode ?? 'dark'),
+      connection: seed?.connection,
     ),
   );
 }
 
-/// 宿主缓存里的 `theme.mode`（`system` / `light` / `dark`），解析失败按深色。
-ThemeMode _themeModeOf(String json) {
+SettingsData? _parse(String json) {
+  if (json.trim().isEmpty) return null;
   try {
-    final data = SettingsData.fromJson(mapOf(jsonDecode(json)));
-    return themeModeFrom(data.theme.mode);
+    return SettingsData.fromJson(mapOf(jsonDecode(json)));
   } catch (_) {
-    return ThemeMode.dark;
+    return null;
   }
 }
 
@@ -40,6 +42,7 @@ class PiDeckFlutterApp extends StatefulWidget {
     required this.sessionId,
     this.initialSettingsJson = '',
     this.initialThemeMode = ThemeMode.dark,
+    this.connection,
   });
 
   final String route;
@@ -48,6 +51,9 @@ class PiDeckFlutterApp extends StatefulWidget {
   /// 宿主在打开本页之前 push 的那份数据，用来让首帧直接是完整内容。
   final String initialSettingsJson;
   final ThemeMode initialThemeMode;
+
+  /// 探针页要自己发请求，需要 serviceUrl + token。
+  final ConnectionInfo? connection;
 
   @override
   State<PiDeckFlutterApp> createState() => _PiDeckFlutterAppState();
@@ -81,6 +87,11 @@ class _PiDeckFlutterAppState extends State<PiDeckFlutterApp> {
             'settings' => SettingsScreen(
               initialJson: widget.initialSettingsJson,
               onThemeModeChanged: (next) => _themeMode.value = next,
+            ),
+            'sse-probe' => SseProbePage(
+              baseUrl: widget.connection?.serviceUrl ?? '',
+              token: widget.connection?.token ?? '',
+              sessionId: widget.sessionId,
             ),
             _ => _HostPlaceholderPage(
               route: widget.route,

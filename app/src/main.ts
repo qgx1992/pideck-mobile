@@ -5229,6 +5229,10 @@ function dispatchFlutterSettingsAction(action: Record<string, unknown>): void {
     case "openUsage":
       handlers.onOpenUsage();
       return;
+    case "sseProbe":
+      // 调试用：流式探针页要拿当前会话 id 才能测会话流
+      void openFlutterPage("sse-probe", activeSessionId ?? undefined);
+      return;
     case "toggleSkill": {
       const sourceId = text("sourceId");
       const name = text("name");
