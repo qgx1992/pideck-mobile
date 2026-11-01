@@ -1,6 +1,6 @@
 {
   "name": "pideck-mobile-app",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "private": true,
   "type": "module",
   "description": "PiDeck 手机客户端外壳（Vite + TypeScript + Capacitor）",
