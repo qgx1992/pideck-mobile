@@ -14,6 +14,7 @@ import type { TurnSpan } from "./turn-clock.ts";
 import { createProcessGroup, isProcessBlock, summarizeProcess } from "./process-group.ts";
 import { splitThinking, stripCompleteThinking } from "./thinking-tags.ts";
 import { jumpBehavior, topAlignedScrollTop } from "./scroll-anchor.ts";
+import { setStreamText } from "./live-text.ts";
 import {
   answeredCount,
   isAnswered,
@@ -350,13 +351,9 @@ export class ChatView {
   }
 
   /**
-   * 流式块：按 id 复用节点（保留 details 展开状态），但顺序每次重排，
-   * 并把连续的思考/工具塞进同一个「执行过程」折叠块。
-   */
-  /**
    * 流式渲染。
    *
-   * 关键约束：**分组结构必须整体重建，不能每次新建 group 而把旧的留在 DOM 里**。
+   * 关键约束：**group 只能复用，不能每帧新建后不管旧的**。
    * 之前的 bug 就是每帧 createProcessGroup() 却从不移除上一帧的，导致屏幕上堆出
    * 几十个「执行过程」，只有轮次结束 clearLive() 才消失。
    *
@@ -480,19 +477,21 @@ export class ChatView {
   }
 
   /** 按当前块序列重建整个流式区（旧 group 必须先移除，否则会残留）。 */
+  /**
+   * 按当前块序列把 DOM 摆正。
+   *
+   * 两条硬约束（都是踩过的坑）：
+   *   1. ``<details>`` 分组不能每帧重建。每帧新建 group 却不管旧的，屏幕上会堆出
+   *      几十个「执行过程」；但反过来「先全部拆掉再拼回去」也不行——
+   *      DOM 搬家（remove + insert）会把元素**内部的滚动位置清零**，
+   *      思考块 / 工具块因此每隔几秒就跳回内容头部。所以按下标复用旧 group。
+   *   2. 已经在正确位置上的节点一律不碰：`append()` 一个已在树里的节点是
+   *      「先摘再插」，同样会把它的滚动位置清零。
+   */
   private rebuildLive(blocks: readonly ChatBlock[]): void {
-    // 先记住哪些 group 被用户手动展开了，重建后恢复
-    const openIndexes = new Set<number>();
-    this.liveGroups.forEach((group, index) => {
-      if (group.el.hasAttribute("open")) openIndexes.add(index);
-    });
-
-    // 拆除旧结构：detail 里的 item 节点仍被 liveNodes 引用，可以复用
-    for (const group of this.liveGroups) group.el.remove();
-    this.liveGroups = [];
-
     const ordered: HTMLElement[] = [];
     let group: ReturnType<typeof createProcessGroup> | null = null;
+    let groupIndex = 0;
 
     for (const block of blocks) {
       const id = this.blockKey(block);
@@ -505,8 +504,10 @@ export class ChatView {
 
       if (isProcessBlock(block)) {
         if (!group) {
-          group = createProcessGroup({ open: openIndexes.has(this.liveGroups.length) });
-          this.liveGroups.push(group);
+          // 复用同下标的旧 group：展开状态和内部节点原位不动
+          group = this.liveGroups[groupIndex] ?? createProcessGroup();
+          this.liveGroups[groupIndex] = group;
+          groupIndex += 1;
           ordered.push(group.el);
         }
         if (node.parentElement !== group.body) group.body.append(node);
@@ -516,11 +517,27 @@ export class ChatView {
       }
     }
 
-    // 清掉容器里可能残留的游离节点，再按顺序贴回
-    for (const child of [...this.liveEl.children]) {
-      if (!ordered.includes(child as HTMLElement)) child.remove();
+    // 多出来的旧 group 清掉（块变少的时候）
+    for (let i = groupIndex; i < this.liveGroups.length; i += 1) {
+      this.liveGroups[i]?.el.remove();
     }
-    for (const node of ordered) this.liveEl.append(node);
+    this.liveGroups.length = groupIndex;
+
+    // 顺序归位：只有位置不对的节点才动
+    let cursor = this.liveEl.firstElementChild;
+    for (const node of ordered) {
+      if (node === cursor) {
+        cursor = cursor.nextElementSibling;
+        continue;
+      }
+      this.liveEl.insertBefore(node, cursor);
+    }
+    // 剩下没被认领的就是残渣
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
 
     this.refreshLiveGroups(blocks);
   }
@@ -1165,7 +1182,9 @@ function updateBlockNode(node: HTMLElement, block: ChatBlock, mdOptions: Markdow
   }
   if (block.kind === "reasoning") {
     const body = node.querySelector<HTMLElement>(".reasoning-body");
-    if (body && body.textContent !== block.text) body.textContent = block.text;
+    // 思考会连续流式写进来：整体替换 textContent 会把内部滚动位置清零，
+    // 用户读到一半就被拽回块的开头（每写到一段就重置一次）
+    if (body) setStreamText(body, block.text);
     return;
   }
   const body = node.querySelector<HTMLElement>(".tool-body");
@@ -1177,7 +1196,7 @@ function updateBlockNode(node: HTMLElement, block: ChatBlock, mdOptions: Markdow
   if (block.output !== undefined) detailParts.push(`输出：${preview(block.output)}`);
   if (block.errorText) detailParts.push(`错误：${block.errorText}`);
   const text = detailParts.join("\n\n");
-  if (body.textContent !== text) body.textContent = text;
+  setStreamText(body, text);
 }
 
 function preview(value: unknown): string {

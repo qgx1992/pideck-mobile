@@ -11,8 +11,11 @@
  *   - 边缘优先区（默认 48px）内起手立即跟手；区外也允许，但需要横向位移
  *     达到 engagePx（默认 18px）才确认——绕开 Android 抢边缘的返回手势
  *   - 竖向位移更大时判定为滚动，手势作废
- *   - 输入框、代码块、横向滚动的 chips 等区域不接管
+ *   - 只有「真的要横向滚动」的容器和输入类控件不接管；正文里的列表、思考块、工具块
+ *     一律可以滑（曾经按选择器一刀切，结果会话页大半面积滑不出侧栏）
  *   - 松手时进度 ≥ openRatio（默认 35%）或速度够快即完成，否则回弹
+ *   - 手指越过起点往回走（反悔）就作废，不会在回弹后又按原方向弹开
+ *   - 速度必须和手势方向同向：往回缩的那一下不算轻扫
  *
  * 判定逻辑全部抽成纯函数（planSwipe / drawerPercent / shouldFinish），便于单测。
  */
@@ -91,7 +94,13 @@ export function travelFor(dx: number, plan: SwipePlan): number {
   return wantsRightward ? dx : -dx;
 }
 
-/** 松手时是否完成本次动作（距离够或轻扫够快）。 */
+/**
+ * 松手时是否完成本次动作（距离够或轻扫够快）。
+ *
+ * `velocity` 必须是**沿手势方向**的速度（px/ms），用 velocityAlong() 算。
+ * 传绝对值会踩坑：手指拉到一半又往回缩时，最后一步的速度是反的，
+ * 取了绝对值反而被判成「快速轻扫」，于是回弹后抽屉又弹出来。
+ */
 export function shouldFinish(
   travel: number,
   width: number,
@@ -101,8 +110,30 @@ export function shouldFinish(
 ): boolean {
   if (travel <= 0) return false;
   if (swipeProgress(travel, width) >= openRatio) return true;
+  if (!Number.isFinite(velocity) || velocity <= 0) return false;
   return velocity >= flingVelocity;
 }
+
+/**
+ * 一步位移 → 沿手势方向的速度（px/ms）。
+ *
+ * 正数 = 还在往目标方向走；负数 = 正在往回缩。
+ */
+export function velocityAlong(stepPx: number, plan: SwipePlan, dtMs: number): number {
+  if (!Number.isFinite(dtMs) || dtMs <= 0) return 0;
+  return travelFor(stepPx, plan) / dtMs;
+}
+
+/** 手指越过起点这么多像素，判定为「反悔」，本次手势作废。 */
+export const REVERSE_CANCEL_PX = 8;
+
+/** 越过起点往回走了吗（留几个像素的抖动余量）。 */
+export function isReversePastOrigin(travel: number): boolean {
+  return travel < -REVERSE_CANCEL_PX;
+}
+
+/** 松手前这么久没动过，就不算轻扫（按住不动时残留的旧速度不能拿来判）。 */
+export const FLING_STALE_MS = 120;
 
 /**
  * 是否应该在这一点起手跟踪。
@@ -145,27 +176,45 @@ export interface DrawerGesturesOptions {
   flingVelocity?: number;
 }
 
-/** 这些区域里的横向滑动有自己的语义（选文本、横向滚动），不要抢。 */
+/**
+ * 这些区域里的横向滑动有自己的语义（选文本、横向滚动、自己的拖拽），不要抢。
+ *
+ * 只留**输入类控件**和**自带手势的面板**。正文里的 `.md-list` / `.md-table` /
+ * `.process-body` / `.reasoning-body` 之类曾经也在这张名单里，代价是整个会话页
+ * 一半以上的面积滑不出侧栏（思考块、工具块、所有列表都算进去了）。
+ * 真正需要独占横向手势的「宽表格 / 长代码行」由 hasHorizontalScrollerAncestor()
+ * 在运行时按实际滚动量判断，不用写死；横向滚动的 chips 更是本身就 overflow-x: auto。
+ */
 const INTERACTIVE_SELECTOR = [
   "textarea",
   "input",
   "select",
-  "pre",
-  ".md-codeblock",
-  ".md-table-wrap",
-  ".md-table",
-  ".md-list",          // 缩进列表可能被用户横向拖看
-  ".composer-chips",
-  ".sub--chips",      // 顶栏的模型 / 思考 / 历史 一排：窄屏会横向滑动
+  '[contenteditable]:not([contenteditable="false"])',
   ".ask-card",
   ".ask-input",
-  ".ws-preview",
-  ".ws-file-path",
+  ".ask-review",
+  ".ws-preview",   // 代码预览面板：两轴都能滚，自己占着手势
   ".sheet",
-  ".process-body",
-  ".tool-body",
-  ".reasoning-body",
 ].join(",");
+
+/**
+ * 页面 / 面板级滚动容器：内容横向溢出（长单词、宽图、没折行的行）是噪声，
+ * 不能因此判定「这里归内容自己管」，否则整页都滑不出侧栏。
+ */
+const SCROLL_ROOT_SELECTOR = [
+  ".chat-scroll",
+  ".sidebar-scroll",
+  ".ws-content",
+  ".sheet",
+  ".sheet-body",
+  "body",
+  "html",
+].join(",");
+
+/** 这个节点是不是页面级滚动容器（横向溢出属于噪声）。 */
+export function isScrollRoot(el: Element): boolean {
+  return typeof el.matches === "function" && el.matches(SCROLL_ROOT_SELECTOR);
+}
 
 /**
  * 横向可滚动量（像素差）。jsdom 里没有布局，所以单独抽出来便于测试。
@@ -194,6 +243,10 @@ export function isHorizontalScroller(
  *
  * 这是为了让宽表格 / 长代码行能左右拖，而不是把侧边栏拽出来——
  * 之前只按选择器排除，`.md-table-wrap` 这种运行时才产生滚动条的容器漏掉了。
+ *
+ * 但页面级滚动容器（`.chat-scroll` 等）必须排除在外：`overflow-y: auto` 会让
+ * 计算出来的 `overflow-x` 也变成 auto，只要有一条消息横向溢出（长 URL、宽图），
+ * 整个会话页就被判成「内容自己管手势」，于是哪里都滑不出侧栏。
  */
 export function hasHorizontalScrollerAncestor(target: EventTarget | null, root?: Element | null): boolean {
   const start = target as Element | null;
@@ -204,6 +257,7 @@ export function hasHorizontalScrollerAncestor(target: EventTarget | null, root?:
   const stop = root ?? start.ownerDocument?.body ?? null;
 
   while (node && node !== stop) {
+    if (isScrollRoot(node)) return false;
     const style = view?.getComputedStyle?.(node);
     if (style && isHorizontalScroller(style.overflowX, node.scrollWidth, node.clientWidth)) {
       return true;
@@ -213,7 +267,8 @@ export function hasHorizontalScrollerAncestor(target: EventTarget | null, root?:
   return false;
 }
 
-function isInteractiveTarget(target: EventTarget | null): boolean {
+/** 起点落在「不该接管」的元素里吗。 */
+export function isInteractiveTarget(target: EventTarget | null): boolean {
   const el = target as Element | null;
   if (!el || typeof el.closest !== "function") return false;
   if (el.closest(INTERACTIVE_SELECTOR) !== null) return true;
@@ -236,6 +291,9 @@ export function attachDrawerGestures(options: DrawerGesturesOptions): () => void
   let startY = 0;
   let lastX = 0;
   let lastTime = 0;
+  /** 上一次「时间真的前进过」的采样点：算速度用，避免同一毫秒内的多步把位移吞了 */
+  let sampleX = 0;
+  let sampleTime = 0;
   let velocity = 0;
   let width = 0;
   let fromEdge = false;
@@ -277,6 +335,8 @@ export function attachDrawerGestures(options: DrawerGesturesOptions): () => void
     startY = touch.clientY;
     lastX = touch.clientX;
     lastTime = Date.now();
+    sampleX = touch.clientX;
+    sampleTime = lastTime;
     velocity = 0;
   };
 
@@ -311,16 +371,29 @@ export function attachDrawerGestures(options: DrawerGesturesOptions): () => void
     }
 
     if (!plan || !active) return;
+
+    const travel = travelFor(dx, plan);
+
+    // 手指越过起点往回走 = 反悔：立刻收手，让抽屉弹回去。
+    // 不处理的话，回弹过程中松手仍会按原方向弹开（就是「拉一半反向还弹侧栏」）。
+    if (isReversePastOrigin(travel)) {
+      release();
+      return;
+    }
+
     if (event.cancelable) event.preventDefault();
 
     const now = Date.now();
-    const dt = now - lastTime;
-    const step = touch.clientX - lastX;
-    if (dt > 0) velocity = step / dt;
     lastX = touch.clientX;
     lastTime = now;
+    // 速度按「上一次时间真的前进过的采样点」算：同一毫秒内的多步只累位移，不造出无穷大速度
+    const dt = now - sampleTime;
+    if (dt > 0) {
+      velocity = velocityAlong(touch.clientX - sampleX, plan, dt);
+      sampleX = touch.clientX;
+      sampleTime = now;
+    }
 
-    const travel = travelFor(dx, plan);
     const progress = progressForAction(travel, width, plan.action);
     active.drawer.style.transform = `translateX(${drawerPercent(progress, plan.drawer)}%)`;
     active.scrim.style.opacity = String(Math.min(1, progress * 1.4));
@@ -335,7 +408,9 @@ export function attachDrawerGestures(options: DrawerGesturesOptions): () => void
     const drawer = active;
     const currentPlan = plan;
     const travel = travelFor(lastX - startX, currentPlan);
-    const finished = shouldFinish(travel, width, Math.abs(velocity), openRatio, flingVelocity);
+    // 松手前手指已经按住不动了：那条旧速度不能拿来判「轻扫」
+    const freshVelocity = Date.now() - lastTime > FLING_STALE_MS ? 0 : velocity;
+    const finished = shouldFinish(travel, width, freshVelocity, openRatio, flingVelocity);
 
     // 先清 inline，让 CSS 类接管，才有吸附动画
     drawer.drawer.style.transition = "";

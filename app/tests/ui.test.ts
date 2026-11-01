@@ -59,6 +59,48 @@ test("流式：同一 block 增量更新，不重复插入节点", () => {
   assert.ok((root.textContent ?? "").includes("运行中") === false, "结束后不再显示运行中");
 });
 
+test("思考块流式追加：节点不重建，展开状态与内部滚动位置都不丢", () => {
+  const { root, view } = makeView();
+  view.setLive("run-1", [{ kind: "reasoning", id: "r1", text: "第一段", done: false }], "running");
+  const details = root.querySelector(".live details.reasoning") as HTMLElement;
+  const body = details.querySelector(".reasoning-body") as HTMLElement;
+  details.setAttribute("open", "");
+  const firstText = body.firstChild;
+
+  view.setLive("run-1", [{ kind: "reasoning", id: "r1", text: "第一段第二段", done: false }], "running");
+
+  assert.equal(root.querySelector(".live details.reasoning"), details, "思考块节点没有被换掉");
+  assert.equal(body.firstChild, firstText, "只追加文本节点，不整体替换（整体替换会把 scrollTop 清零）");
+  assert.equal(body.textContent, "第一段第二段");
+  assert.equal(details.hasAttribute("open"), true, "展开状态保留");
+});
+
+test("结构变化（新文本块出现）后思考块仍在原位、不跳回头部", () => {
+  const { root, view } = makeView();
+  view.setLive("run-1", [{ kind: "reasoning", id: "r1", text: "想", done: false }], "running");
+  const group = root.querySelector(".live details.process") as HTMLElement;
+  const body = root.querySelector(".live .reasoning-body") as HTMLElement;
+  group.setAttribute("open", "");
+
+  // shape 从 P 变成 PT，这一轮会走 rebuildLive
+  view.setLive(
+    "run-1",
+    [
+      { kind: "reasoning", id: "r1", text: "想完了", done: false },
+      { kind: "text", id: "t1", text: "答案", done: false },
+    ],
+    "running",
+  );
+
+  assert.equal(root.querySelector(".live details.process"), group, "分组节点被复用，没有拆了重建");
+  assert.equal(group.hasAttribute("open"), true, "用户展开的「执行过程」不会被收起");
+  assert.equal(root.querySelector(".live .reasoning-body"), body, "思考节点没有搬家（搬家会清零内部滚动）");
+  assert.equal(body.textContent, "想完了");
+  const bodies = root.querySelectorAll(".live .msg-body");
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0]?.textContent, "答案");
+});
+
 test("新一轮（messageId 变化）清空上一轮的块", () => {
   const { root, view } = makeView();
   view.setLive("run-1", [{ kind: "text", id: "t1", text: "旧", done: true }], "finished");
