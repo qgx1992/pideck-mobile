@@ -190,3 +190,28 @@ test("FlutterChatMirror：flush 之前没有快照时什么都不做", () => {
   assert.equal(pushed.length, 0);
   mirror.dispose();
 });
+
+test("messageMenus：pi 会话里 user 有 5 项、assistant 只有 2 项，删除标 danger", () => {
+  const snapshot = buildChatSnapshot({ sessionId: "s1", messages: [], backend: "pi" });
+  assert.deepEqual(
+    snapshot.messageMenus.user.map((item) => item.id),
+    ["copy", "edit", "resend", "fork", "delete"],
+  );
+  assert.deepEqual(
+    snapshot.messageMenus.assistant.map((item) => item.id),
+    ["copy", "fork"],
+  );
+  assert.equal(snapshot.messageMenus.user.find((item) => item.id === "delete")?.danger, true);
+  assert.equal(snapshot.messageMenus.assistant.every((item) => item.danger !== true), true);
+});
+
+test("messageMenus：ACP 会话只剩「复制」（运行时没有 fork/改/删命令）", () => {
+  const snapshot = buildChatSnapshot({ sessionId: "s1", messages: [], backend: "acp" });
+  assert.deepEqual(snapshot.messageMenus.user, [{ id: "copy", label: "复制文本" }]);
+  assert.deepEqual(snapshot.messageMenus.assistant, [{ id: "copy", label: "复制文本" }]);
+});
+
+test("messageMenus：没传 backend 时按 pi 处理", () => {
+  const snapshot = buildChatSnapshot({ sessionId: "s1", messages: [] });
+  assert.equal(snapshot.messageMenus.user.length, 5);
+});

@@ -150,6 +150,13 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   其余 → `toggleFlat()`。两个展开集合（`expandedSessions` / `flatExpanded`）互不相干。
 - WebView 的弹层（工作区选择器、会话/项目长按菜单）被 Flutter 页盖着看不见，需要它们的动作
   一律走 `leaveFlutterThen()`：先 `closeFlutterPage()` 再开弹层，不要指望在 Flutter 页上显示。
+- 消息长按菜单（0.1.29 起）**不许在 Dart 里维护动作表**：菜单项由 `ChatSnapshot.messageMenus`
+  带来，源头是 `src/ui/message-actions-model.ts` 的 `actionsForRole(role, backend)`
+  （ACP 会话只剩「复制」）。Dart 只决定怎么画（danger 标红）与哪两步本地确认
+  （删除二次确认、编辑输入框）—— 这两步的确认框原本在 WebView 里，被盖着看不见。
+- 用户点了聊天页的「返回网页版」就置 `chatUseWebView = true`，之后点侧栏会话直接 `openSession()`，
+  **不写 localStorage**（重启回默认的 Flutter 版）。改 `renderSidebarInner` 的 `onOpenSession` 时
+  必须保留 `onEndpoint(run, …)` 那层包装，否则多设备下会连错端点。
 
 ## 改动完成后必须跑的验证
 

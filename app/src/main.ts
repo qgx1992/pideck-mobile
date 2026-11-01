@@ -377,6 +377,12 @@ let flutterChatMirror: FlutterChatMirror | null = null;
 /** 上一次推给 Flutter 的侧栏 JSON；用来跳过完全相同的重复推送。 */
 let flutterSidebarJson = "";
 
+/**
+ * 用户主动选了「网页版聊天页」—— 之后点侧栏会话不再弹 Flutter 页。
+ * 不回写 localStorage：重启 App 就回到 Flutter 版（默认形态）。
+ */
+let chatUseWebView = false;
+
 /** 历史加载失败的提示；快照里的 error 取自这里。 */
 let chatError: { title: string; detail?: string; hint?: string } | null = null;
 
@@ -1505,6 +1511,23 @@ function toggleProject(projectId: string): void {
   if (runtime) renderSidebar(runtime.store.state);
 }
 
+/**
+ * 点侧栏里的会话 = 直接进 Flutter 聊天页（0.1.29 起）。
+ *
+ * 回退条件（任何一条成立就走 WebView 版）：
+ *   - 这个包不带 Flutter 模块（浏览器里打开、装的是老包）；
+ *   - 用户刚在 Flutter 聊天页里点过「返回网页版」—— 不给他一个回来的入口。
+ *     （想看 Flutter 版，从设置页「关于 → 聊天页预览」重新进。）
+ */
+async function openSessionFromSidebar(sessionId: string): Promise<void> {
+  if (flutterChatOpen || chatUseWebView) {
+    await openSession(sessionId);
+    return;
+  }
+  const opened = await openFlutterChatPage(sessionId);
+  if (!opened) await openSession(sessionId);
+}
+
 /** 侧栏 = 项目分组 + 组内会话。搜索时跨项目过滤，并强制展开命中的分组。 */
 /** 展开 / 收起某项目的剩余会话（不影响项目本身的折叠状态）。 */
 function toggleSessionsExpanded(projectId: string): void {
@@ -1559,7 +1582,8 @@ function renderSidebarInner(state: PiDeckState): void {
       acpTools: ownState.acpTools,
       handlers: {
         onToggleProject: (projectId: string) => toggleProject(projectId),
-        onOpenSession: (sessionId: string) => onEndpoint(run, () => void openSession(sessionId)),
+        onOpenSession: (sessionId: string) =>
+          onEndpoint(run, () => void openSessionFromSidebar(sessionId)),
         // 项目行上的「+」是快捷新建：沿用上次选的后端（ACP 工具被删则自动退回 pi）
         onCreateSession: (projectId: string) =>
           onEndpoint(run, () =>
@@ -4687,6 +4711,13 @@ function pickResultId(result: unknown, keys: readonly string[]): string | null {
   return null;
 }
 
+const MESSAGE_ACTION_IDS: readonly MessageAction[] = ["copy", "edit", "resend", "delete", "fork"];
+
+/** Flutter 回传的 action 是字符串，收口成联合类型（否则 TS 不认）。 */
+function isMessageAction(value: string): value is MessageAction {
+  return (MESSAGE_ACTION_IDS as readonly string[]).includes(value);
+}
+
 async function runMessageAction(action: MessageAction, messageId: string, text: string): Promise<void> {
   if (!runtime || !activeSessionId) return;
   if (action === "copy") {
@@ -5374,6 +5405,7 @@ function syncFlutterChat(): void {
       live: reducer ? { messageId: reducer.messageId, blocks: reducer.blocks } : null,
       pending: activeSessionId && runtime ? runtime.store.pendingFor(activeSessionId) : [],
       perf: perfMetrics,
+      backend: activeBackend(),
     }),
   );
 }
@@ -5420,6 +5452,8 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
       flutterSidebarJson = "";
       flutterChatMirror?.dispose();
       flutterChatMirror = null;
+      // 用户按「返回网页版」：接下来的会话点击都走 WebView，别把人又弹回去
+      chatUseWebView = true;
       void closeFlutterPage();
       return;
     case "send": {
@@ -5448,7 +5482,24 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
     case "messageAction": {
       const id = text("id");
       const role = text("role") || "assistant";
-      if (id) openMessageActions(id, role);
+      const action = text("action");
+      if (!id) return;
+      if (!action) {
+        // 老调用（没带 action）：回 WebView 弹它自己的菜单
+        leaveFlutterThen(() => openMessageActions(id, role));
+        return;
+      }
+      if (!isMessageAction(action)) return;
+      const message = findMessageById(id);
+      const original = message ? messageText(message) : "";
+      // 编辑时 text 是新内容，其余动作用原文（copy / 删除都按原文）；
+      // 删除的二次确认已经在 Flutter 那边做过，这里直接执行。
+      const body = action === "edit" ? text("text") : text("text") || original;
+      if (action === "edit" && !body.trim()) {
+        void pushFlutterNotice("内容不能为空");
+        return;
+      }
+      void applyMessageAction(action, id, body);
       return;
     }
     case "refresh":

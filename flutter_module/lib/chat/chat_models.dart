@@ -291,6 +291,7 @@ class ChatSnapshot {
     this.live,
     this.pending,
     this.perf,
+    this.messageMenus = const <String, List<ChatMenuItem>>{},
   });
 
   final String sessionId;
@@ -306,6 +307,18 @@ class ChatSnapshot {
   final ChatLive? live;
   final ChatPending? pending;
   final ChatPerf? perf;
+
+  /// 长按菜单：`{'user': [...], 'assistant': [...]}`。
+  ///
+  /// 内容由 WebView 的 `actionsForRole()` 决定（ACP 会话只剩「复制」），
+  /// 这里**不维护**一份自己的动作表 —— 后端能力一变两边就会分叉。
+  final Map<String, List<ChatMenuItem>> messageMenus;
+
+  /// 取某个角色能用的菜单项（工具条不给菜单）。
+  List<ChatMenuItem> menusFor(String role) {
+    if (role == 'tool') return const <ChatMenuItem>[];
+    return messageMenus[role] ?? const <ChatMenuItem>[];
+  }
 
   bool get isRunning => status == 'running';
 
@@ -333,8 +346,39 @@ class ChatSnapshot {
       live: live is Map<Object?, Object?> ? ChatLive.fromJson(mapOf(live)) : null,
       pending: pending is Map<Object?, Object?> ? ChatPending.fromJson(mapOf(pending)) : null,
       perf: perf is Map<Object?, Object?> ? ChatPerf.fromJson(mapOf(perf)) : null,
+      messageMenus: _menusOf(json['messageMenus']),
     );
   }
+}
+
+Map<String, List<ChatMenuItem>> _menusOf(Object? raw) {
+  if (raw is! Map) return const <String, List<ChatMenuItem>>{};
+  final Map<String, List<ChatMenuItem>> menus = <String, List<ChatMenuItem>>{};
+  for (final MapEntry<Object?, Object?> entry in raw.entries) {
+    menus['${entry.key}'] = listOf(entry.value)
+        .whereType<Map<Object?, Object?>>()
+        .map((Map<Object?, Object?> item) => ChatMenuItem.fromJson(mapOf(item)))
+        .toList(growable: false);
+  }
+  return menus;
+}
+
+/// 长按菜单里的一项。
+class ChatMenuItem {
+  const ChatMenuItem({required this.id, required this.label, this.danger = false});
+
+  /// `copy` / `edit` / `resend` / `fork` / `delete`
+  final String id;
+  final String label;
+
+  /// 危险操作（删除）：菜单里标红，点下去先二次确认
+  final bool danger;
+
+  factory ChatMenuItem.fromJson(Map<String, Object?> json) => ChatMenuItem(
+        id: str(json['id']),
+        label: str(json['label']),
+        danger: json['danger'] == true,
+      );
 }
 
 /* ------------------------------ 解析小工具 ------------------------------ */

@@ -15,6 +15,7 @@ import type { ChatBlock, PendingUiRequest, RunStatus, WireMessage } from "@core/
 import { messageText, normalizeRole } from "../ui/chat-view.ts";
 import { splitThinking } from "../ui/thinking-tags.ts";
 import { collectImageSources } from "../ui/image-attach-model.ts";
+import { actionsForRole } from "../ui/message-actions-model.ts";
 import type { PerfMetrics } from "../ui/perf-metrics.ts";
 
 /** 一条已落盘的历史消息（Flutter 侧只认这个形状，不认 WireMessage）。 */
@@ -51,6 +52,23 @@ export interface ChatSnapshot {
   live: { messageId: string | null; blocks: ChatBlock[] } | null;
   pending: PendingUiRequest | null;
   perf: PerfMetrics | null;
+  /**
+   * 长按一条消息能做什么（已按当前后端收敛：ACP 会话只剩「复制」）。
+   *
+   * 菜单内容由 `ui/message-actions-model.ts` 的 `actionsForRole()` 决定，
+   * Dart 侧只负责画成底部弹层，**不要**在那里维护一份动作清单 ——
+   * 后端能力一变（比如 ACP 不能分叉）两边就会分叉。
+   */
+  messageMenus: { user: ChatMenuItem[]; assistant: ChatMenuItem[] };
+}
+
+/** 长按菜单里的一项。 */
+export interface ChatMenuItem {
+  /** copy / edit / resend / fork / delete */
+  id: string;
+  label: string;
+  /** 危险操作（删除）：菜单里标红，由 Dart 侧先二次确认再回传 */
+  danger?: boolean;
 }
 
 /** 工具条目的两行摘要（和 `historyToolEntry()` 的口径一致）。 */
@@ -156,6 +174,8 @@ export interface ChatSnapshotInput {
   live?: { messageId: string | null; blocks: readonly ChatBlock[] } | null;
   pending?: readonly PendingUiRequest[] | null;
   perf?: PerfMetrics | null;
+  /** 当前会话的后端（`activeBackend()`）；决定长按菜单能出现哪些动作 */
+  backend?: unknown;
 }
 
 /** 组装快照（纯函数，方便单测）。 */
@@ -175,7 +195,18 @@ export function buildChatSnapshot(input: ChatSnapshotInput): ChatSnapshot {
       : null,
     pending: pending ? { ...pending } : null,
     perf: input.perf ?? null,
+    messageMenus: {
+      user: menuItemsFor("user", input.backend),
+      assistant: menuItemsFor("assistant", input.backend),
+    },
   };
+}
+
+/** `actionsForRole()` 的结果拷成纯数据（去掉 readonly，方便过桥）。 */
+function menuItemsFor(role: "user" | "assistant", backend: unknown): ChatMenuItem[] {
+  return actionsForRole(role, backend).map((item) =>
+    item.danger ? { id: item.id, label: item.label, danger: true } : { id: item.id, label: item.label },
+  );
 }
 
 /**

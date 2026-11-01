@@ -174,48 +174,154 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  void _showMessageMenu(ChatHistoryItem item) {
-    if (item.text.isEmpty) return;
-    showModalBottomSheet<void>(
+  /// 长按一条消息：菜单项由 WebView 推来（`actionsForRole()` 的结果，ACP 只剩复制）。
+  ///
+  /// 删除的二次确认、编辑的输入框都在本地做 —— 这两步原本是 WebView 的弹层，
+  /// 被 Flutter 页盖着根本看不见，所以必须在 Flutter 里重做。
+  Future<void> _showMessageMenu(ChatHistoryItem item) async {
+    if (item.isTool) return;
+    final List<ChatMenuItem> actions = _snapshot.menusFor(item.role);
+    if (actions.isEmpty) return;
+
+    final ChatMenuItem? picked = await showModalBottomSheet<ChatMenuItem>(
       context: context,
       backgroundColor: PiColors.of(context).surface,
+      showDragHandle: true,
       builder: (BuildContext sheetContext) {
         final PiColors c = PiColors.of(sheetContext);
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              ListTile(
-                leading: Icon(Icons.copy_rounded, color: c.text),
-                title: Text('复制', style: TextStyle(color: c.text)),
-                onTap: () {
-                  Clipboard.setData(ClipboardData(text: item.text));
-                  Navigator.of(sheetContext).pop();
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.more_horiz_rounded, color: c.text),
-                title: Text('更多操作（回 Web 版）', style: TextStyle(color: c.text)),
-                subtitle: Text(
-                  '编辑 / 重发 / 分叉 / 删除仍在 WebView 里',
-                  style: TextStyle(color: c.textMuted, fontSize: 12),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    item.isUser ? '这条提问' : '这条回答',
+                    style: TextStyle(color: c.textMuted, fontSize: 12),
+                  ),
                 ),
-                onTap: () async {
-                  Navigator.of(sheetContext).pop();
-                  // 那边会弹自己的底部菜单；本页让开才能看见它
-                  await sendChatAction(<String, Object?>{
-                    'type': 'messageAction',
-                    'id': item.id,
-                    'role': item.role,
-                  });
-                  await closeHost();
-                },
               ),
+              for (final ChatMenuItem action in actions)
+                ListTile(
+                  dense: true,
+                  title: Text(
+                    action.label,
+                    style: TextStyle(color: action.danger ? c.danger : c.text, fontSize: 14),
+                  ),
+                  onTap: () => Navigator.of(sheetContext).pop(action),
+                ),
             ],
           ),
         );
       },
     );
+
+    if (!mounted || picked == null) return;
+
+    if (picked.id == 'delete') {
+      final bool ok = await _confirm(
+        title: '删除这条消息？',
+        body: '删除后这一条会从会话里消失（不可恢复），确认？',
+        confirmLabel: '确认删除',
+        danger: true,
+      );
+      if (!ok) return;
+      _sendMessageAction(item, picked.id);
+      return;
+    }
+
+    if (picked.id == 'edit') {
+      final String? next = await _editText(item.text);
+      if (next == null) return;
+      if (next.trim() == item.text.trim()) return;
+      _sendMessageAction(item, picked.id, text: next);
+      return;
+    }
+
+    _sendMessageAction(item, picked.id);
+  }
+
+  void _sendMessageAction(ChatHistoryItem item, String action, {String? text}) {
+    final Map<String, Object?> payload = <String, Object?>{
+      'type': 'messageAction',
+      'id': item.id,
+      'role': item.role,
+      'action': action,
+    };
+    if (text != null) payload['text'] = text;
+    sendChatAction(payload);
+  }
+
+  Future<bool> _confirm({
+    required String title,
+    required String body,
+    required String confirmLabel,
+    bool danger = false,
+  }) async {
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        final PiColors c = PiColors.of(dialogContext);
+        return AlertDialog(
+          backgroundColor: c.surface,
+          title: Text(title, style: TextStyle(color: c.text, fontSize: 15)),
+          content: Text(body, style: TextStyle(color: c.textSecondary, fontSize: 13)),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text('取消', style: TextStyle(color: c.textMuted)),
+            ),
+            FilledButton(
+              style: danger ? FilledButton.styleFrom(backgroundColor: c.danger) : null,
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(confirmLabel),
+            ),
+          ],
+        );
+      },
+    );
+    return ok == true;
+  }
+
+  Future<String?> _editText(String current) async {
+    final TextEditingController controller = TextEditingController(text: current);
+    final String? next = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        final PiColors c = PiColors.of(dialogContext);
+        return AlertDialog(
+          backgroundColor: c.surface,
+          title: Text('编辑这条消息', style: TextStyle(color: c.text, fontSize: 15)),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 8,
+            minLines: 3,
+            style: TextStyle(color: c.text, fontSize: 14),
+            decoration: InputDecoration(hintText: '内容不能为空', hintStyle: TextStyle(color: c.textMuted)),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text('取消', style: TextStyle(color: c.textMuted)),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+              child: const Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    if (next == null) return null;
+    if (next.trim().isEmpty) {
+      _notice('内容不能为空');
+      return null;
+    }
+    return next;
   }
 
   @override

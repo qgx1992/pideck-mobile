@@ -420,6 +420,45 @@ src/ui/sidebar-model.ts + sidebar-tabs-model.ts   ← 分组/折叠/截断/计�
 
 调试入口：从「聊天页预览」进去，左上角汉堡键。
 
+## 长按消息菜单 + 会话点击（0.1.29）：把最后两处 DOM 依赖搬过来
+
+0.1.28 之前，聊天页里有两件事必须回 WebView 做：长按消息的菜单（DOM 弹层，被 Flutter 页盖着看不见）
+和「点侧栏会话切过去」。0.1.29 把这两处补齐，聊天页才算能独立用。
+
+### 菜单项不再维护两处
+
+Dart 里**没有**自己的动作表，`ChatSnapshot.messageMenus` 直接装 `actionsForRole(role, backend)` 的结果：
+
+```json
+{ "messageMenus": {
+    "user":      [{"id":"copy","label":"复制文本"}, …, {"id":"delete","label":"删除","danger":true}],
+    "assistant": [{"id":"copy","label":"复制文本"}, {"id":"fork","label":"分叉会话"}]
+} }
+```
+
+好处是后端能力一变两边一起变：ACP 会话在 `actionsForRole()` 里只剩「复制」，Dart 那边不用改一行。
+Dart 侧只负责「怎么画」（danger 标红）和「哪两步要本地确认」。
+
+### 哪两步必须在 Flutter 里做
+
+| 动作 | 谁做确认 | 为什么 |
+|---|---|---|
+| 删除 | Flutter `_confirm()` | 原确认框在 WebView 里，被盖着看不见；确认过就直接执行，不再回传 |
+| 编辑 | Flutter `_editText()` | 多行输入框同理；内容没变就不发请求 |
+| 复制 / 重发 / 分叉 | 无需确认 | 回传 `messageAction` 由 WebView 执行 |
+
+### 「返回网页版」之后别再弹回来
+
+用户点了聊天页右上角「返回网页版」，说明他这轮想用 WebView 版。所以 `main.ts` 里有个
+`chatUseWebView` 标记：置上之后点侧栏会话不再走 `openFlutterChatPage()`，直接 `openSession()`。
+**不写 localStorage** —— 重启 App 就回到 Flutter 版（那是默认形态），不给用户留一个找不回来的开关。
+
+### 一条容易漏的回归
+
+`onOpenSession` 原来直接 `openSession(sessionId)`，改成 `openSessionFromSidebar()` 之后**必须**保留
+`onEndpoint(run, …)` 那层包装 —— 多设备场景下 `run` 负责切端点，丢了就会出现「点 A 设备的会话，
+连的还是 B 设备」。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
@@ -437,8 +476,8 @@ src/ui/sidebar-model.ts + sidebar-tabs-model.ts   ← 分组/折叠/截断/计�
      不要“关掉 Flutter 页回 WebView 弹原菜单”那条路（会闪一下，而且菜单状态在两边）。
      重做的代价是菜单内容要维护两处 —— 做的时候把菜单项也抽成数据（`{id, label, danger}`），
      让 Web 版和 Dart 版都从同一份数据渲染。
-3. **聊天页**：**0.1.27 已打通「视图迁移」链路**（见上一节），剩下的是打磨与入口切换：
-   侧栏 `Drawer`、长按消息菜单在 Flutter 重做、会话列表点击直接进 Flutter 聊天页。
+3. **聊天页**：**0.1.27 已打通「视图迁移」链路**，**0.1.28 补齐侧栏 `Drawer`**，
+   **0.1.29 补齐长按消息菜单 + 会话点击直达**（见上两节）。剩下的是打磨。
    流式仍由原生 `SsePlugin` 读、WebView 的 `ChatReducer` 算，Dart 只渲染（0.1.26 定案）。
 4. **文件保存 / 扫码**：`file_picker` + `mobile_scanner` 两个 pub 包，`FileSaverPlugin` 里
    MediaStore 的那套要换成 `path_provider` + `share_plus`，行为差异最大，放最后。
@@ -469,4 +508,9 @@ src/ui/sidebar-model.ts + sidebar-tabs-model.ts   ← 分组/折叠/截断/计�
 - [x] 聊天桥的纯逻辑：`app/tests/flutter-chat.test.ts` 15 项（历史条目转换 / thinking 剥离 / 工具状态 / 快照组装 / 40ms 合并 / 去重）
 - [ ] 真机：设置页 → 关于 → 聊天页预览，历史消息与流式增量都能显示，滚动贴底不跳（0.1.27）
 - [ ] 真机：聊天页里发一条消息 → WebView 侧收到并真的发出去，回复流式显示在这页上
-- [ ] 真机：运行中按停止能停下来；长按消息能复制
+- [ ] 真机：运行中按停止能停下来
+- [x] `flutter test` 48 项全绿（`chat_models_test.dart` 新增 2 项长按菜单解析）
+- [x] 长按菜单的数据来源：`app/tests/flutter-chat.test.ts` 新增 3 项（pi 的 user 5 项 / assistant 2 项、ACP 只剩复制、不传 backend 按 pi）
+- [ ] 真机：长按一条提问 → 菜单五项齐全、删除标红并二次确认、编辑能改内容后重发（0.1.29）
+- [ ] 真机：长按一条回答 → 只有「复制文本 / 分叉会话」两项（ACP 会话只有「复制文本」）
+- [ ] 真机：点侧栏里的会话 → 直接进 Flutter 聊天页且是该会话；点「返回网页版」后再点侧栏会话不再弹 Flutter 页

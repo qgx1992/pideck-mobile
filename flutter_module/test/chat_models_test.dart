@@ -163,4 +163,39 @@ void main() {
       expect(previewOf(null), '');
     });
   });
+
+  group('长按菜单', () {
+    test('解析 messageMenus，并按角色取用', () {
+      final ChatSnapshot snapshot = ChatSnapshot.fromJson(<String, Object?>{
+        'sessionId': 's1',
+        'messageMenus': <String, Object?>{
+          'user': <Object?>[
+            <String, Object?>{'id': 'copy', 'label': '复制文本'},
+            <String, Object?>{'id': 'edit', 'label': '编辑后重发'},
+            <String, Object?>{'id': 'delete', 'label': '删除', 'danger': true},
+          ],
+          'assistant': <Object?>[
+            <String, Object?>{'id': 'copy', 'label': '复制文本'},
+          ],
+        },
+      });
+      expect(snapshot.menusFor('user').length, 3);
+      expect(snapshot.menusFor('user').last.danger, isTrue);
+      expect(snapshot.menusFor('assistant').single.id, 'copy');
+    });
+
+    test('工具条不给菜单，缺字段回空列表', () {
+      final ChatSnapshot snapshot = ChatSnapshot.fromJson(<String, Object?>{
+        'sessionId': 's1',
+        'messageMenus': <String, Object?>{
+          'user': <Object?>[
+            <String, Object?>{'id': 'copy', 'label': '复制文本'},
+          ],
+        },
+      });
+      expect(snapshot.menusFor('tool'), isEmpty);
+      expect(snapshot.menusFor('assistant'), isEmpty);
+      expect(ChatSnapshot.fromJson(<String, Object?>{}).menusFor('user'), isEmpty);
+    });
+  });
 }
