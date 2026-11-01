@@ -156,6 +156,7 @@ const INTERACTIVE_SELECTOR = [
   ".md-table",
   ".md-list",          // 缩进列表可能被用户横向拖看
   ".composer-chips",
+  ".sub--chips",      // 顶栏的模型 / 思考 / 历史 一排：窄屏会横向滑动
   ".ask-card",
   ".ask-input",
   ".ws-preview",

@@ -1015,13 +1015,15 @@ body.barcode-scanner-active .scan-overlay {
 
 /* ---------------------------- 多设备 ---------------------------- */
 
-/* 顶栏设备 chip：只有多台设备时才出现 */
+/* 顶栏设备 chip：只有多台设备时才出现。
+   它和标题是竞争关系（最多 8 台设备时名字可能很长），所以封顶 30vw 且允许被压缩 */
 .device-chip {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 34vw;
+  max-width: 30vw;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text-dim);
@@ -2228,7 +2230,7 @@ body.barcode-scanner-active .scan-overlay {
   background: color-mix(in oklab, var(--danger) 12%, transparent);
 }
 
-/* 输入框右下角的按钮组：排队/插话 + 历史 */
+/* 输入框右下角的按钮组：现在只剩「排队 / 插话」（历史已上提到顶栏） */
 .composer-fabs {
   position: absolute;
   right: 10px;
@@ -2238,7 +2240,7 @@ body.barcode-scanner-active .scan-overlay {
   gap: 6px;
 }
 
-/* 历史按钮：与左侧 @ / 同一水平线 */
+/* 历史按钮的圆角 pill 样式已改用 .chip--header；这条只管运行中的「排队 / 插话」 */
 .composer-fab {
   height: 24px;
   padding: 0 10px;
@@ -2478,6 +2480,36 @@ body.barcode-scanner-active .scan-overlay {
 
 .chip--muted {
   color: var(--text-dim);
+}
+
+/* ---------------------------- 顶栏第二行的模型 / 思考 / 历史 chip ---------------------------- */
+
+/* 原来这行是一句纯文本「模型 · 思考 高」，现在换成三个按钮。
+   空间不够时横向滑动（不挤压标题、不换行），单个 chip 自己封顶 42vw */
+.header .sub--chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  /* 覆盖 .header .sub 的 overflow:hidden，否则右侧的 chip 直接被剪掉看不到 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.header .sub--chips::-webkit-scrollbar {
+  display: none;
+}
+
+/* 分隔点已去掉：三个 chip 本身有边框，靠 gap 就够区分 */
+.chip--header {
+  padding: 3px 9px;
+  font-size: 11px;
+  line-height: 1.35;
+  max-width: 42vw;
+  /* 在横向滑动的那行里保持自然宽度，让容器去滚，而不是把自己压成省略号 */
+  flex: none;
 }
 
 /* 运行中的「排队 / 插话」样式见 .composer-fab--queue（在输入框右下角按钮组里） */

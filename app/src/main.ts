@@ -880,7 +880,8 @@ function renderMain(): void {
 
   const headerTitle = h("div", { class: "title", text: "PiDeck" });
   const headerMeta = h("div", { class: "meta-line", text: "" });
-  const headerSub = h("div", { class: "sub", text: "" });
+  /** 标题下面那行：原来是「模型名 · 思考 高」纯文本，现在是两个可点的 chip */
+  const headerSub = h("div", { class: "sub sub--chips" });
   const menuBtn = h("button", { class: "icon-btn", title: "项目与会话", text: "☰" });
   const workspaceBtn = h("button", { class: "icon-btn", title: "工作区（Git / 文件）", text: "▤" });
   const deviceBtn = h("button", { class: "device-chip is-hidden", title: "切换设备" });
@@ -901,8 +902,18 @@ function renderMain(): void {
   const primaryBtn = h("button", { class: "btn btn-primary-action", text: "发送", title: "发送（Enter）" });
   const mentionBtn = h("button", { class: "chip chip--icon", text: "@", title: "引用项目内文件" });
   const slashBtn = h("button", { class: "chip chip--icon", text: "/", title: "斜线命令" });
-  const modelBtn = h("button", { class: "chip", text: "模型", title: "选择模型" });
-  const thinkingBtn = h("button", { class: "chip", text: "思考", title: "选择思考档位" });
+  const modelBtn = h("button", { class: "chip chip--header", text: "模型", title: "选择模型" });
+  const thinkingBtn = h("button", { class: "chip chip--header", text: "思考", title: "选择思考档位" });
+  // 跳转历史消息：原来在输入框右下角，现在也搬到这行
+  const historyBtn = h("button", {
+    class: "chip chip--header",
+    title: "跳转到历史消息",
+    text: "历史",
+    "aria-label": "跳转到历史消息",
+  });
+  // 顶栏第二行：模型 / 思考档位 / 历史（都从输入框区域搬上来）
+  // 不放在右侧动作区：多设备时那里还要摆设备名 + 工作区，会直接把标题挤没
+  headerSub.append(modelBtn, thinkingBtn, historyBtn);
   // 安全级别（pi 会话的会话级工具权限）：只有桌面端 0.9.9+ 下发 state.security 时才出现
   const securityBtn = h("button", {
     class: "chip is-hidden",
@@ -948,18 +959,12 @@ function renderMain(): void {
   imageInput.multiple = true;
   imageInput.hidden = true;
   const inputTools = h("div", { class: "composer-inline-tools" }, [mentionBtn, promptBtn, planBtn, slashBtn, attachBtn]);
-  const historyFab = h("button", {
-    class: "composer-fab",
-    title: "跳转到历史消息",
-    text: "历史",
-    "aria-label": "跳转到历史消息",
-  });
-  /** 输入框右下角的按钮组：排队发送 + 历史 */
-  const fabs = h("div", { class: "composer-fabs" }, [queueSendBtn, historyFab]);
+  /** 输入框右下角的按钮组：只剩「排队 / 插话」（历史已上提到顶栏） */
+  const fabs = h("div", { class: "composer-fabs" }, [queueSendBtn]);
   const composerInput = h("div", { class: "composer-input" }, [composer, inputTools, fabs]);
   /** 待发送的图片缩略图（有图才占位） */
   const attachmentsEl = h("div", { class: "composer-attachments is-hidden" });
-  const chips = h("div", { class: "composer-chips" }, [modelBtn, thinkingBtn, securityBtn, dshBtn, contextBtn]);
+  const chips = h("div", { class: "composer-chips" }, [securityBtn, dshBtn, contextBtn]);
   const todoStrip = createTodoStrip();
   const subagentStrip = createSubagentStrip();
   // 记住用户手动折叠的选择（优先于「有进行中就自动展开」）
@@ -1116,7 +1121,7 @@ function renderMain(): void {
   workspaceBtn.addEventListener("click", () => toggleWorkspacePanel());
   deviceBtn.addEventListener("click", () => openEndpointSheet());
   wsScrim.addEventListener("click", () => closeWorkspacePanel());
-  historyFab.addEventListener("click", () => openSentHistorySheet());
+  historyBtn.addEventListener("click", () => openSentHistorySheet());
   mentionBtn.addEventListener("click", () => void openMentionSheet());
   slashBtn.addEventListener("click", () => void openSlashSheet());
   modelBtn.addEventListener("click", () => void openModelSheet());
@@ -1370,8 +1375,9 @@ function renderHeader(state: PiDeckState): void {
   }
   refs.headerMeta.classList.toggle("is-running", view.isRunning);
   refs.headerMeta.style.display = view.meta ? "" : "none";
-  if (refs.headerSub.textContent !== view.subtitle) refs.headerSub.textContent = view.subtitle;
-  refs.headerSub.style.display = view.subtitle ? "" : "none";
+  // 副标题已经是两个 chip（模型 / 思考），纯文本只留给无障碍读屏
+  if (view.subtitle) refs.headerSub.setAttribute("aria-label", view.subtitle);
+  else refs.headerSub.removeAttribute("aria-label");
 
   if (refs.headerDot) {
     refs.headerDot.classList.toggle("is-running", view.isRunning);
