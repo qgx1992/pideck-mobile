@@ -130,6 +130,10 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   （`createSettingsHandlers()`）。别在 Flutter 侧另存一份状态，也别往 handler 里加第二份逻辑。
 - 需要「一定成功」的返回动作走专用方法让宿主直接 `finish()`（`closeHost()`），
   不要绕 WebView 转一圈。
+- **Flutter 页面里不许写死颜色**：一律 `PiColors.of(context)`（`flutter_module/lib/app_theme.dart`
+  的 `ThemeExtension`，深浅两套由 `buildPiTheme(Brightness)` 挂上去）。主题的唯一来源是 Web 侧
+  `theme.mode`，经 `setSettings` 推送 → `themeModeFrom()` → `MaterialApp.themeMode`；
+  Flutter 侧不存主题，也不要自己读 `MediaQuery.platformBrightness`（0.1.23 踩过：页面写死深色）。
 
 ## 改动完成后必须跑的验证
 

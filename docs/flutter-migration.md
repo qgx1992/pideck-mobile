@@ -190,6 +190,28 @@ Web 版代码**保留不删**，它是回退路径。
 
 `ui/settings-view.ts` 里原来的「实验 → Flutter 混合栈页面」入口已删掉——设置页自己就是 Flutter 版了。
 
+### 主题跟随（0.1.23）
+
+Flutter 页**不自己存主题**，它跟着 WebView 的 `theme.mode` 走：
+
+```
+Web 侧改主题 → setThemeMode() → renderSettings()
+            → pushFlutterSettings(JSON)  ──▶  _applyJson()
+            → widget.onThemeModeChanged(themeModeFrom(data.theme.mode))
+            → PiDeckFlutterApp 的 ValueNotifier<ThemeMode> → MaterialApp.themeMode
+```
+
+- 颜色不放顶层常量（原来是 `piBackground` 这类），改成 `PiColors extends ThemeExtension<PiColors>`，
+  由 `buildPiTheme(Brightness)` 挂到 `ThemeData.extensions`，页面里 `PiColors.of(context)` 取。
+  好处是切换主题时整棵树重建、颜色自动跟着走，不用在 MaterialApp 和每个 widget 之间传参。
+- `main()` 里先 `loadInitialSettings()` 再 `runApp()`，用 `_themeModeOf()` 算出首帧主题：
+  否则浅色用户会先看到一下深色再跳过去。
+- `SettingsScreen` 收 `initialJson`，非空时直接打底（`_seed()`），不再走一次 `getSettings` 往返。
+- `system` 原样交给 `MaterialApp.themeMode = ThemeMode.system`，让 Flutter 自己跟系统，
+  和 Web 侧 `matchMedia` 的判断结果一致。
+
+**后面迁别的页照这个模式**：页面里不许出现 `Color(0x...)` 字面量，一律从 `PiColors.of(context)` 取。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：

@@ -17,7 +17,15 @@ import 'settings_models.dart';
 /// 一半是服务端概况（模型/技能/扩展/DSH），自己请求就等于重写一遍协议。
 /// 先按「视图迁移」走完，之后要独立再逐块把数据源搬过来。
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({super.key, this.initialJson = '', this.onThemeModeChanged});
+
+  /// 宿主在打开本页之前 push 的那份数据。非空时首帧就是完整内容，
+  /// 不用等一次 `getSettings` 往返（避免先闪一下「正在读取设置…」）。
+  final String initialJson;
+
+  /// 主题变化回调。设置页只负责把 `theme.mode` 报上去，
+  /// 真正换肤的是 `PiDeckFlutterApp` 里的 `MaterialApp.themeMode`。
+  final ValueChanged<ThemeMode>? onThemeModeChanged;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -31,7 +39,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     bindHostChannel(onSettings: _applyJson, onNotice: _showNotice);
-    _load();
+    if (!_seed(widget.initialJson)) _load();
+  }
+
+  /// 用宿主给的初始数据打底；解析不出来就返回 false，交给 `_load()` 去拉。
+  bool _seed(String raw) {
+    if (raw.trim().isEmpty) return false;
+    try {
+      _data = SettingsData.fromJson(mapOf(jsonDecode(raw)));
+      _gotData = true;
+      widget.onThemeModeChanged?.call(themeModeFrom(_data.theme.mode));
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _load() async {
@@ -49,6 +70,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _data = data;
         _gotData = true;
       });
+      // Web 侧改完主题会重新 push 一份数据过来，这里跟着换肤。
+      widget.onThemeModeChanged?.call(themeModeFrom(data.theme.mode));
     } catch (error) {
       // 解析失败不能白屏：保留上一份数据，只提示一句
       _showNotice('设置数据解析失败：$error');
@@ -70,10 +93,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
     return Scaffold(
-      backgroundColor: piBackground,
+      backgroundColor: c.background,
       appBar: AppBar(
-        backgroundColor: piBackground,
+        backgroundColor: c.background,
         surfaceTintColor: Colors.transparent,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, size: 20),
@@ -448,12 +472,13 @@ class _DshPluginTileState extends State<_DshPluginTile> {
 
   @override
   Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
     final plugin = widget.plugin;
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
-        color: piSurfaceAlt,
+        color: c.surfaceAlt,
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
@@ -475,10 +500,10 @@ class _DshPluginTileState extends State<_DshPluginTile> {
                         padding: const EdgeInsets.only(top: 3),
                         child: Text(
                           plugin.subtitle,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11.5,
                             height: 1.45,
-                            color: piTextMuted,
+                            color: c.textMuted,
                           ),
                         ),
                       ),
@@ -488,7 +513,7 @@ class _DshPluginTileState extends State<_DshPluginTile> {
               const SizedBox(width: 8),
               Text(
                 plugin.valueLabel,
-                style: const TextStyle(fontSize: 12, color: piTextMuted),
+                style: TextStyle(fontSize: 12, color: c.textMuted),
               ),
             ],
           ),
@@ -540,11 +565,12 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
     return Container(
       margin: const EdgeInsets.only(top: 12),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
       decoration: BoxDecoration(
-        color: piSurface,
+        color: c.surface,
         borderRadius: BorderRadius.circular(14),
       ),
       child: Column(
@@ -554,11 +580,11 @@ class _Section extends StatelessWidget {
             padding: const EdgeInsets.only(left: 2, bottom: 8),
             child: Text(
               title,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.3,
-                color: piTextMuted,
+                color: c.textMuted,
               ),
             ),
           ),
@@ -586,6 +612,7 @@ class _Row extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
     final content = Padding(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
       child: Row(
@@ -599,7 +626,7 @@ class _Row extends StatelessWidget {
                   label,
                   style: TextStyle(
                     fontSize: 13.5,
-                    color: highlight ? piAccent : Colors.white,
+                    color: highlight ? c.accent : c.text,
                   ),
                 ),
                 if (sub.isNotEmpty)
@@ -607,10 +634,10 @@ class _Row extends StatelessWidget {
                     padding: const EdgeInsets.only(top: 3),
                     child: Text(
                       sub,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11.5,
                         height: 1.45,
-                        color: piTextMuted,
+                        color: c.textMuted,
                       ),
                     ),
                   ),
@@ -622,7 +649,7 @@ class _Row extends StatelessWidget {
             value,
             style: TextStyle(
               fontSize: 12.5,
-              color: highlight ? piAccent : piTextMuted,
+              color: highlight ? c.accent : c.textMuted,
             ),
           ),
         ],
@@ -654,6 +681,7 @@ class _SwitchRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
     return InkWell(
       onTap: disabled ? null : () => onChanged(!value),
       borderRadius: BorderRadius.circular(8),
@@ -670,7 +698,7 @@ class _SwitchRow extends StatelessWidget {
                     label,
                     style: TextStyle(
                       fontSize: 13.5,
-                      color: disabled ? Colors.white38 : Colors.white,
+                      color: disabled ? c.textMuted : c.text,
                     ),
                   ),
                   if (sub.isNotEmpty)
@@ -678,10 +706,10 @@ class _SwitchRow extends StatelessWidget {
                       padding: const EdgeInsets.only(top: 3),
                       child: Text(
                         sub,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11.5,
                           height: 1.45,
-                          color: piTextMuted,
+                          color: c.textMuted,
                         ),
                       ),
                     ),
@@ -692,7 +720,7 @@ class _SwitchRow extends StatelessWidget {
             Switch(
               value: value,
               onChanged: disabled ? null : onChanged,
-              activeThumbColor: piAccent,
+              activeThumbColor: c.accent,
             ),
           ],
         ),
@@ -718,6 +746,7 @@ class _FoldState extends State<_Fold> {
 
   @override
   Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -731,7 +760,7 @@ class _FoldState extends State<_Fold> {
                 Icon(
                   _open ? Icons.expand_more : Icons.chevron_right,
                   size: 16,
-                  color: piTextMuted,
+                  color: c.textMuted,
                 ),
                 const SizedBox(width: 4),
                 Expanded(
@@ -739,7 +768,7 @@ class _FoldState extends State<_Fold> {
                 ),
                 Text(
                   '${widget.count}',
-                  style: const TextStyle(fontSize: 11.5, color: piTextMuted),
+                  style: TextStyle(fontSize: 11.5, color: c.textMuted),
                 ),
               ],
             ),
@@ -766,6 +795,7 @@ class _Hint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(2, 6, 2, 8),
       child: Text(
@@ -773,7 +803,7 @@ class _Hint extends StatelessWidget {
         style: TextStyle(
           fontSize: 11.5,
           height: 1.5,
-          color: error ? piDanger : piTextMuted,
+          color: error ? c.danger : c.textMuted,
         ),
       ),
     );
@@ -793,16 +823,17 @@ class _ChoiceButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(9),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: active ? piAccent.withValues(alpha: 0.18) : piSurfaceAlt,
+          color: active ? c.accent.withValues(alpha: 0.18) : c.surfaceAlt,
           borderRadius: BorderRadius.circular(9),
           border: Border.all(
-            color: active ? piAccent : Colors.transparent,
+            color: active ? c.accent : Colors.transparent,
             width: 1,
           ),
         ),
@@ -810,7 +841,7 @@ class _ChoiceButton extends StatelessWidget {
           label,
           style: TextStyle(
             fontSize: 12.5,
-            color: active ? piAccent : Colors.white70,
+            color: active ? c.accent : c.textSecondary,
           ),
         ),
       ),
@@ -833,11 +864,12 @@ class _PillButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
     final Color base = danger
-        ? piDanger
+        ? c.danger
         : primary
-        ? piAccent
-        : piTextMuted;
+        ? c.accent
+        : c.textMuted;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(9),
@@ -851,7 +883,7 @@ class _PillButton extends StatelessWidget {
         ),
         child: Text(
           label,
-          style: TextStyle(fontSize: 12.5, color: base == piTextMuted ? Colors.white70 : base),
+          style: TextStyle(fontSize: 12.5, color: base == c.textMuted ? c.textSecondary : base),
         ),
       ),
     );
@@ -871,7 +903,8 @@ class _MiniButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color base = danger ? piDanger : piTextMuted;
+    final PiColors c = PiColors.of(context);
+    final Color base = danger ? c.danger : c.textMuted;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(7),
@@ -885,7 +918,7 @@ class _MiniButton extends StatelessWidget {
           label,
           style: TextStyle(
             fontSize: 11.5,
-            color: danger ? piDanger : Colors.white70,
+            color: danger ? c.danger : c.textSecondary,
           ),
         ),
       ),
@@ -901,6 +934,7 @@ class _TextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final PiColors c = PiColors.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 6),
       child: TextField(
@@ -908,9 +942,9 @@ class _TextField extends StatelessWidget {
         style: const TextStyle(fontSize: 13),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: const TextStyle(fontSize: 12, color: piTextMuted),
+          hintStyle: TextStyle(fontSize: 12, color: c.textMuted),
           filled: true,
-          fillColor: piSurfaceAlt,
+          fillColor: c.surfaceAlt,
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           border: OutlineInputBorder(
