@@ -113,10 +113,14 @@ class ProbeRecorder {
   }
 
   /// 只从 JSON 帧里取 `type`，取不到就当普通事件。
+  ///
+  /// 注意字符集：pi 的帧类型是 kebab-case（`reasoning-delta` / `text-delta` /
+  /// `tool-input-start`…），只写 `[a-zA-Z_]` 会把它们全判成「非 JSON 帧」——
+  /// 踩过：0.1.24 的报告里 165 帧被记成 `event:message`，其实是正常的 JSON。
   String? _typeOf(String data) {
     final String trimmed = data.trimLeft();
     if (!trimmed.startsWith('{')) return null;
-    final RegExpMatch? match = RegExp(r'"type"\s*:\s*"([a-zA-Z_]+)"').firstMatch(trimmed);
+    final RegExpMatch? match = RegExp(r'"type"\s*:\s*"([a-zA-Z0-9_-]+)"').firstMatch(trimmed);
     return match?.group(1);
   }
 
@@ -166,3 +170,20 @@ String fmtMs(int? ms) {
   if (ms < 1000) return '${ms}ms';
   return '${(ms / 1000).toStringAsFixed(2)}s';
 }
+
+/// 一组时间戳的相邻间隔（跳过第 0 个）。
+List<int> gapsOf(List<int> timesMs) {
+  final List<int> out = <int>[];
+  for (int i = 1; i < timesMs.length; i++) {
+    out.add(timesMs[i] - timesMs[i - 1]);
+  }
+  return out;
+}
+
+int? medianOf(List<int> values) {
+  if (values.isEmpty) return null;
+  final List<int> sorted = values.toList()..sort();
+  return sorted[sorted.length ~/ 2];
+}
+
+int? maxOf(List<int> values) => values.isEmpty ? null : values.reduce((a, b) => a > b ? a : b);

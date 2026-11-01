@@ -43,6 +43,23 @@ class SseProbeController extends ChangeNotifier {
   /// 后台窗口（进入后台 → 回到前台）里流是否还活着。
   String backgroundVerdict = '未测试';
 
+  /// 从发起 GET 到收到响应头 —— 含 DNS / TCP / 代理与 Tailscale 路径建立。
+  /// 踩过：0.1.24 报告里「首帧 4.93s」其实是这一段，不是服务端攼包。
+  int? connectMs;
+
+  /// prompt 投递出去的时刻（相对起点）。
+  int? promptSentMs;
+
+  /// 回放帧（prompt 之前，服务端重放历史）与实时帧（prompt 之后）。
+  /// 不分开统计的话，「中位间隔 0ms」会把回放的一陀误读成流式性能。
+  int replayFrames = 0;
+  int liveFrames = 0;
+  int? firstLiveFrameMs;
+  final List<int> liveTimesMs = <int>[];
+
+  /// 前几帧原始内容（截断），报告里带上，下次不用猜帧格式。
+  final List<String> samples = <String>[];
+
   void _write(String line) {
     final String stamp = _clock.elapsedMilliseconds == 0
         ? '+0ms'
@@ -74,6 +91,13 @@ class SseProbeController extends ChangeNotifier {
     recorder.finishMs = null;
     promptToFirstFrameMs = null;
     backgroundVerdict = '未测试';
+    connectMs = null;
+    promptSentMs = null;
+    replayFrames = 0;
+    liveFrames = 0;
+    firstLiveFrameMs = null;
+    liveTimesMs.clear();
+    samples.clear();
     log.clear();
     _aborted = false;
     _clock
@@ -145,8 +169,9 @@ class SseProbeController extends ChangeNotifier {
     final int promptMs = _clock.elapsedMilliseconds;
     final HttpClientResponse response = await request.close();
     final String body = await response.transform(utf8.decoder).join();
+    promptSentMs = promptMs;
     _write('prompt → HTTP ${response.statusCode}（${body.length} 字符）');
-    promptToFirstFrameMs = recorder.firstMs == null ? null : recorder.firstMs! - promptMs;
+    promptToFirstFrameMs = firstLiveFrameMs == null ? null : firstLiveFrameMs! - promptMs;
   }
 
   Future<void> _consume(String path, {required int stopAfterMs, required bool stopOnFinish}) async {
@@ -170,6 +195,8 @@ class SseProbeController extends ChangeNotifier {
       return;
     }
     _write('HTTP ${response.statusCode} ${response.headers.contentType ?? ""}');
+    connectMs = _clock.elapsedMilliseconds;
+    _write('连上（含建连 ${connectMs}ms）');
     if (response.statusCode != HttpStatus.ok) {
       final String body = await response.transform(utf8.decoder).join();
       _write('响应体：${body.length > 200 ? "${body.substring(0, 200)}…" : body}');
@@ -182,7 +209,22 @@ class SseProbeController extends ChangeNotifier {
       await for (final String chunk in response.transform(utf8.decoder)) {
         if (_aborted) break;
         for (final SseEvent event in parser.feed(chunk)) {
-          recorder.record(_clock.elapsedMilliseconds, event);
+          final int ms = _clock.elapsedMilliseconds;
+          recorder.record(ms, event);
+          if (promptSentMs == null) {
+            replayFrames += 1;
+          } else {
+            liveFrames += 1;
+            liveTimesMs.add(ms);
+            firstLiveFrameMs ??= ms;
+            promptToFirstFrameMs ??= ms - promptSentMs!;
+          }
+          if (samples.length < 3) {
+            final String head = event.data.length > 180
+                ? '${event.data.substring(0, 180)}…'
+                : event.data;
+            samples.add('${event.event ?? "message"}: $head');
+          }
         }
         if (recorder.eventCount > 0 && recorder.eventCount % 20 == 0) notifyListeners();
         if (stopOnFinish && recorder.finishMs != null) {
@@ -218,20 +260,32 @@ class SseProbeController extends ChangeNotifier {
 
   /// 供「复制报告」用的纯文本。
   String report() {
+    final int? firstFrameAfterConnect =
+        (recorder.firstMs == null || connectMs == null) ? null : recorder.firstMs! - connectMs!;
+    final List<int> liveGaps = gapsOf(liveTimesMs);
     final StringBuffer out = StringBuffer()
       ..writeln('PiDeck 流式探针报告')
       ..writeln('时间：${DateTime.now().toIso8601String()}')
       ..writeln('服务：$baseUrl')
       ..writeln('会话：${sessionId.isEmpty ? "(无)" : sessionId}')
       ..writeln('用例：$_label')
-      ..writeln('事件数：${recorder.eventCount}')
-      ..writeln('字符数：${recorder.chars}')
-      ..writeln('首帧延迟：${fmtMs(recorder.firstMs)}')
+      ..writeln('建连耗时：${fmtMs(connectMs)}')
+      ..writeln('首帧延迟（从开始到第一帧）：${fmtMs(recorder.firstMs)}')
+      ..writeln('首帧延迟（建连之后）：${fmtMs(firstFrameAfterConnect)}')
       ..writeln('prompt→首帧：${fmtMs(promptToFirstFrameMs)}')
+      ..writeln('事件数：${recorder.eventCount}（回放 $replayFrames / 实时 $liveFrames）')
+      ..writeln('字符数：${recorder.chars}')
       ..writeln('帧间隔 中位/平均/最长：${fmtMs(recorder.medianGapMs)} / ${fmtMs(recorder.avgGapMs)} / ${fmtMs(recorder.maxGapMs)}')
+      ..writeln('实时帧间隔 中位/最长：${fmtMs(medianOf(liveGaps))} / ${fmtMs(maxOf(liveGaps))}')
       ..writeln('整轮耗时：${fmtMs(recorder.finishMs)}')
       ..writeln('帧类型：${recorder.typeSummary}')
       ..writeln('后台判定：$backgroundVerdict');
+    if (samples.isNotEmpty) {
+      out.writeln('首帧样本：');
+      for (final String sample in samples) {
+        out.writeln('  $sample');
+      }
+    }
     return out.toString();
   }
 

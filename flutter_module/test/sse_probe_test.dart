@@ -65,6 +65,19 @@ void main() {
       expect(recorder.types['event:state'], 1);
     });
 
+    test('kebab-case 帧类型要能识别（0.1.24 就在这里翻过车）', () {
+      final recorder = ProbeRecorder();
+      recorder.record(1, const SseEvent(data: '{"type":"reasoning-delta","id":"x"}'));
+      recorder.record(2, const SseEvent(data: '{"type":"tool-input-start","toolCallId":"c"}'));
+      recorder.record(3, const SseEvent(data: '{"type":"text-delta","text":"hi"}'));
+      recorder.record(4, const SseEvent(data: '{"type":"tool-call-end"}'));
+      expect(recorder.types['reasoning-delta'], 1);
+      expect(recorder.types['tool-input-start'], 1);
+      expect(recorder.types['text-delta'], 1);
+      expect(recorder.types['tool-call-end'], 1);
+      expect(recorder.types.containsKey('event:message'), isFalse);
+    });
+
     test('后台期间的事件单独计数', () {
       final recorder = ProbeRecorder();
       recorder.record(10, const SseEvent(data: '{"type":"text_delta"}'));
@@ -89,5 +102,15 @@ void main() {
     expect(fmtMs(null), '—');
     expect(fmtMs(340), '340ms');
     expect(fmtMs(1234), '1.23s');
+  });
+
+  test('gapsOf / medianOf / maxOf 是纯函数，空输入返回 null', () {
+    expect(gapsOf(<int>[100, 150, 400]), [50, 250]);
+    expect(medianOf(<int>[50, 250]), 250);
+    expect(medianOf(<int>[50, 50, 250]), 50);
+    expect(maxOf(<int>[50, 50, 250]), 250);
+    expect(medianOf(const <int>[]), isNull);
+    expect(maxOf(const <int>[]), isNull);
+    expect(gapsOf(<int>[7]), isEmpty);
   });
 }

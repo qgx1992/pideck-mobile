@@ -239,7 +239,36 @@ Web 侧改主题 → setThemeMode() → renderSettings()
 - 首帧延迟要分两个：`firstMs`（连上流到第一帧）和 `prompt→首帧`（发消息到第一帧）——
   后者才是用户感知的延迟。
 
-**待填：实测结论**（跑完把报告贴进来，然后决定第 3 条的走法）。
+### 实测结论（第一轮，0.1.24 报告 + 本机 TCP 层复核）
+
+先纠一个误读：第一份手机报告里「首帧 4.93s / 中位间隔 0ms / `event:message×165`」
+**三条都不是服务端的问题**，而是三个不同原因叠在一起：
+
+| 现象 | 真实原因 |
+|---|---|
+| 首帧 4.93s | 手机连的是 Tailscale 地址（`100.113.205.15:8765`），建连 + 回放传输吃掉了这 5 秒。本机直连首帧 80ms |
+| 中位间隔 0ms、平均 6ms | 那是**历史回放**：连上会话流后服务端把整段历史一口气推过来（本会话 155 帧 / 146 KB），不是实时生成 |
+| `event:message×165` | 探针自己的 bug：`type` 的正则写成 `[a-zA-Z_]+`，而 pi 的帧类型是 kebab-case（`reasoning-delta` / `tool-input-start` / `start-step`…），全部没认出来。0.1.25 已修 |
+
+复核方法（不用手机，直接量服务端行为）：
+
+```bash
+dart run tool/probe_cli.dart "http://127.0.0.1:8765/api/sessions/<id>/stream?token=<token>" 5
+```
+
+`tool/probe_cli.dart` 用的是**同一套** `SseEventParser` + `ProbeRecorder`，只是跑在桌面。结论：
+
+- **服务端不攒包**。TCP 层实测：0.001s 就吐出 28,859 字节（几十帧），之后 15s 没有新数据。
+  每帧一个 chunk（`38\r\n` / `48\r\n` 这种 chunked 长度），`curl -N` 和 Dart `HttpClient` 都是逐块回调。
+- **帧格式**：`data: {"type":"<kebab-case>", ...}\n\n`，纯 JSON，`event:` 字段不填（所以是默认 message）。
+- **会话流连上就整段回放**（本会话 155 帧 / 146 KB，`.gitignore` 之外的第二个理由别把探针指向长会话）。
+  聊天页接流时必须区分「回放」与「实时」—— 0.1.25 的报告已分成「回放 N / 实时 M」两栏。
+
+**还没测出来的那一条**：App 切后台后流是否还在（Dart isolate 被挂起 vs 原生前台服务保活）。
+第一轮报告写的是「测试期间没切过后台」，所以聊天页走法仍待定：
+
+- 后台 0 帧 → 聊天页得继续用原生 `SsePlugin` 保活，Dart 只做渲染；
+- 后台有帧 → 可以 Dart 直连，`SsePlugin` 只在锁屏场景兜底。
 
 ## 逐页迁移顺序（建议）
 
