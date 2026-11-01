@@ -264,11 +264,41 @@ dart run tool/probe_cli.dart "http://127.0.0.1:8765/api/sessions/<id>/stream?tok
 - **会话流连上就整段回放**（本会话 155 帧 / 146 KB，`.gitignore` 之外的第二个理由别把探针指向长会话）。
   聊天页接流时必须区分「回放」与「实时」—— 0.1.25 的报告已分成「回放 N / 实时 M」两栏。
 
-**还没测出来的那一条**：App 切后台后流是否还在（Dart isolate 被挂起 vs 原生前台服务保活）。
-第一轮报告写的是「测试期间没切过后台」，所以聊天页走法仍待定：
+### 实测结论（第二轮：后台保活，已定案）
 
-- 后台 0 帧 → 聊天页得继续用原生 `SsePlugin` 保活，Dart 只做渲染；
-- 后台有帧 → 可以 Dart 直连，`SsePlugin` 只在锁屏场景兜底。
+第二份报告（只读 `/api/events`，手机走 Tailscale）：
+
+```
+事件数：5    字符数：254424    首帧延迟：204ms
+帧间隔 中位/平均/最长：5.00s / 6.16s / 10.01s
+帧类型：event:state×5
+后台判定：后台期间 0 帧 —— 流被挂起或已断（需要原生保活）
+```
+
+读法（两件事跟第一轮不一样）：
+
+- **`event:state` 不是 bug**。`/api/events` 发的是 `event: state` + `data: <全量状态快照>`，
+  快照里没有 `type` 字段，所以归类就落到 `event:<event 名>`。本机复核：一帧约 **52 KB**，
+  心跳 **5 秒**一次全量快照（不是增量）。聊天页若接这个流，得注意每 5 秒解析一份 50 KB JSON。
+- **首帧 204ms**（vs 会话流的 4.93s）—— 因为 `/api/events` 没有历史回放，差别全在回放上。
+
+**定案：聊天页不自己直连，继续走原生 `SsePlugin` 保活，Dart 只负责渲染。**
+
+理由不是「Dart 不行」，而是：
+
+1. 后台 0 帧 —— 手机一进后台，Dart isolate 被挂起，`HttpClient` 的 socket 虽然可能还开着，
+   但没人消费（心跳 5s 都收不到），这与现有 `SsePlugin` + 前台服务 + 看门狗的语义不兼容。
+2. 现有 `SsePlugin` 已经带了一堆难换的东西：16ms 合并窗口、`FLUSH_THRESHOLD_CHARS=2048`、
+   读超时 0（不主动断流）、JS 侧 50s 看门狗、后台保活。在 Flutter 里重写一套等于把这些坑再踩一遍。
+3. 真要在 Dart 里做，得配 `flutter_local_notifications` + 前台服务 + 唤醒锁，
+   那还不如直接复用已经验证过的原生链路。
+
+所以聊天页的形态是：**原生 `SsePlugin` 读流 → 过桥给 Dart → Dart 渲染列表**，
+Dart 侧只需要一个「增量合并 + 虚拟列表 + 滚动锁定」，这正好是 Flutter 的强项。
+
+> 后台判定这一条是在约 10 秒的后台窗口里测出来的（帧间隔里的 10.01s 就是那一次）。
+> 0.1.26 把只读模式的时长改成可选 30s / 90s、报告里加了「后台停留」累计时长，
+> 要更硬的证据就用 90s 再跑一次、后台待满 60s。
 
 ## 逐页迁移顺序（建议）
 
@@ -287,10 +317,10 @@ dart run tool/probe_cli.dart "http://127.0.0.1:8765/api/sessions/<id>/stream?tok
      不要“关掉 Flutter 页回 WebView 弹原菜单”那条路（会闪一下，而且菜单状态在两边）。
      重做的代价是菜单内容要维护两处 —— 做的时候把菜单项也抽成数据（`{id, label, danger}`），
      让 Web 版和 Dart 版都从同一份数据渲染。
-3. **聊天页**：最难，卡在 SSE。`SsePlugin` 现在用 `HttpURLConnection` 读流，搬到 Dart 就是
-   `HttpClient().getUrl(...).then((r) => r.transform(utf8.decoder).transform(LineSplitter()))`，
-   逻辑几乎 1:1；难点是 `RunWatchService` 的通知联动与流式滚动锚点（`ui/scroll-anchor.ts`）。
-   侧栏（`Drawer`）跟着这一页一起做，见上一条。
+3. **聊天页**：最难，卡在 SSE。**流式已定案（0.1.26）：继续用原生 `SsePlugin` 读流，Dart 只渲染**
+   （理由见上一节：后台 isolate 被挂起，0 帧）。所以这一页不需要 `dart:io` 直连，
+   需要的是：原生侧新增一个「把 SsePlugin 已有帧转发给 Flutter」的通道，Dart 侧做增量合并 +
+   虚拟列表 + 滚动锚点（`ui/scroll-anchor.ts` 的逻辑）。侧栏（`Drawer`）跟着这一页一起做，见上一条。
 4. **文件保存 / 扫码**：`file_picker` + `mobile_scanner` 两个 pub 包，`FileSaverPlugin` 里
    MediaStore 的那套要换成 `path_provider` + `share_plus`，行为差异最大，放最后。
 
@@ -298,7 +328,7 @@ dart run tool/probe_cli.dart "http://127.0.0.1:8765/api/sessions/<id>/stream?tok
 
 | Capacitor 插件 | Flutter 等价 |
 |---|---|
-| `SsePlugin` | `dart:io HttpClient` + `StreamTransformer`（无插件依赖） |
+| `SsePlugin` | 不换：原生读流，过桥给 Dart 渲染（探针实测后台 0 帧，见上） |
 | `NavigationBarPlugin` | `SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(systemNavigationBarColor: ..., systemNavigationBarIconBrightness: ...))` |
 | `FileSaverPlugin` | `path_provider` + `share_plus`（或自写 MethodChannel 复用现成 Java 代码） |
 | `RunWatchPlugin` | `flutter_local_notifications` + 自写 MethodChannel；前台服务那段 Java 建议直接复用 |

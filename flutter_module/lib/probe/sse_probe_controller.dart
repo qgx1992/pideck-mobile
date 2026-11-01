@@ -60,6 +60,11 @@ class SseProbeController extends ChangeNotifier {
   /// 前几帧原始内容（截断），报告里带上，下次不用猜帧格式。
   final List<String> samples = <String>[];
 
+  /// 后台停留累计时长 / 次数 —— 没有这个数，后台结论没法读（5 秒的后台和 60 秒的差别很大）。
+  int backgroundTotalMs = 0;
+  int backgroundWindows = 0;
+  int? _backgroundStartMs;
+
   void _write(String line) {
     final String stamp = _clock.elapsedMilliseconds == 0
         ? '+0ms'
@@ -71,6 +76,14 @@ class SseProbeController extends ChangeNotifier {
 
   void markLifecycle(String state) {
     final bool nowBackground = state == 'paused' || state == 'hidden' || state == 'inactive';
+    final bool wasBackground = _backgroundStartMs != null;
+    if (nowBackground && !wasBackground) {
+      _backgroundStartMs = _clock.elapsedMilliseconds;
+      backgroundWindows += 1;
+    } else if (!nowBackground && wasBackground) {
+      backgroundTotalMs += _clock.elapsedMilliseconds - _backgroundStartMs!;
+      _backgroundStartMs = null;
+    }
     recorder.markBackground(nowBackground);
     _write(nowBackground ? 'App 进入后台（${_countAtBackground()} 帧）' : 'App 回到前台');
     if (!nowBackground && recorder.eventsWhileBackground == 0 && _running) {
@@ -98,6 +111,9 @@ class SseProbeController extends ChangeNotifier {
     firstLiveFrameMs = null;
     liveTimesMs.clear();
     samples.clear();
+    backgroundTotalMs = 0;
+    backgroundWindows = 0;
+    _backgroundStartMs = null;
     log.clear();
     _aborted = false;
     _clock
@@ -279,6 +295,7 @@ class SseProbeController extends ChangeNotifier {
       ..writeln('实时帧间隔 中位/最长：${fmtMs(medianOf(liveGaps))} / ${fmtMs(maxOf(liveGaps))}')
       ..writeln('整轮耗时：${fmtMs(recorder.finishMs)}')
       ..writeln('帧类型：${recorder.typeSummary}')
+      ..writeln('后台停留：${fmtMs(backgroundTotalMs)}（$backgroundWindows 次）')
       ..writeln('后台判定：$backgroundVerdict');
     if (samples.isNotEmpty) {
       out.writeln('首帧样本：');

@@ -38,6 +38,9 @@ class _SseProbePageState extends State<SseProbePage> with WidgetsBindingObserver
   );
   bool _turnMode = true;
 
+  /// 只读模式的时长。测后台保活得留够窗口（30s 装不下一次 60s 的后台停留）。
+  int _durationSeconds = 30;
+
   @override
   void initState() {
     super.initState();
@@ -119,13 +122,36 @@ class _SseProbePageState extends State<SseProbePage> with WidgetsBindingObserver
                   const SizedBox(width: 8),
                   Expanded(
                     child: _ModeChip(
-                      label: '只读 /api/events 30s',
+                      label: '只读 /api/events',
                       selected: !_turnMode,
                       onTap: probe.running ? null : () => setState(() => _turnMode = false),
                     ),
                   ),
                 ],
               ),
+              if (!_turnMode) ...<Widget>[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    for (final int seconds in const <int>[30, 90])
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: _ModeChip(
+                          label: '${seconds}s',
+                          selected: _durationSeconds == seconds,
+                          onTap: probe.running ? null : () => setState(() => _durationSeconds = seconds),
+                        ),
+                      ),
+                    Expanded(
+                      child: Text(
+                        '测后台保活选 90s',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(fontSize: 11, color: c.textMuted),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 10),
               if (_turnMode)
                 TextField(
@@ -157,7 +183,7 @@ class _SseProbePageState extends State<SseProbePage> with WidgetsBindingObserver
                             if (_turnMode) {
                               probe.runTurnProbe(message: _message.text.trim());
                             } else {
-                              probe.runEventsProbe();
+                              probe.runEventsProbe(seconds: _durationSeconds);
                             }
                           },
                     child: Text(probe.running ? '运行中…' : '开始'),
@@ -172,11 +198,14 @@ class _SseProbePageState extends State<SseProbePage> with WidgetsBindingObserver
             ]),
           const SizedBox(height: 10),
           _card(c, '摘要', <String>[
-            '事件数：${r.eventCount}    字符数：${r.chars}',
+            '事件数：${r.eventCount}（回放 ${probe.replayFrames} / 实时 ${probe.liveFrames}）    字符数：${r.chars}',
+            '建连耗时：${fmtMs(probe.connectMs)}',
             '首帧延迟：${fmtMs(r.firstMs)}    prompt→首帧：${fmtMs(probe.promptToFirstFrameMs)}',
             '帧间隔 中位/平均/最长：${fmtMs(r.medianGapMs)} / ${fmtMs(r.avgGapMs)} / ${fmtMs(r.maxGapMs)}',
+            '实时帧间隔 中位/最长：${fmtMs(medianOf(gapsOf(probe.liveTimesMs)))} / ${fmtMs(maxOf(gapsOf(probe.liveTimesMs)))}',
             '整轮耗时：${fmtMs(r.finishMs)}',
             '帧类型：${r.typeSummary}',
+            '后台停留：${fmtMs(probe.backgroundTotalMs)}（${probe.backgroundWindows} 次）',
             '后台判定：${probe.backgroundVerdict}',
           ]),
           const SizedBox(height: 10),
