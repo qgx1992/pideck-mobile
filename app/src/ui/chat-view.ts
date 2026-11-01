@@ -13,6 +13,7 @@ import { turnStatusText, turnStatusTitle } from "./turn-clock.ts";
 import type { TurnSpan } from "./turn-clock.ts";
 import { createProcessGroup, isProcessBlock, summarizeProcess } from "./process-group.ts";
 import { splitThinking, stripCompleteThinking } from "./thinking-tags.ts";
+import { jumpBehavior, topAlignedScrollTop } from "./scroll-anchor.ts";
 import {
   answeredCount,
   isAnswered,
@@ -575,12 +576,20 @@ export class ChatView {
     }
     if (!target) return false;
 
-    // jsdom / 老 WebView 可能没有 scrollIntoView，退化为直接改 scrollTop
-    if (typeof target.scrollIntoView === "function") {
-      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    // 对齐到消息「顶部」而不是居中：长消息居中会落在正文中间，看不到这条消息从哪开始
+    const desired = topAlignedScrollTop(
+      target.getBoundingClientRect().top,
+      this.scroll.getBoundingClientRect().top,
+      this.scroll.scrollTop,
+      this.scroll.scrollHeight,
+      this.scroll.clientHeight,
+    );
+    const behavior = jumpBehavior(desired - this.scroll.scrollTop, this.scroll.clientHeight);
+    if (typeof this.scroll.scrollTo === "function") {
+      this.scroll.scrollTo({ top: desired, behavior });
     } else {
-      const offset = target.offsetTop - this.scroll.clientHeight / 2;
-      this.scroll.scrollTop = Math.max(0, offset);
+      // jsdom / 老 WebView 没有 scrollTo：直接改 scrollTop
+      this.scroll.scrollTop = desired;
     }
     target.classList.remove("is-flash");
     // 强制重排，保证连续点同一条也能重新播放动画
