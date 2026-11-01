@@ -22,16 +22,19 @@ Flutter 的渲染是 Skia/Impeller 自绘 + 自己的引擎（libflutter.so）�
 
 | 位置 | 作用 |
 |---|---|
-| `flutter_module/lib/main.dart` | 入口：按 `route` 分派页面（`settings` → 设置页，其余落到占位页） |
-| `flutter_module/lib/host_channel.dart` | `pideck/flutter_host` 通道的 Dart 封装：`getArgs` / `getSettings` / `settingsAction` / `close`，以及订阅 `setSettings` / `showNotice` |
+| `flutter_module/lib/main.dart` | 入口：按 `route` 分派页面（`settings` / `chat` / `sse-probe`，其余落到占位页） |
+| `flutter_module/lib/host_channel.dart` | `pideck/flutter_host` 通道的 Dart 封装：`getArgs` / `getSettings` / `getChat` / `settingsAction` / `chatAction` / `close`，以及订阅 `setSettings` / `setChat` / `showNotice` |
 | `flutter_module/lib/settings/` | 设置页：`settings_models.dart`（JSON → 模型，有单测）+ `settings_page.dart`（纯 UI） |
+| `flutter_module/lib/chat/` | 聊天页：`chat_models.dart`（`ChatSnapshot` 解析，有单测）+ `markdown.dart`（手写极简 markdown，有单测）+ `markdown_view.dart`（块渲染）+ `chat_page.dart`（列表 / 贴底 / 提问卡 / 输入栏） |
+| `flutter_module/lib/probe/` | 流式探针（0.1.24，调试用，见后文） |
+| `app/src/platform/flutter-chat.ts` | 聊天桥：`historyItemsOf` / `buildChatSnapshot` / `FlutterChatMirror`（40ms 尾沿合并，有单测） |
 | `flutter_module/.android/` | Flutter 生成的 Android 宿主工程。**必须提交**（`include_flutter.groovy` 在里面），只忽略 `local.properties` 与 `build/` |
 | `app/android/settings.gradle` | `evaluate(include_flutter.groovy)`，把模块暴露成 Gradle 项目 `:flutter` |
 | `app/android/app/build.gradle` | `implementation project(':flutter')` |
-| `dev/pideck/mobile/FlutterHostActivity.java` | 承载 Flutter 页的 Activity（`FlutterFragmentActivity`），提供 `MethodChannel("pideck/flutter_host")`：`getArgs` / `getSettings` / `settingsAction` / `close`，反向 `setSettings` / `showNotice` |
-| `dev/pideck/mobile/FlutterLauncherPlugin.java` | Capacitor 插件 `FlutterHost`：`open` / `available` / `pushSettings` / `pushNotice` / `closePage`，事件 `pageVisibility` / `settingsAction` |
+| `dev/pideck/mobile/FlutterHostActivity.java` | 承载 Flutter 页的 Activity（`FlutterFragmentActivity`），提供 `MethodChannel("pideck/flutter_host")`：`getArgs` / `getSettings` / `getChat` / `settingsAction` / `chatAction` / `close`，反向 `setSettings` / `setChat` / `showNotice` |
+| `dev/pideck/mobile/FlutterLauncherPlugin.java` | Capacitor 插件 `FlutterHost`：`open` / `available` / `pushSettings` / `pushNotice` / `pushChat` / `closePage`，事件 `pageVisibility` / `settingsAction` / `chatAction` |
 | `dev/pideck/mobile/PiDeckApp.java` | 自定义 Application，用 Activity 计数维护 `isAppVisible()`（见下） |
-| `app/src/platform/flutter-host.ts` | 前端封装：`isFlutterHostAvailable` / `openFlutterPage` / `pushFlutterSettings` / `pushFlutterNotice` / `closeFlutterPage` / `onFlutterPageVisibility` / `onFlutterSettingsAction`。老包/浏览器环境静默返回 false / no-op |
+| `app/src/platform/flutter-host.ts` | 前端封装：`isFlutterHostAvailable` / `openFlutterPage` / `pushFlutterSettings` / `pushFlutterNotice` / `pushFlutterChat` / `closeFlutterPage` / `onFlutterPageVisibility` / `onFlutterSettingsAction` / `onFlutterChatAction`。老包/浏览器环境静默返回 false / no-op |
 
 启动链路：WebView 里点入口 → `FlutterHost.open()` → `startActivity(FlutterHostActivity)`
 → Flutter `main()` 通过 MethodChannel 取 `{route, sessionId}` → Flutter 页渲染 → 返回键 / 页面按钮 `close()`
@@ -300,6 +303,75 @@ Dart 侧只需要一个「增量合并 + 虚拟列表 + 滚动锁定」，这正
 > 0.1.26 把只读模式的时长改成可选 30s / 90s、报告里加了「后台停留」累计时长，
 > 要更硬的证据就用 90s 再跑一次、后台待满 60s。
 
+## 聊天页（0.1.27）：视图迁移
+
+聊天页比设置页多一层难度：数据每帧都在变。这里仍然走**视图迁移**，
+但没有「一次性整份推送」，而是给 `ChatView` 的十个入口包了一层钩子，
+每次渲染完毕把最新状态合并成一份快照推过去。
+
+```
+SSE（原生 SsePlugin）→ src/api/frames.ts（ChatReducer，唯一状态机）
+  → app/src/main.ts:1968 chatView.setLive(...)      ← Web 版渲染 DOM
+  → mirrorChatView() 的包装 → syncFlutterChat()      ← 同一份数据组装快照
+  → FlutterChatMirror（40ms 尾沿合并）→ pideck/flutter_host 通道 pushChat
+  → Dart ChatScreen（只画）→ 动作回传 chatAction → main.ts 里同一套函数
+```
+
+**为什么不在 Dart 里重写 `ChatReducer`**：它是协议核心（14 种帧、`closeOpenBlocks`、
+`error` 不收口这些边界），桌面端与手机端共用。复制一份 = 两个真相源，协议一加帧类型就漂移。
+所以 Dart 侧**不允许**做任何协议推断（拼 delta、猜工具状态、自己算 token），只能画已有字段。
+
+### 数据契约（`ChatSnapshot`，改名要两边一起改）
+
+| 字段 | 说明 |
+|---|---|
+| `sessionId` / `title` | 空 `sessionId` 表示宿主还没准备好，Dart 侧直接忽略该帧 |
+| `status` / `statusText` | `idle` / `running` / `finished` / `error` / `aborted` |
+| `error` | `{title, detail?, hint?}`，来自 `describeHistoryFailure()` |
+| `empty` / `loading` | 空态文案、首屏加载中 |
+| `history[]` | 已落盘消息；`role=tool` 时用 `toolName`/`toolState`/`toolDetail` 表达工具条目 |
+| `live` | 当前轮的 `{messageId, blocks}`，块就是 `ChatBlock`（text/reasoning/tool） |
+| `pending` | 只取第一条 `PendingUiRequest`（整份透传，含 `batchQuestions`） |
+| `perf` | `PerfMetrics` 的展示子集（首字 / 流式 tok/s / tokens） |
+
+动作方向（Dart → `main.ts` 的 `dispatchFlutterChatAction`）：
+`send` / `stop` / `respond` / `messageAction` / `refresh` / `close`。
+**只传 id 与必要参数**，不传整条消息或整个选项对象 —— 那边的状态可能已经变了。
+
+### 三个必须照抄的行为
+
+1. **贴底阈值 80px**（`chat-view.ts:65-68`）。用户往上翻就停止自动贴底，否则长回答时
+   用户想回头看历史会被每帧拽回底部。Dart 侧在 `_onScroll` 里算
+   `maxScrollExtent - offset <= 80`，新快照落地后 `addPostFrameCallback` 里 `jumpTo(max)` ——
+   必须等下一帧，`setState` 之后 `maxScrollExtent` 还是旧值。
+2. **40ms 合并推送**（不是 16ms）。过桥是 `invokeMethod(String)`，几十 KB 的 JSON 要序列化 +
+   跨线程投递 + 再 parse；原生 `SsePlugin` 自己已经在 16ms 合并过一轮，再加一层 16ms 只会发热。
+   内容没变不重复过桥（状态轮询 1s 一次）。
+3. **`setHistory` 整块替换、`setLive` 增量**。Dart 侧对应 `ListView.builder` 的
+   `itemCount = history.length + live.blocks.length + 1`，末尾那个 1 是 footer
+   （状态 / 错误 / 提问卡 / 指标）—— 不把 footer 塞进列表项，否则每次状态变化都会让整列表重新布局。
+
+### 踩过的坑
+
+1. **提问卡的输入框不能用 `TextEditingController(text: ...)` 现建**。流式时每 40ms 来一份新快照，
+   每次 build 新建 controller 会把光标位置和输入法组合状态一起冲掉（表现为「打字打一半跳回开头」）。
+   必须用常驻 controller，只在 `requestId` 变化时写入 `prefill`。
+2. **多选的临时选择不能放在 `build` 里的局部变量**。同理，每次重建都清空。放 State 里，
+   换 `requestId` 时清。
+3. **`batch_ask` 的提交格式**是 `{"answers":[{id,type,value,label,wasCustom}]}` 的 JSON **字符串**
+   （`ask-model.ts:serializeBatchAnswers`），不是对象。`value: null` = 没碰过，`value: ""` = 主动留空，
+   两者在 PiDeck 侧含义不同，不能合并。
+4. **长按消息的操作菜单还在 WebView 里**（`openMessageActions` 弹的是 DOM 底部弹层，
+   在 Flutter 页底下看不见）。当前做法：Flutter 里只给「复制」，另一个入口是
+   「更多操作（回 Web 版）」—— 发动作后 `closeHost()` 让开，用户才能看见那个弹层。
+   等 `message-actions-model.ts` 的菜单项抽成数据（`{id, label, danger}`）后在 Flutter 里重做。
+
+### 调试入口
+
+设置页 → 关于 → **「聊天页预览（调试）」**（0.1.27 起）。它走 `chatPreview` 动作 →
+`openFlutterChatPage(activeSessionId)`，要求当前已经有打开的会话（WebView 必须先把这个会话
+开起来：历史、SSE、reducer 都在它身上）。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
@@ -317,10 +389,9 @@ Dart 侧只需要一个「增量合并 + 虚拟列表 + 滚动锁定」，这正
      不要“关掉 Flutter 页回 WebView 弹原菜单”那条路（会闪一下，而且菜单状态在两边）。
      重做的代价是菜单内容要维护两处 —— 做的时候把菜单项也抽成数据（`{id, label, danger}`），
      让 Web 版和 Dart 版都从同一份数据渲染。
-3. **聊天页**：最难，卡在 SSE。**流式已定案（0.1.26）：继续用原生 `SsePlugin` 读流，Dart 只渲染**
-   （理由见上一节：后台 isolate 被挂起，0 帧）。所以这一页不需要 `dart:io` 直连，
-   需要的是：原生侧新增一个「把 SsePlugin 已有帧转发给 Flutter」的通道，Dart 侧做增量合并 +
-   虚拟列表 + 滚动锚点（`ui/scroll-anchor.ts` 的逻辑）。侧栏（`Drawer`）跟着这一页一起做，见上一条。
+3. **聊天页**：**0.1.27 已打通「视图迁移」链路**（见上一节），剩下的是打磨与入口切换：
+   侧栏 `Drawer`、长按消息菜单在 Flutter 重做、会话列表点击直接进 Flutter 聊天页。
+   流式仍由原生 `SsePlugin` 读、WebView 的 `ChatReducer` 算，Dart 只渲染（0.1.26 定案）。
 4. **文件保存 / 扫码**：`file_picker` + `mobile_scanner` 两个 pub 包，`FileSaverPlugin` 里
    MediaStore 的那套要换成 `path_provider` + `share_plus`，行为差异最大，放最后。
 
@@ -346,3 +417,8 @@ Dart 侧只需要一个「增量合并 + 虚拟列表 + 滚动锁定」，这正
 - [ ] 真机：点齿轮直接进 Flutter 设置页，主题 / 通知 / 设备 / 概况 / 技能 / 扩展 / DSH 七个分区都能显示（0.1.21）
 - [ ] 真机：改主题、关通知、切设备、刷概况、开关技能/扩展、DSH 运行/停止、DSH 安装（含错误 ID 校验）均生效且提示正常
 - [ ] 真机：返回键与页内返回都能回 WebView，且回来后会话列表/聊天页状态未丢
+- [x] `flutter test` 40 项全绿（新增 `chat_models_test.dart` 12 项、`markdown_test.dart` 11 项）
+- [x] 聊天桥的纯逻辑：`app/tests/flutter-chat.test.ts` 15 项（历史条目转换 / thinking 剥离 / 工具状态 / 快照组装 / 40ms 合并 / 去重）
+- [ ] 真机：设置页 → 关于 → 聊天页预览，历史消息与流式增量都能显示，滚动贴底不跳（0.1.27）
+- [ ] 真机：聊天页里发一条消息 → WebView 侧收到并真的发出去，回复流式显示在这页上
+- [ ] 真机：运行中按停止能停下来；长按消息能复制

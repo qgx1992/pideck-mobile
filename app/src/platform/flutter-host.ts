@@ -19,6 +19,8 @@ export interface FlutterHostBridge {
   available(): Promise<{ available: boolean }>;
   /** 推一份最新的设置数据（JSON 字符串）；原生会缓存并在 Flutter 首帧同步返回。 */
   pushSettings(options: { json: string }): Promise<void>;
+  /** 推一份最新的聊天页快照（JSON 字符串），同样会被原生缓存。 */
+  pushChat(options: { json: string }): Promise<void>;
   /** 让 Flutter 页弹一句提示（WebView 的 toast 在 Flutter 页上不可见）。 */
   pushNotice(options: { text: string }): Promise<void>;
   /** 主动关掉 Flutter 页（handler 里要切到别的界面时）。 */
@@ -29,6 +31,10 @@ export interface FlutterHostBridge {
   ): Promise<{ remove: () => Promise<void> }>;
   addListener(
     eventName: "settingsAction",
+    listener: (data: { json: string }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
+  addListener(
+    eventName: "chatAction",
     listener: (data: { json: string }) => void,
   ): Promise<{ remove: () => Promise<void> }>;
 }
@@ -151,6 +157,53 @@ export async function onFlutterSettingsAction(
     };
   } catch (error) {
     console.warn("[flutter-host] 订阅设置动作失败", error);
+    return () => undefined;
+  }
+}
+
+/**
+ * 把聊天页快照推给 Flutter（`ChatSnapshot` 的 JSON）。
+ *
+ * 与设置页同理：状态源在 WebView（`ChatReducer` 是协议核心，桌面端共用），
+ * Flutter 只画。频率由调用方的 `FlutterChatMirror` 压到 40ms 一次。
+ */
+export async function pushFlutterChat(json: string): Promise<void> {
+  if (!bridge || Capacitor.getPlatform() !== "android") return;
+  try {
+    await bridge.pushChat({ json });
+  } catch (error) {
+    console.warn("[flutter-host] 推送聊天数据失败", error);
+  }
+}
+
+/**
+ * 订阅 Flutter 聊天页回传的动作（发消息 / 停止 / 回答问题 / 长按菜单）。
+ *
+ * 与 `onFlutterSettingsAction` 同一套做法：动作只是一份 JSON，执行交给
+ * `app/src/main.ts` 里与 Web 版共用的那套函数。返回 detach。
+ */
+export async function onFlutterChatAction(
+  handler: (action: Record<string, unknown>) => void,
+): Promise<() => void> {
+  if (!bridge || Capacitor.getPlatform() !== "android") return () => undefined;
+  try {
+    const handle = await bridge.addListener("chatAction", (data) => {
+      const raw = typeof data?.json === "string" ? data.json : "";
+      if (!raw) return;
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          handler(parsed as Record<string, unknown>);
+        }
+      } catch (error) {
+        console.warn("[flutter-host] 聊天动作解析失败", error);
+      }
+    });
+    return () => {
+      void handle.remove();
+    };
+  } catch (error) {
+    console.warn("[flutter-host] 订阅聊天动作失败", error);
     return () => undefined;
   }
 }

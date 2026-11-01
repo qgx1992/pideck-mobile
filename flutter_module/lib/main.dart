@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import 'app_theme.dart';
+import 'chat/chat_page.dart';
 import 'host_channel.dart';
 import 'probe/sse_probe_page.dart';
 import 'settings/settings_models.dart';
@@ -15,11 +16,14 @@ Future<void> main() async {
   // 首帧就要是对的主题，否则浅色用户会先看到一下深色再跳过去。
   final initialJson = await loadInitialSettings();
   final SettingsData? seed = _parse(initialJson);
+  // 聊天页的首帧快照是另一份缓存；只在真的要进聊天页时多要一次。
+  final String initialChatJson = args.route == 'chat' ? await loadInitialChat() : '';
   runApp(
     PiDeckFlutterApp(
       route: args.route,
       sessionId: args.sessionId,
       initialSettingsJson: initialJson,
+      initialChatJson: initialChatJson,
       initialThemeMode: themeModeFrom(seed?.theme.mode ?? 'dark'),
       connection: seed?.connection,
     ),
@@ -41,6 +45,7 @@ class PiDeckFlutterApp extends StatefulWidget {
     required this.route,
     required this.sessionId,
     this.initialSettingsJson = '',
+    this.initialChatJson = '',
     this.initialThemeMode = ThemeMode.dark,
     this.connection,
   });
@@ -50,6 +55,9 @@ class PiDeckFlutterApp extends StatefulWidget {
 
   /// 宿主在打开本页之前 push 的那份数据，用来让首帧直接是完整内容。
   final String initialSettingsJson;
+
+  /// 聊天页的首帧快照（`ChatSnapshot` 的 JSON）。
+  final String initialChatJson;
   final ThemeMode initialThemeMode;
 
   /// 探针页要自己发请求，需要 serviceUrl + token。
@@ -88,6 +96,7 @@ class _PiDeckFlutterAppState extends State<PiDeckFlutterApp> {
               initialJson: widget.initialSettingsJson,
               onThemeModeChanged: (next) => _themeMode.value = next,
             ),
+            'chat' => ChatScreen(initialJson: widget.initialChatJson),
             'sse-probe' => SseProbePage(
               baseUrl: widget.connection?.serviceUrl ?? '',
               token: widget.connection?.token ?? '',

@@ -180,12 +180,15 @@ import {
 import {
   closeFlutterPage,
   isFlutterHostAvailable,
+  onFlutterChatAction,
   onFlutterPageVisibility,
   onFlutterSettingsAction,
   openFlutterPage,
+  pushFlutterChat,
   pushFlutterNotice,
   pushFlutterSettings,
 } from "./platform/flutter-host.ts";
+import { FlutterChatMirror, buildChatSnapshot } from "./platform/flutter-chat.ts";
 import {
   modelChipLabel,
   modelChipTitle,
@@ -361,6 +364,18 @@ let flutterPageOpen = false;
  * 因为 WebView 的 toast 在 Flutter 页盖住时根本看不见。
  */
 let flutterSettingsOpen = false;
+
+/** Flutter 聊天页是否盖在上面。 */
+let flutterChatOpen = false;
+
+/** 聊天页快照的推送器（只在 Flutter 聊天页打开期间存在）。 */
+let flutterChatMirror: FlutterChatMirror | null = null;
+
+/** 历史加载失败的提示；快照里的 error 取自这里。 */
+let chatError: { title: string; detail?: string; hint?: string } | null = null;
+
+/** 历史还没回来（画「加载中…」）。 */
+let chatLoading = false;
 
 /* ------------------------------------------------------------------ */
 /* 侧栏视图状态（项目分组 / 折叠 / 搜索）                                */
@@ -1041,6 +1056,7 @@ function renderMain(): void {
     onMessageAction: (messageId, role) => openMessageActions(messageId, role),
     onFileRef: (path, line) => void openChatFileRef(path, line),
   });
+  mirrorChatView(chatView);
   renderEmptyState(null);
 
   refs = {
@@ -1121,12 +1137,23 @@ function renderMain(): void {
     flutterPageOpen = open;
     // Flutter 页关掉了 —— 不管它是设置页还是别的，设置页都不在上面了。
     // 不依赖 Dart 侧记得发 close 动作：用户按返回键、被系统回收都要能复位。
-    if (!open) flutterSettingsOpen = false;
+    if (!open) {
+      flutterSettingsOpen = false;
+      flutterChatOpen = false;
+      // 镜像器没有别的持有者，关页就释放；不然下一次开页会叠一个在上面
+      flutterChatMirror?.dispose();
+      flutterChatMirror = null;
+    }
   }).then((detach) => disposers.push(detach));
 
   // Flutter 设置页上的一次操作，回传给与 Web 版共用的 handler 执行。
   void onFlutterSettingsAction((action) => {
     dispatchFlutterSettingsAction(action);
+  }).then((detach) => disposers.push(detach));
+
+  // Flutter 聊天页上的一次操作（发消息 / 停止 / 回答 / 长按菜单）。
+  void onFlutterChatAction((action) => {
+    dispatchFlutterChatAction(action);
   }).then((detach) => disposers.push(detach));
 
   // 窄屏手势：左右两个抽屉由同一个控制器管理，保证互斥——
@@ -1923,6 +1950,8 @@ async function openSession(sessionId: string): Promise<void> {
   activeProjectId = store.session(sessionId)?.projectId ?? activeProjectId;
   chatView.clear();
   chatView.setEmpty("加载中…");
+  chatLoading = true;
+  chatError = null;
 
   // 计划模式也是每会话各自记（发送成功后会被置回 false）
   planModeOn = planModeBySession.get(epKey(sessionId)) ?? false;
@@ -1950,6 +1979,8 @@ async function openSession(sessionId: string): Promise<void> {
     const page = await client.getMessages(sessionId);
     if (activeSessionId !== sessionId) return;
     sessionHistory = page.messages;
+    chatLoading = false;
+    chatError = null;
     chatView.setHistory(page.messages);
     // 这个会话在别处已经跑起来了（比如桌面端发的，或者切走时发出去的那轮）：
     // 拿最后一条提问的时间当回合起点，计时才不会从 0 开始数
@@ -1958,6 +1989,8 @@ async function openSession(sessionId: string): Promise<void> {
     if (runningOnServer) chatView.seedTurn(lastUserTimestamp(page.messages));
   } catch (error) {
     if (activeSessionId !== sessionId) return;
+    chatLoading = false;
+    chatError = describeHistoryFailure(error, session?.backend);
     chatView.setError(describeHistoryFailure(error, session?.backend));
   }
 
@@ -2965,6 +2998,7 @@ async function reloadHistory(sessionId: string): Promise<void> {
   try {
     const page = await runtime.client.getMessages(sessionId);
     if (sessionId === activeSessionId) sessionHistory = page.messages;
+    if (sessionId === activeSessionId) chatError = null;
     if (page.messages.length === 0) {
       // 空会话：给引导页（标题 + 三条提示词）。
       // 已经有内容时不要把画面清掉 —— 这多半是落盘延迟或回放还没到。
@@ -2979,6 +3013,7 @@ async function reloadHistory(sessionId: string): Promise<void> {
       return;
     }
     chatView.setError(describeHistoryFailure(error, runtime.store.session(sessionId)?.backend));
+    chatError = describeHistoryFailure(error, runtime.store.session(sessionId)?.backend);
   }
 }
 
@@ -5138,6 +5173,138 @@ async function refreshSettings(): Promise<void> {
   renderSettings();
 }
 
+/**
+ * 给 ChatView 挂一个「渲染完毕」的钩子，用来把最新状态镜像到 Flutter 聊天页。
+ *
+ * 为什么用包一层而不是改 ChatView：它的十个入口都是命令式 DOM 写入，
+ * 真正需要的是「数据变了」这个信号；在调用方统一拦截比在 1254 行的渲染器里
+ * 插十处 `this.onRender?.()` 更不容易漏。没开 Flutter 页时 `syncFlutterChat()` 直接返回，
+ * 所以 Web 版的开销只是十个函数调。
+ */
+const MIRRORED_CHAT_METHODS = [
+  "clear",
+  "setHistory",
+  "setLive",
+  "setPending",
+  "setRunStats",
+  "setError",
+  "setEmpty",
+  "setEmptyState",
+  "clearLive",
+  "appendLocalUser",
+] as const;
+
+function mirrorChatView(view: ChatView): void {
+  const target = view as unknown as Record<string, (...args: unknown[]) => unknown>;
+  for (const name of MIRRORED_CHAT_METHODS) {
+    const original = view[name].bind(view) as (...args: unknown[]) => unknown;
+    target[name] = (...args: unknown[]): unknown => {
+      const result = original(...args);
+      syncFlutterChat();
+      return result;
+    };
+  }
+}
+
+/** 把聊天页当前状态组装成快照推给 Flutter（没开 Flutter 页时什么都不做）。 */
+function syncFlutterChat(): void {
+  const mirror = flutterChatMirror;
+  if (!mirror || !flutterChatOpen) return;
+  const session = activeSessionId && runtime ? runtime.store.session(activeSessionId) : undefined;
+  const reducer = channel?.reducer ?? null;
+  mirror.update(
+    buildChatSnapshot({
+      sessionId: activeSessionId,
+      title: session?.title ?? "",
+      messages: sessionHistory,
+      status: reducer?.status ?? "idle",
+      error: chatError,
+      loading: chatLoading,
+      live: reducer ? { messageId: reducer.messageId, blocks: reducer.blocks } : null,
+      pending: activeSessionId && runtime ? runtime.store.pendingFor(activeSessionId) : [],
+      perf: perfMetrics,
+    }),
+  );
+}
+
+/**
+ * 在 Flutter 里打开某个会话的聊天页。
+ *
+ * 顺序很重要：**先让 WebView 把这个会话打开**（历史、SSE、reducer 都在它身上），
+ * 再推快照、再 startActivity。否则 Flutter 拿到的是一份不属于它的空会话。
+ */
+async function openFlutterChatPage(sessionId: string): Promise<boolean> {
+  if (activeSessionId !== sessionId) await openSession(sessionId);
+  flutterChatMirror = new FlutterChatMirror({ push: (json) => pushFlutterChat(json) });
+  flutterChatOpen = true;
+  syncFlutterChat();
+  flutterChatMirror.flush();
+  const opened = await openFlutterPage("chat", sessionId);
+  if (!opened) {
+    flutterChatOpen = false;
+    flutterChatMirror?.dispose();
+    flutterChatMirror = null;
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Flutter 聊天页回传的动作。
+ *
+ * 和设置页一样只做「摊平」，具体行为全走 Web 版同一条路径：
+ * 发消息就是往输入框写进去再调 `send()`，停止就是 `stop()`，
+ * 这样两个界面的行为不会分叉（包括计划模式、排队/插话这些分支）。
+ */
+function dispatchFlutterChatAction(action: Record<string, unknown>): void {
+  if (!runtime) return;
+  const type = typeof action.type === "string" ? action.type : "";
+  const text = (key: string): string => (typeof action[key] === "string" ? (action[key] as string) : "");
+
+  switch (type) {
+    case "close":
+      flutterChatOpen = false;
+      flutterChatMirror?.dispose();
+      flutterChatMirror = null;
+      void closeFlutterPage();
+      return;
+    case "send": {
+      const body = text("text").trim();
+      if (!body || !refs) return;
+      refs.composer.value = body;
+      autosize(refs.composer);
+      void send();
+      return;
+    }
+    case "stop":
+      void stop();
+      return;
+    case "respond": {
+      const requestId = text("requestId");
+      if (!requestId || !activeSessionId) return;
+      const pending = runtime.store.pendingFor(activeSessionId).find((item) => item.requestId === requestId);
+      if (!pending) return;
+      const response =
+        action.response && typeof action.response === "object" && !Array.isArray(action.response)
+          ? (action.response as Record<string, unknown>)
+          : {};
+      void respondToUi(pending, response);
+      return;
+    }
+    case "messageAction": {
+      const id = text("id");
+      const role = text("role") || "assistant";
+      if (id) openMessageActions(id, role);
+      return;
+    }
+    case "refresh":
+      if (activeSessionId) void reloadHistory(activeSessionId);
+      return;
+    default:
+      return;
+  }
+}
+
 function openSettings(): void {
   if (!runtime) return;
   closeSheet();
@@ -5232,6 +5399,10 @@ function dispatchFlutterSettingsAction(action: Record<string, unknown>): void {
     case "sseProbe":
       // 调试用：流式探针页要拿当前会话 id 才能测会话流
       void openFlutterPage("sse-probe", activeSessionId ?? undefined);
+      return;
+    case "chatPreview":
+      // 调试用：拿当前会话开 Flutter 聊天页（还没替换主入口）
+      if (activeSessionId) void openFlutterChatPage(activeSessionId);
       return;
     case "toggleSkill": {
       const sourceId = text("sourceId");

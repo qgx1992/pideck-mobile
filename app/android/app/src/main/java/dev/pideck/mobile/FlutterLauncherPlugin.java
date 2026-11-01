@@ -30,6 +30,14 @@ public class FlutterLauncherPlugin extends Plugin {
      */
     static final String EVENT_SETTINGS_ACTION = "settingsAction";
 
+    /**
+     * 事件名：聊天页上的一次操作（发消息、取消、切模型…）。
+     *
+     * 与 `settingsAction` 同构，但分开两条：聊天页的帧流很密，混在一条通道里
+     * 排查时看不出是谁的动作；分开后 JS 侧两个订阅各管各的。
+     */
+    static final String EVENT_CHAT_ACTION = "chatAction";
+
     /** Capacitor 只创建一个插件实例，这里存一份给 FlutterHostActivity 回传生命周期用。 */
     private static FlutterLauncherPlugin instance;
 
@@ -40,6 +48,14 @@ public class FlutterLauncherPlugin extends Plugin {
      * 不用等一次「Dart 要数据 → 原生 → WebView → 原生 → Dart」的往返，避免白屏。
      */
     private static volatile String lastSettingsJson = "{}";
+
+    /**
+     * 最近一次由 JS 推来的聊天页视图模型 JSON。
+     *
+     * 比设置页更需要缓存：聊天页每次打开都对应不同会话，Dart 侧首帧要立刻有东西可画，
+     * 等一次往返就会看到空白列表。
+     */
+    private static volatile String lastChatJson = "{}";
 
     @Override
     public void load() {
@@ -53,6 +69,10 @@ public class FlutterLauncherPlugin extends Plugin {
 
     static String currentSettings() {
         return lastSettingsJson;
+    }
+
+    static String currentChat() {
+        return lastChatJson;
     }
 
     /**
@@ -92,6 +112,19 @@ public class FlutterLauncherPlugin extends Plugin {
         }
     }
 
+    /** Flutter 聊天页把动作回传给 WebView（`sendChatAction`）。 */
+    static void dispatchChatAction(String json) {
+        FlutterLauncherPlugin plugin = instance;
+        if (plugin == null) return;
+        try {
+            JSObject data = new JSObject();
+            data.put("json", json == null ? "{}" : json);
+            plugin.notifyListeners(EVENT_CHAT_ACTION, data);
+        } catch (Exception ignored) {
+            /* WebView 已经销毁时忽略 */
+        }
+    }
+
     /** JS 推一份最新的设置数据（`pushFlutterSettings`）。 */
     @PluginMethod
     public void pushSettings(PluginCall call) {
@@ -99,6 +132,16 @@ public class FlutterLauncherPlugin extends Plugin {
         if (json == null || json.isEmpty()) json = "{}";
         lastSettingsJson = json;
         FlutterHostActivity.pushSettingsToFlutter(json);
+        call.resolve();
+    }
+
+    /** JS 推一份最新的聊天页视图模型（`pushFlutterChat`）。 */
+    @PluginMethod
+    public void pushChat(PluginCall call) {
+        String json = call.getString("json", "{}");
+        if (json == null || json.isEmpty()) json = "{}";
+        lastChatJson = json;
+        FlutterHostActivity.pushChatToFlutter(json);
         call.resolve();
     }
 

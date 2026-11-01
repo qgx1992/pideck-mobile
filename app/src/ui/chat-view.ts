@@ -1031,7 +1031,7 @@ export class ChatView {
 
 /* ----------------------------- 消息节点 ----------------------------- */
 
-function normalizeRole(role: unknown): string {
+export function normalizeRole(role: unknown): string {
   if (typeof role !== "string") return "assistant";
   const value = role.toLowerCase();
   if (value === "user" || value === "assistant" || value === "system" || value === "tool") return value;

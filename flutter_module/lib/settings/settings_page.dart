@@ -347,6 +347,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
         ),
+        // 调试入口：聊天页（视图迁移）预览，数据由 WebView 的 ChatSnapshot 推过来
+        Padding(
+          padding: const EdgeInsets.fromLTRB(2, 0, 2, 2),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => _act('chatPreview'),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 32),
+              ),
+              child: const Text('聊天页预览（调试）', style: TextStyle(fontSize: 12.5)),
+            ),
+          ),
+        ),
       ],
     );
   }

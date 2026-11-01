@@ -134,6 +134,14 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   的 `ThemeExtension`，深浅两套由 `buildPiTheme(Brightness)` 挂上去）。主题的唯一来源是 Web 侧
   `theme.mode`，经 `setSettings` 推送 → `themeModeFrom()` → `MaterialApp.themeMode`；
   Flutter 侧不存主题，也不要自己读 `MediaQuery.platformBrightness`（0.1.23 踩过：页面写死深色）。
+- 聊天页（0.1.27 起）同样走「视图迁移」，并且有一条额外硬规矩：**聊天状态机只存在于
+  `src/api/frames.ts` 的 `ChatReducer`**。Dart 侧（`flutter_module/lib/chat/`）只允许画
+  `ChatSnapshot` 里已有的字段，**不许拼 delta、猜工具状态、自己算 token** —— 复制一份 reducer
+  就是两个真相源，协议一加帧类型必然漂移。
+- 聊天快照一律经 `FlutterChatMirror` 推（`app/src/platform/flutter-chat.ts`，40ms 尾沿合并 +
+  内容不变不推），**不要**在渲染路径里直接 `pushFlutterChat()` 每帧过桥。
+- 聊天页里任何「每 40ms 会重建」的部件都不能在 `build` 里创建状态：提问卡的输入框用常驻
+  `TextEditingController`、多选的临时选择放 State（0.1.27 踩过：每次重建光标跳回开头、勾选被清空）。
 
 ## 改动完成后必须跑的验证
 

@@ -29,9 +29,11 @@ import io.flutter.plugin.common.MethodChannel;
  *   getArgs()          → {"route": "...", "sessionId": "..."}
  *   getSettings()      → 宿主缓存的 SettingsData JSON（首帧用，不等回程）
  *   settingsAction(s)  → 把用户在 Flutter 页上的动作回传给 WebView 执行
+ *   getChat()          → 宿主缓存的聊天页视图模型 JSON（同上，首帧用）
+ *   chatAction(s)      → 聊天页上的动作（发消息 / 取消 / 切模型…）回传给 WebView
  *   close()            → 关掉 Flutter 页，回到 WebView
  *
- * 反向（原生 → Dart）：`setSettings(json)` / `showNotice(text)`，由
+ * 反向（原生 → Dart）：`setSettings(json)` / `setChat(json)` / `showNotice(text)`，由
  * FlutterLauncherPlugin 在 JS 推数据或要求提示时调进来。
  */
 public class FlutterHostActivity extends FlutterFragmentActivity {
@@ -87,6 +89,13 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
         activity.invokeOnFlutter("setSettings", json);
     }
 
+    /** JS 推来新的聊天页视图模型时由插件调用（`FlutterHost.pushChat`）。 */
+    static void pushChatToFlutter(String json) {
+        FlutterHostActivity activity = current;
+        if (activity == null) return;
+        activity.invokeOnFlutter("setChat", json);
+    }
+
     /** JS 要求弹一句提示时由插件调用（`FlutterHost.pushNotice`）。 */
     static void pushNoticeToFlutter(String text) {
         FlutterHostActivity activity = current;
@@ -122,6 +131,13 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
                     break;
                 case "settingsAction":
                     FlutterLauncherPlugin.dispatchSettingsAction(settingsJsonFrom(call));
+                    result.success(null);
+                    break;
+                case "getChat":
+                    result.success(FlutterLauncherPlugin.currentChat());
+                    break;
+                case "chatAction":
+                    FlutterLauncherPlugin.dispatchChatAction(settingsJsonFrom(call));
                     result.success(null);
                     break;
                 case "close":

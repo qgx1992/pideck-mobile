@@ -48,17 +48,30 @@ Future<String> loadInitialSettings() async {
   }
 }
 
+/// 聊天页的首帧快照（同 [loadInitialSettings]，只是另一份缓存）。
+Future<String> loadInitialChat() async {
+  try {
+    final raw = await hostChannel.invokeMethod<String>('getChat');
+    return raw == null || raw.isEmpty ? '{}' : raw;
+  } catch (_) {
+    return '{}';
+  }
+}
+
 /// 订阅宿主的推送。
 void bindHostChannel({
-  required void Function(String json) onSettings,
-  required void Function(String text) onNotice,
+  void Function(String json)? onSettings,
+  void Function(String text)? onNotice,
+  void Function(String json)? onChat,
 }) {
   hostChannel.setMethodCallHandler((call) async {
     final raw = call.arguments is String ? call.arguments as String : '';
     if (call.method == 'setSettings') {
-      onSettings(raw.isEmpty ? '{}' : raw);
+      onSettings?.call(raw.isEmpty ? '{}' : raw);
+    } else if (call.method == 'setChat') {
+      onChat?.call(raw.isEmpty ? '{}' : raw);
     } else if (call.method == 'showNotice') {
-      onNotice(raw);
+      onNotice?.call(raw);
     }
     return null;
   });
@@ -84,5 +97,20 @@ Future<void> closeHost() async {
     await hostChannel.invokeMethod<void>('close');
   } catch (_) {
     /* 忽略 */
+  }
+}
+
+/// 聊天页的动作回传（同 [sendSettingsAction]，参数同样必须是 Map）。
+///
+/// 动作里的 `type` 由 `app/src/main.ts` 的 `dispatchFlutterChatAction()` 分发，
+/// 只传 id 与必要参数，**不要**把整条消息/整个选项对象传回去 —— 那边的状态源
+/// 可能已经变了，按 id 重新查一次才不会拿到陈旧数据。
+Future<void> sendChatAction(Map<String, Object?> action) async {
+  try {
+    await hostChannel.invokeMethod<void>('chatAction', <String, Object?>{
+      'json': jsonEncode(action),
+    });
+  } catch (_) {
+    /* 宿主已经不在时忽略 */
   }
 }
