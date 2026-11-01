@@ -17,6 +17,10 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 export interface FlutterHostBridge {
   open(options: { route: string; sessionId?: string }): Promise<{ opened: boolean; route: string }>;
   available(): Promise<{ available: boolean }>;
+  addListener(
+    eventName: "pageVisibility",
+    listener: (data: { open: boolean }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
 }
 
 const bridge = Capacitor.isNativePlatform() ? registerPlugin<FlutterHostBridge>("FlutterHost") : null;
@@ -45,5 +49,30 @@ export async function openFlutterPage(route: string, sessionId?: string): Promis
   } catch (error) {
     console.warn("[flutter-host] 打开失败", error);
     return false;
+  }
+}
+
+/**
+ * 订阅「Flutter 页开/关」。返回 detach。
+ *
+ * 为什么需要：Flutter 页一 onStart，WebView 就被 pause，
+ * `document.visibilityState` 变 hidden。但 App 明明还在前台（用户就在看 Flutter 页），
+ * 不能据此判后台——否则会在用户看着屏幕时弹完成通知。
+ * 原生侧（FlutterHostActivity.onStart/onStop）会把真实情况报过来。
+ */
+export async function onFlutterPageVisibility(
+  handler: (open: boolean) => void,
+): Promise<() => void> {
+  if (!bridge || Capacitor.getPlatform() !== "android") return () => undefined;
+  try {
+    const handle = await bridge.addListener("pageVisibility", (data) => {
+      handler(data?.open === true);
+    });
+    return () => {
+      void handle.remove();
+    };
+  } catch (error) {
+    console.warn("[flutter-host] 订阅页面可见性失败", error);
+    return () => undefined;
   }
 }

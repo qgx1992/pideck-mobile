@@ -18,6 +18,41 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 @CapacitorPlugin(name = "FlutterHost")
 public class FlutterLauncherPlugin extends Plugin {
 
+    /** 事件名：Flutter 页打开/关闭。JS 侧用它把「WebView 被盖住」和「App 真在后台」区分开。 */
+    static final String EVENT_PAGE_VISIBILITY = "pageVisibility";
+
+    /** Capacitor 只创建一个插件实例，这里存一份给 FlutterHostActivity 回传生命周期用。 */
+    private static FlutterLauncherPlugin instance;
+
+    @Override
+    public void load() {
+        instance = this;
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        if (instance == this) instance = null;
+    }
+
+    /**
+     * Flutter 页开/关时由 FlutterHostActivity 调用。
+     *
+     * 为什么需要：跳进 Flutter 页时 WebView 会被 pause，document.visibilityState 变 hidden，
+     * JS 会误以为「App 退到后台」而去发通知（而用户就看着屏幕）。
+     * 拿到这个标志后 JS 才能把「被盖住」和「真后台」分开。
+     */
+    static void notifyPageVisibility(boolean open) {
+        FlutterLauncherPlugin plugin = instance;
+        if (plugin == null) return;
+        try {
+            JSObject data = new JSObject();
+            data.put("open", open);
+            plugin.notifyListeners(EVENT_PAGE_VISIBILITY, data);
+        } catch (Exception ignored) {
+            /* WebView 已经销毁时忽略 */
+        }
+    }
+
     @PluginMethod
     public void open(PluginCall call) {
         String route = call.getString("route", "");

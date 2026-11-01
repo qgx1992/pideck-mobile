@@ -21,7 +21,21 @@ import android.os.Bundle;
  */
 public class PiDeckApp extends Application implements Application.ActivityLifecycleCallbacks {
 
+    /**
+     * 全进程唯一的「App 是否在前台」真相源。
+     *
+     * 不要再让 JS 通过 RunWatch.setVisible 之类的方式覆盖它：WebView 的
+     * document.visibilityState 只能说明「 WebView 有没有被盖住」，跳进 Flutter 页时
+     * 它会变成 hidden，而 App 明明还在前台（踩过：0.1.19 上在 Flutter 页停留时
+     * 照样弹完成通知）。只有 Activity 落在 started 状态才算前台。
+     */
+    private static volatile boolean appVisible = true;
+
     private int startedCount = 0;
+
+    public static boolean isAppVisible() {
+        return appVisible;
+    }
 
     @Override
     public void onCreate() {
@@ -32,7 +46,7 @@ public class PiDeckApp extends Application implements Application.ActivityLifecy
     @Override
     public void onActivityStarted(Activity activity) {
         startedCount++;
-        if (startedCount == 1) RunWatchService.setAppVisible(true);
+        if (startedCount == 1) appVisible = true;
     }
 
     @Override
@@ -40,7 +54,7 @@ public class PiDeckApp extends Application implements Application.ActivityLifecy
         startedCount--;
         if (startedCount <= 0) {
             startedCount = 0;
-            RunWatchService.setAppVisible(false);
+            appVisible = false;
         }
     }
 

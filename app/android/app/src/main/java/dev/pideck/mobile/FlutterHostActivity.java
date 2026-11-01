@@ -46,6 +46,25 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
         sessionId = safe(intent.getStringExtra(EXTRA_SESSION_ID));
     }
 
+    /**
+     * 告诉 WebView 侧「Flutter 页盖在上面了」。
+     *
+     * 这个 Activity 一 onStart，MainActivity 就会被 pause，WebView 的
+     * document.visibilityState 变成 hidden。JS 没法自己分辨「被盖住」还是「退到后台」，
+     * 所以由这里把真实情况报过去（否则在 Flutter 页停留时还会弹完成通知）。
+     */
+    @Override
+    protected void onStart() {
+        super.onStart();
+        FlutterLauncherPlugin.notifyPageVisibility(true);
+    }
+
+    @Override
+    protected void onStop() {
+        FlutterLauncherPlugin.notifyPageVisibility(false);
+        super.onStop();
+    }
+
     @Override
     public void configureFlutterEngine(FlutterEngine flutterEngine) {
         super.configureFlutterEngine(flutterEngine);

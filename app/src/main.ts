@@ -171,12 +171,13 @@ import {
   consumeLaunchSession,
   consumeNotifiedKeys,
   isRunWatchActive,
-  setRunWatchVisible,
+  isAppInBackground,
   shouldStartRunWatch,
   splitNotifiedKeys,
   startRunWatch,
   stopRunWatch,
 } from "./platform/run-watch.ts";
+import { onFlutterPageVisibility } from "./platform/flutter-host.ts";
 import {
   modelChipLabel,
   modelChipTitle,
@@ -335,6 +336,15 @@ const notifiedAsksByService = new Set<string>();
  */
 const learnedPrefs = new Map<string, LearnedPrefs>();
 let disposers: Array<() => void> = [];
+
+/**
+ * Flutter 页是否盖在 WebView 上面。
+ *
+ * 混合栈下 document.visibilityState 只说明「WebView 有没有被盖住」，
+ * 不说明「App 在不在前台」—— 跳进 Flutter 页时它会变 hidden，而用户就在看屏幕。
+ * 原生 FlutterHostActivity.onStart/onStop 会把这个真实情况报过来。
+ */
+let flutterPageOpen = false;
 
 /* ------------------------------------------------------------------ */
 /* 侧栏视图状态（项目分组 / 折叠 / 搜索）                                */
@@ -1077,13 +1087,22 @@ function renderMain(): void {
   // 这里主动补一次状态、重拉历史、并强制重连会话流。
   const onVisibleAgain = (): void => {
     if (typeof document === "undefined") return;
-    // 可见性要同步给原生看护服务（不可见时才由它发通知）
-    void setRunWatchVisible(document.visibilityState === "visible");
+    // 可见性不再上报给原生看护服务：只有原生的 Activity 计数能判断「App 在不在前台」，
+    // WebView 的 visibilityState 在 Flutter 页盖住时会误报后台（踩过：在 Flutter 页停留时照弹通知）。
     if (document.visibilityState !== "visible") return;
+    // WebView 重新可见 = Flutter 页肯定已经不在上面了。
+    // 兼当兵底：万一 onStop 那条事件因为 WebView 被暂停而丢失，标志也不会卡在 true。
+    flutterPageOpen = false;
     void resumeAfterBackground();
   };
   document.addEventListener("visibilitychange", onVisibleAgain);
   disposers.push(() => document.removeEventListener("visibilitychange", onVisibleAgain));
+
+  // 跳进 Flutter 页时 WebView 被 pause，visibilityState 变 hidden，但 App 还在前台。
+  // 用原生回传的标志把「被盖住」和「真后台」分开，否则会在用户看着屏幕时弹完成通知。
+  void onFlutterPageVisibility((open) => {
+    flutterPageOpen = open;
+  }).then((detach) => disposers.push(detach));
 
   // 窄屏手势：左右两个抽屉由同一个控制器管理，保证互斥——
   // 已有一侧打开时，反方向手势是「关闭它」，而不是去开另一侧。
@@ -2004,7 +2023,12 @@ function detectCompletedRuns(endpointId: string, state: PiDeckState): void {
     void learnRuntimePrefs(activeSessionId);
   }
 
-  const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+  // 「App 真的退到后台」：WebView 被盖住 **且** 不是被 Flutter 页盖住。
+  // Flutter 页盖住时用户就在看屏幕，属于前台，不能当成后台去弹通知。
+  const hidden = isAppInBackground({
+    visibilityHidden: typeof document !== "undefined" && document.visibilityState === "hidden",
+    flutterPageOpen,
+  });
 
   // AI 提问：agent 会一直阻塞等回答，所以这个通知比「跑完了」更该及时
   const nextPending: PendingSnapshot[] = state.pendingUiRequests.map((item) => ({

@@ -70,12 +70,30 @@ $env:GRADLE_OPTS = "-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7897 -Dhttps.pro
 
 ## 4 个坑
 
-### 1. RunWatch 的前台服务判定会被 Flutter 页误伤
+### 1. RunWatch 的前台服务判定会被 Flutter 页误伤（踩了两次）
 
-`RunWatchService` 靠 `MainActivity.onResume/onPause` 喂 `setAppVisible`。
+`RunWatchService` 原来靠 `MainActivity.onResume/onPause` 喂 `setAppVisible`。
 跳进 `FlutterHostActivity` 时 WebView 那个 Activity 会 `onPause` → 服务以为用户切走了 → 通知时机全错。
-现在改由 `PiDeckApp` 实现 `Application.ActivityLifecycleCallbacks`，用 `startedCount` 计数
-（>0 即可见），`MainActivity` 里的两处调用已删。**新增任何 Activity 都自动纳入**，不需要再改。
+第一次修：改由 `PiDeckApp` 实现 `Application.ActivityLifecycleCallbacks`，用 `startedCount` 计数
+（>0 即可见），**新增任何 Activity 都自动纳入**。
+
+但 0.1.19 上仍然会在 Flutter 页停留时弹完成通知，因为还有第二条路径：
+`app/src/main.ts` 的 `visibilitychange` 里把 `document.visibilityState === "visible"` 报给原生
+（`setRunWatchVisible` → `RunWatchPlugin.setVisible` → `RunWatchService.setAppVisible`），
+**把上面正确的计数结果又覆盖掉了**。跳进 Flutter 页时 Capacitor 的 `Bridge.onPause()` 会调
+`cordovaWebView.handlePause(keepRunning)` → `webView.onPause()` → `visibilityState` 变 `hidden`。
+
+结论（硬性）：**`document.visibilityState` 在混合栈下不等于「App 是否在前台」**，
+它只说明「WebView 有没有被盖住」。所以：
+
+- 可见性**只有一个真相源**：`PiDeckApp.isAppVisible()`（Activity started 计数）。
+  `RunWatchService` 直接读它，不再自己存一份；`RunWatchPlugin.setVisible` 保留成 no-op。
+- JS 侧要判「真后台」用 `isAppInBackground({ visibilityHidden, flutterPageOpen })`
+  （`app/src/platform/run-watch.ts`），其中 `flutterPageOpen` 由
+  `FlutterHostActivity.onStart/onStop` → `FlutterLauncherPlugin.notifyPageVisibility` →
+  `pageVisibility` 事件送来，JS 侧用 `onFlutterPageVisibility()` 订阅。
+- WebView 重新变 `visible` 时无条件把 `flutterPageOpen` 复位为 `false`（兼当兜底，
+  避免那条事件因 WebView 被暂停而丢失后标志卡死）。
 
 ### 2. 不写 `ndkVersion` 就拿到 165MB 的 libflutter.so
 
@@ -133,7 +151,7 @@ AGP 的 `stripReleaseDebugSymbols` 只在 `ndkVersion` 对应的 NDK 已安装�
 ## 验证清单
 
 - [x] `cd app && npm run apk:release` 出包成功，签名校验通过（`apksigner verify`）
-- [x] release 包 42 MB，`lib/*/libflutter.so` 已 strip（11.8 MB / 8.6 MB）
-- [x] WebView 侧流程未受影响：623 个前端单测 + 14 项 `verify:send` 全绿
-- [ ] 真机：设置页 →「实验」→ Flutter 页能打开、能返回、WebView 状态还在
-- [ ] 真机：进 Flutter 页期间 RunWatch 通知判定仍然正确（该响的时候响）
+- [x] release 包 43 MB，`lib/*/libflutter.so` 已 strip（11.8 MB / 8.6 MB）
+- [x] WebView 侧流程未受影响：627 个前端单测 + 14 项 `verify:send` 全绿
+- [x] 真机：设置页 →「实验」→ Flutter 页能打开（0.1.19 已确认）
+- [x] 真机：进 Flutter 页期间 RunWatch 通知判定仍然正确（0.1.20 修：`isAppInBackground` 单测覆盖 4 种组合）

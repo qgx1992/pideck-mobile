@@ -108,6 +108,14 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   设置页「实验」区块只在原生插件可用时出现，浏览器里点不到。
 - 可见性判定已从 `MainActivity.onResume/onPause` 移到 `PiDeckApp`（`Application.ActivityLifecycleCallbacks`
   + `startedCount`），新增 Activity 不需要再手动喂 `RunWatchService.setAppVisible`。
+- **`document.visibilityState` 不等于「App 是否在前台」**：跳进 Flutter 页时 WebView 会被
+  `onPause`，它变成 `hidden`，而用户就在看屏幕。所以：
+  1. 可见性只允许由 `PiDeckApp.isAppVisible()` 判定，**不要**再从 JS 上报
+     （`RunWatchPlugin.setVisible` 已改成 no-op，别把它改回去）；
+  2. JS 判后台一律用 `isAppInBackground({ visibilityHidden, flutterPageOpen })`
+     （`app/src/platform/run-watch.ts`），不要手写 `visibilityState === "hidden"`；
+  3. `flutterPageOpen` 来自原生 `pageVisibility` 事件（`onFlutterPageVisibility()`），
+     由 `FlutterHostActivity.onStart/onStop` 发出。新增任何盖住 WebView 的原生页都要接这条。
 - 国内出包：Gradle 直连 Google 仓库极慢（看起来像卡死）。本机用
   `$env:GRADLE_OPTS="-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7897 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7897"`，
   **不要**写进 `gradle.properties`（CI 没有代理会炸）。

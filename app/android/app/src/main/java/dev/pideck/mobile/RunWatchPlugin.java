@@ -15,7 +15,8 @@ import java.util.Map;
  * 后台任务看护的 JS 接口。
  *
  * 分工：
- *   - JS 负责「什么时候需要看护」（有会话在跑）和「App 是否可见」
+ *   - JS 负责「什么时候需要看护」（有会话在跑）
+ *   - 原生负责「App 是否可见」（PiDeckApp.isAppVisible，按 Activity 计数）
  *   - 原生服务负责「App 被冻结后仍然能收到完成事件」
  *
  * 之所以要 JS 在运行开始时就启动服务：Android 12+ 禁止从后台启动前台服务，
@@ -45,10 +46,16 @@ public class RunWatchPlugin extends Plugin {
         call.resolve();
     }
 
-    /** App 可见性：可见时服务不发通知（避免和 JS 重复）。 */
+    /**
+     * 旧版的「JS 报告可见性」接口。
+     *
+     * 已废弃且故意保留成 no-op：JS 只能看到 WebView 的 visibilityState，
+     * 跳进 Flutter 页时那个值会变成 hidden，而 App 还在前台。
+     * 可见性现在只由 PiDeckApp 的 Activity 计数决定，外部不要覆盖。
+     */
+    @Deprecated
     @PluginMethod
     public void setVisible(PluginCall call) {
-        RunWatchService.setAppVisible(Boolean.TRUE.equals(call.getBoolean("visible", true)));
         call.resolve();
     }
 

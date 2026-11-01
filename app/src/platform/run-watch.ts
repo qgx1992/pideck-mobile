@@ -17,7 +17,6 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 interface RunWatchNative {
   start(options: { baseUrl: string; token: string; titles: Record<string, string> }): Promise<void>;
   stop(): Promise<void>;
-  setVisible(options: { visible: boolean }): Promise<void>;
   consumeNotified(): Promise<{ sessionIds: string[] }>;
   consumeLaunchSession(): Promise<{ sessionId: string }>;
 }
@@ -31,6 +30,21 @@ let watching = false;
 
 export function isRunWatchActive(): boolean {
   return watching;
+}
+
+/**
+ * 「App 真的退到后台了吗」——决定 JS 要不要自己弹通知。
+ *
+ * 混合栈下 `document.visibilityState === "hidden"` 不等于 App 在后台：
+ * 跳进 Flutter 页时 WebView 会被 pause，那个值也会变成 hidden，而用户就在看屏幕。
+ * 所以必须同时确认「WebView 没被 Flutter 页盖住」。
+ * （回归：0.1.19 上在 Flutter 页停留时任务跑完照样弹通知。）
+ */
+export function isAppInBackground(input: {
+  visibilityHidden: boolean;
+  flutterPageOpen: boolean;
+}): boolean {
+  return input.visibilityHidden && !input.flutterPageOpen;
 }
 
 export interface RunWatchStart {
@@ -62,16 +76,6 @@ export async function stopRunWatch(): Promise<void> {
     await native.stop();
   } catch (error) {
     console.warn("[run-watch] 停止失败", error);
-  }
-}
-
-/** 告诉原生 App 是否可见（不可见时才由它发通知）。 */
-export async function setRunWatchVisible(visible: boolean): Promise<void> {
-  if (!native || !watching) return;
-  try {
-    await native.setVisible({ visible });
-  } catch {
-    /* 忽略 */
   }
 }
 

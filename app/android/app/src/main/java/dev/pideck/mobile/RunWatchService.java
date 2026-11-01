@@ -55,8 +55,14 @@ public class RunWatchService extends Service {
     public static final String EXTRA_TOKEN = "token";
     public static final String EXTRA_TITLES = "titles";
 
-    /** App 是否可见；可见时服务只跟踪状态、不发通知（由 JS 负责提示） */
-    private static volatile boolean appVisible = true;
+    /**
+     * App 是否在前台。唯一真相源在 PiDeckApp（按 Activity started 计数），
+     * 这里不再自己存一份：存两份就一定会不同步（踩过：JS 把 WebView 的
+     * visibilityState 当后台报给原生，把正确的判断覆盖掉，在 Flutter 页停留时照样弹通知）。
+     */
+    private static boolean appVisible() {
+        return PiDeckApp.isAppVisible();
+    }
 
     private static final String CHANNEL_ONGOING = "pideck-watch";
     private static final String CHANNEL_DONE = "pideck-task";
@@ -75,10 +81,6 @@ public class RunWatchService extends Service {
     /** 上一次见过的待答卡片（sessionId:requestId），用来判断「新提问」 */
     private final java.util.Set<String> knownRequests = new java.util.HashSet<>();
     private boolean seeded = false;
-
-    public static void setAppVisible(boolean visible) {
-        appVisible = visible;
-    }
 
     public static void start(Context context, String baseUrl, String token, String titlesJson) {
         Intent intent = new Intent(context, RunWatchService.class);
@@ -274,7 +276,7 @@ public class RunWatchService extends Service {
                 String current = next.get(sessionId);
                 boolean finished = current == null || !"running".equals(current);
                 if (!finished) continue;
-                if (!appVisible) notifyFinished(sessionId, current, sessionTitles.optString(sessionId, ""));
+                if (!appVisible()) notifyFinished(sessionId, current, sessionTitles.optString(sessionId, ""));
             }
         }
         lastStatus.clear();
@@ -319,7 +321,7 @@ public class RunWatchService extends Service {
             }
             for (Map.Entry<String, Integer> entry : counts.entrySet()) {
                 String sessionId = entry.getKey();
-                if (!appVisible) {
+                if (!appVisible()) {
                     notifyAsk(sessionId, entry.getValue(), firstTitle.get(sessionId), sessionTitles.optString(sessionId, ""));
                 }
             }

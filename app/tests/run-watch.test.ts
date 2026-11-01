@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   collectRunWatchTitles,
+  isAppInBackground,
   isRunWatchActive,
   shouldStartRunWatch,
   splitNotifiedKeys,
@@ -70,4 +71,24 @@ test("空输入不炸", () => {
   const split = splitNotifiedKeys([]);
   assert.equal(split.runs.size, 0);
   assert.equal(split.asks.size, 0);
+});
+
+/* 「App 是否在后台」——决定 JS 要不要自己弹通知。
+ * 回归：混合栈下跳进 Flutter 页时 WebView 被 pause，visibilityState 变 hidden，
+ * 0.1.19 上据此当成后台，用户看着屏幕也会收到完成通知。 */
+
+test("前台（可见）不算后台", () => {
+  assert.equal(isAppInBackground({ visibilityHidden: false, flutterPageOpen: false }), false);
+});
+
+test("WebView 被盖住且没有 Flutter 页 → 算后台", () => {
+  assert.equal(isAppInBackground({ visibilityHidden: true, flutterPageOpen: false }), true);
+});
+
+test("Flutter 页盖住 WebView 不算后台（用户就在看屏幕）", () => {
+  assert.equal(isAppInBackground({ visibilityHidden: true, flutterPageOpen: true }), false);
+});
+
+test("Flutter 页盖住但 WebView 还可见，同样不算后台", () => {
+  assert.equal(isAppInBackground({ visibilityHidden: false, flutterPageOpen: true }), false);
 });
