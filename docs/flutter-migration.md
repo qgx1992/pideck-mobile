@@ -212,6 +212,35 @@ Web 侧改主题 → setThemeMode() → renderSettings()
 
 **后面迁别的页照这个模式**：页面里不许出现 `Color(0x...)` 字面量，一律从 `PiColors.of(context)` 取。
 
+## 流式探针（0.1.24）：聊天页迁移的前置验证
+
+聊天页里 80% 是纯 UI，可以照设置页那套搬。**唯一不确定的是流式读取与后台保活**，
+所以在开聊天页之前先用一个探针把它量出来。
+
+入口：设置页 → 关于 → 最下面「流式探针（调试）」（`flutter_module/lib/probe/`）。
+
+两种用例：
+
+| 用例 | 做了什么 | 量什么 |
+|---|---|---|
+| 会话流 + 发一轮 | 连 `/api/sessions/<id>/stream`，再 `POST /prompt` 投一条真实消息 | prompt→首帧、帧间隔、整轮耗时、帧类型分布 |
+| 只读 /api/events 30s | 只连全局状态流 | 连接稳定性、心跳间隔 |
+
+跑的时候**把 App 切到后台几十秒再回来**，报告里的「后台判定」会写清楚后台期间收到几帧 ——
+这是决定聊天页用「Dart 直连」还是「继续转发原生 `SsePlugin`」的依据。
+
+实现要点（将来聊天页直接用）：
+
+- `dart:io` 的 `HttpClient` + `response.transform(utf8.decoder)` 是**逐块回调**的，不攒完才给；
+  块边界随机，所以解析器必须能跨块拼帧（`SseEventParser.feed()` 的 `_pending`）。
+- token 走 query（`?token=`）而不是 header：和 `src/api/client.ts` 的 `withQueryToken()` 一致，
+  避开 CORS 预检；但 POST `/prompt` 仍用 `Authorization` 头（和 `headers({withAuth:true})` 一致）。
+- 统计里看**中位间隔**比平均值可靠：一个长停顿就能把平均值拉飞。
+- 首帧延迟要分两个：`firstMs`（连上流到第一帧）和 `prompt→首帧`（发消息到第一帧）——
+  后者才是用户感知的延迟。
+
+**待填：实测结论**（跑完把报告贴进来，然后决定第 3 条的走法）。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
