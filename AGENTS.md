@@ -174,7 +174,14 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 选择面板（模型 / 思考 / 安全 / 提示词 / 上下文）跟着 `ChatSnapshot.picker` 一起推，
   **不要**另开 `setChatPicker` 通道；Dart 侧用内联面板渲染，不用 `showModalBottomSheet`
   （弹层状态归 `Navigator` 管、内容归快照管，不同步就会出现「关了又弹」）。
-  搜索在 Dart 本地过滤，只在回车时发一次 `pickerQuery`。
+  搜索在 Dart 本地过滤，只在回车时发一次 `pickerQuery`（`context` 字段原样带回，
+  @ 提及靠它留在当前目录）。
+- 面板条目带 `insert`（提示词 / 斜线 / @ 文件）就**由 Dart 自己插进输入框**再发 `closePicker`：
+  面板开着时输入框的文字以 Dart 为准，绕回 WebView 插进那个隐藏的输入框用户看不见。
+  插入与触发字符的规则在 `flutter_module/lib/chat/composer_insert.dart`（纯函数，有单测）——
+  别在 `chat_page.dart` 里重写一遍，那里踩过两个坑：`/` 插成 `//goal`、光标 -1 时把整段文字删掉。
+- 看图用 `flutter_module/lib/chat/image_viewer.dart`，**不要换回 `PageView` 自带滑动**：
+  `InteractiveViewer` 会抢走横向拖动，翻页只能听 `onInteractionEnd` 的速度。
 
 ## 改动完成后必须跑的验证
 

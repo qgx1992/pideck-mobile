@@ -168,15 +168,30 @@ export interface ChatPickerItem {
   danger?: boolean;
   /** 分组标题（模型面板按 provider 分组） */
   section?: string;
+  /**
+   * 选中后要插到输入框里的文本。
+   *
+   * 有这一项表示插入是**纯文本动作**：由 Dart 直接写进它自己的输入框
+   * （面板开着时输入框的文字以 Dart 为准，WebView 只在本页发送时收到全文），
+   * 然后发一个 `closePicker` 就算完，不用再回 WebView 走一圈。
+   */
+  insert?: string;
 }
 
 export interface ChatPickerView {
-  /** `model` / `thinking` / `security` / `prompt` */
+  /** `model` / `thinking` / `security` / `prompt` / `slash` / `mention` / `context` */
   kind: string;
   title: string;
   subtitle?: string;
   searchable?: boolean;
   empty?: string;
+  /**
+   * 面板自己的「当前位置」，Dart 不认识内容、只在搜索时原样带回。
+   *
+   * @ 提及往下钻了一层之后，用户在面板里打字搜索，`pickerQuery` 必须
+   * 还知道自己在哪一层 —— 否则一搜就跳回项目根目录。
+   */
+  context?: string;
   items: ChatPickerItem[];
 }
 

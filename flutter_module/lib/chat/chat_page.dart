@@ -21,6 +21,8 @@ import '../host_channel.dart';
 import '../sidebar/sidebar_drawer.dart';
 import '../sidebar/sidebar_models.dart';
 import 'chat_models.dart';
+import 'composer_insert.dart';
+import 'image_viewer.dart';
 import 'markdown_view.dart';
 
 /// 与 Web 侧 `chat-view.ts:56-68` 同一个阈值。
@@ -42,6 +44,12 @@ class _ChatScreenState extends State<ChatScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final ScrollController _scroll = ScrollController();
   final TextEditingController _composer = TextEditingController();
+
+  /// 上一次的输入框文本（判断「刚敲了一个字符」用）
+  String _composerText = '';
+
+  /// 输入框里此刻只剩触发的 `/` 或 `@`：下一条 insert 要整段替换
+  bool _composerHoldsTrigger = false;
   final TextEditingController _pickerSearch = TextEditingController();
   /// 当前面板的种类，用来判断要不要清空搜索框（换面板时清）
   String _pickerKind = '';
@@ -176,6 +184,8 @@ class _ChatScreenState extends State<ChatScreen> {
             })
         .toList(growable: false);
     _composer.clear();
+    _composerText = '';
+    _composerHoldsTrigger = false;
     _composerFocus.unfocus();
     setState(() {
       _stick = true;
@@ -1057,6 +1067,52 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// 面板里点了一项。
+  ///
+  /// 带 `insert` 的是**纯文本动作**（提示词 / 斜线命令 / @ 文件）：直接写进本页
+  /// 输入框再回一条 `closePicker`。其余（模型、思考、安全、压缩上下文）要
+  /// WebView 真去干活，照旧回 `pickerSelect`。
+  void _onPickerTap(ChatPickerView picker, ChatPickerItem item) {
+    final PickerTap tap = resolvePickerTap(item);
+    if (tap.kind == PickerTapKind.insert) {
+      _insertComposerText(tap.text);
+      sendChatAction(<String, Object?>{'type': 'closePicker'});
+      return;
+    }
+    sendChatAction(<String, Object?>{'type': 'pickerSelect', 'kind': picker.kind, 'id': tap.itemId});
+  }
+
+  /// 往输入框光标处插一段文本。
+  ///
+  /// `_composerHoldsTrigger` 为真时整段替换：斜杠和 @ 是「先打触发字符、
+  /// 再选一项」，留着那个字符会变成 `//goal` 或 `@@src/a.ts`。
+  void _insertComposerText(String text) {
+    final bool replaceAll = _composerHoldsTrigger;
+    _composerHoldsTrigger = false;
+    _composer.value = insertIntoComposer(_composer.value, text, replaceAll: replaceAll);
+    _composerText = _composer.value.text;
+    _composerFocus.requestFocus();
+    setState(() {});
+  }
+
+  /// 输入框内容变化：顺手判断要不要叫出 `/` 或 `@` 面板。
+  ///
+  /// 只认「刚敲进去的那一个字符」，粘贴进来的 `/`、`@` 不弹（粘贴路径时
+  /// 弹面板很烦）；Web 版也是这个规则。
+  void _onComposerChanged(String text) {
+    final String previous = _composerText;
+    _composerText = text;
+    setState(() {});
+    final String? trigger = composerTrigger(
+      previous: previous,
+      next: text,
+      selection: _composer.selection,
+    );
+    if (trigger == null) return;
+    _composerHoldsTrigger = true;
+    sendChatAction(<String, Object?>{'type': trigger == '/' ? 'slash' : 'mention'});
+  }
+
   /// 选择面板（模型 / 思考 / 安全 / 提示词 / 上下文）。
   ///
   /// 用内联面板而不是 `showModalBottomSheet`：面板内容是 WebView 异步推过来的，
@@ -1088,9 +1144,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       rows.add(InkWell(
         key: ValueKey<String>('picker:${picker.kind}:${item.id}'),
-        onTap: () => sendChatAction(
-          <String, Object?>{'type': 'pickerSelect', 'kind': picker.kind, 'id': item.id},
-        ),
+        onTap: () => _onPickerTap(picker, item),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Row(
@@ -1186,7 +1240,13 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   onChanged: (String value) => setState(() {}),
                   onSubmitted: (String value) => sendChatAction(
-                    <String, Object?>{'type': 'pickerQuery', 'kind': picker.kind, 'query': value},
+                    <String, Object?>{
+                      'type': 'pickerQuery',
+                      'kind': picker.kind,
+                      'query': value,
+                      // 原样带回：@ 提及要靠它留在当前目录
+                      'context': picker.context,
+                    },
                   ),
                 ),
               ),
@@ -1272,7 +1332,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           borderSide: BorderSide(color: c.divider),
                         ),
                       ),
-                      onChanged: (String _) => setState(() {}),
+                      onChanged: _onComposerChanged,
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -1429,7 +1489,14 @@ class _HistoryTile extends StatelessWidget {
       child: Wrap(
         spacing: 6,
         runSpacing: 6,
-        children: images.map((String source) => _ChatImage(source: source)).toList(growable: false),
+        children: <Widget>[
+          for (int index = 0; index < images.length; index++)
+            _ChatImage(
+              source: images[index],
+              // 点开的是全屏看图，可以在这条消息的所有图之间左右翻
+              onTap: () => openImageViewer(context, images, index),
+            ),
+        ],
       ),
     );
   }
@@ -1437,9 +1504,10 @@ class _HistoryTile extends StatelessWidget {
 
 /// 图片：`data:` 走内存解码，其余当 URL 拉。两路都不落盘。
 class _ChatImage extends StatelessWidget {
-  const _ChatImage({required this.source});
+  const _ChatImage({required this.source, this.onTap});
 
   final String source;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1464,7 +1532,9 @@ class _ChatImage extends StatelessWidget {
     } else {
       child = const SizedBox(width: 140, height: 60);
     }
-    return ClipRRect(borderRadius: BorderRadius.circular(8), child: child);
+    final Widget clipped = ClipRRect(borderRadius: BorderRadius.circular(8), child: child);
+    if (onTap == null) return clipped;
+    return GestureDetector(behavior: HitTestBehavior.opaque, onTap: onTap, child: clipped);
   }
 }
 

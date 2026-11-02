@@ -202,7 +202,7 @@ import {
   buildThinkingPicker,
   shortTokens,
 } from "./platform/flutter-chat-header.ts";
-import type { ChatHeaderView, ChatPickerView } from "./platform/flutter-chat-header.ts";
+import type { ChatHeaderView, ChatPickerItem, ChatPickerView } from "./platform/flutter-chat-header.ts";
 import {
   modelChipLabel,
   modelChipTitle,
@@ -5517,7 +5517,7 @@ function setFlutterPicker(view: ChatPickerView | null): void {
  * 所以这里先推一个「加载中」再推真实内容 —— 手机上看不出差别，但不会出现
  * 点了 chip 之后弹层里空着一秒的错觉。
  */
-async function openFlutterPicker(kind: string, query = ""): Promise<void> {
+async function openFlutterPicker(kind: string, query = "", trail: string[] = []): Promise<void> {
   if (!runtime || !activeSessionId) return;
   const session = runtime.store.session(activeSessionId);
   const prefs = resolveSessionPrefs(session, learnedPrefs.get(epKey(activeSessionId)));
@@ -5565,7 +5565,89 @@ async function openFlutterPicker(kind: string, query = ""): Promise<void> {
         id: entry.name,
         label: `/${entry.name}`,
         description: entry.description || undefined,
+        insert: promptInsertText(entry),
       })),
+    });
+    return;
+  }
+
+  if (kind === "slash") {
+    // 一次拉全再推：运行时命令与提示词都不大，分两段先给内置命令再补
+    // 会让面板在用户已经输入搜索词时闪一下（Web 版是老式弹层，看不出这个问题）。
+    const { client, store } = runtime;
+    const target = store.targetOf(activeSessionId);
+    if (!target) {
+      setFlutterPicker({ kind, title: "斜线命令", empty: "这个会话还没有可用的运行时", items: [] });
+      return;
+    }
+    setFlutterPicker({ kind, title: "斜线命令", searchable: true, empty: "正在读取命令…", items: [] });
+    const runtimeCommands = await client.listRuntimeCommands(activeSessionId, target).catch(() => []);
+    const all = mergeSlashItems({ runtime: runtimeCommands, builtin: BUILTIN_SLASH });
+    const filtered = filterSlashItems(all, query);
+    const items = groupSlashItems(filtered).flatMap((section) =>
+      section.items.map((item) => ({
+        id: item.name,
+        label: `/${item.name}`,
+        description: item.description || undefined,
+        section: section.title,
+        insert: slashText(item),
+      })),
+    );
+    setFlutterPicker({
+      kind,
+      title: "斜线命令",
+      subtitle: all.length > 0 ? `共 ${all.length} 个命令` : undefined,
+      searchable: true,
+      empty: items.length === 0 ? "没有匹配的命令" : "",
+      items,
+    });
+    return;
+  }
+
+  if (kind === "mention") {
+    const { client, store } = runtime;
+    const session = store.session(activeSessionId);
+    const projectId = session?.projectId ?? activeProjectId;
+    const project = store.projects().find((item) => item.id === projectId);
+    if (!projectId || !project) {
+      setFlutterPicker({ kind, title: "引用文件", empty: "没有可用项目：请先在桌面端添加项目目录", items: [] });
+      return;
+    }
+    setFlutterPicker({
+      kind,
+      title: "引用文件",
+      searchable: true,
+      empty: "正在读取目录…",
+      context: joinPath(trail),
+      items: [],
+    });
+    let nodes: FileNode[];
+    try {
+      nodes = await client.listFiles(projectId, joinPath(trail));
+    } catch (error) {
+      // 文件接口当年不带跨域头，靠错误文案指路（与 Web 版一致）
+      setFlutterPicker({ kind, title: "引用文件", empty: `读取目录失败：${describeError(error)}`, items: [] });
+      return;
+    }
+    const view = buildMentionView(projectLabel(project) ?? "项目", trail, nodes, query);
+    const items: ChatPickerItem[] = [];
+    if (trail.length > 0) items.push({ id: `dir:${joinPath(trail.slice(0, -1))}`, label: "..", description: "上一级" });
+    for (const node of view.nodes) {
+      if (isDirectory(node)) {
+        // 目录用 `dir:` 前缀：Dart 看到它不改输入框、只回一条 pickerSelect 让这里往下钻
+        items.push({ id: `dir:${node.relativePath}`, label: `${node.name}/`, description: "目录" });
+        continue;
+      }
+      items.push({ id: `file:${node.relativePath}`, label: node.name, description: node.relativePath, insert: mentionText(node) });
+    }
+    setFlutterPicker({
+      kind,
+      title: "引用文件",
+      subtitle: view.crumbs.map((crumb) => crumb.label).join(" / "),
+      searchable: true,
+      empty: view.nodes.length > 0 ? "没有匹配的文件" : "这个目录里没有文件",
+      context: joinPath(trail),
+      items,
     });
     return;
   }
@@ -5815,6 +5897,12 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
     case "prompts":
       void openFlutterPicker("prompt");
       return;
+    case "slash":
+      void openFlutterPicker("slash");
+      return;
+    case "mention":
+      void openFlutterPicker("mention");
+      return;
     case "sendMode":
       sendMode = toggleSendMode(sendMode);
       renderComposerState();
@@ -5825,13 +5913,20 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
       const kind = text("kind");
       const query = text("query");
       if (!kind) return;
-      void openFlutterPicker(kind, query);
+      // `context` 是面板自己带出来的位置（目前只有 @ 提及的目录用），Dart 只负责原样带回
+      const context = text("context");
+      void openFlutterPicker(kind, query, context ? context.split("/").filter(Boolean) : []);
       return;
     }
     case "pickerSelect": {
       const kind = text("kind");
       const id = text("id");
       if (!kind) return;
+      // @ 提及的目录是「原地往下钻」：面板不关，直接换成新目录的内容
+      if (kind === "mention" && id.startsWith("dir:")) {
+        void openFlutterPicker("mention", "", id.slice(4).split("/").filter(Boolean));
+        return;
+      }
       // 先关面板再执行：压缩上下文要好几秒，面板一直开着会让人以为没点中
       setFlutterPicker(null);
       void applyFlutterPickerChoice(kind, id).then(() => syncFlutterChat());

@@ -611,6 +611,7 @@ class ChatPickerItem {
     this.selected = false,
     this.danger = false,
     this.section = '',
+    this.insert,
   });
 
   final String id;
@@ -622,6 +623,12 @@ class ChatPickerItem {
   /// 分组标题（模型面板按 provider 分组）
   final String section;
 
+  /// 选中后要插进输入框的文本（提示词 / 斜线命令 / @提及的文件）。
+  ///
+  /// 有值就是「纯文本动作」：直接写进本页的输入框，再回一条 `closePicker`，
+  /// 不用等 WebView 再算一遍。空表示这个条目是真正的命令，要回 WebView 执行。
+  final String? insert;
+
   factory ChatPickerItem.fromJson(Map<String, Object?> json) => ChatPickerItem(
         id: str(json['id']),
         label: str(json['label']),
@@ -629,6 +636,7 @@ class ChatPickerItem {
         selected: json['selected'] == true,
         danger: json['danger'] == true,
         section: str(json['section']),
+        insert: json['insert'] is String ? str(json['insert']) : null,
       );
 }
 
@@ -640,6 +648,7 @@ class ChatPickerView {
     this.subtitle = '',
     this.searchable = false,
     this.empty = '',
+    this.context = '',
     this.items = const <ChatPickerItem>[],
   });
 
@@ -648,6 +657,9 @@ class ChatPickerView {
   final String subtitle;
   final bool searchable;
   final String empty;
+
+  /// 面板自己的位置的（Dart 不认识内容，搜索时原样带回给 WebView）
+  final String context;
   final List<ChatPickerItem> items;
 
   factory ChatPickerView.fromJson(Map<String, Object?> json) => ChatPickerView(
@@ -656,6 +668,7 @@ class ChatPickerView {
         subtitle: str(json['subtitle']),
         searchable: json['searchable'] == true,
         empty: str(json['empty']),
+        context: str(json['context']),
         items: listOf(json['items'])
             .whereType<Map<Object?, Object?>>()
             .map((Map<Object?, Object?> item) => ChatPickerItem.fromJson(mapOf(item)))

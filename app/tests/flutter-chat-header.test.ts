@@ -17,7 +17,7 @@ import {
   contextChipLabel,
   shortTokens,
 } from "../src/platform/flutter-chat-header.ts";
-import type { ChatHeaderInput } from "../src/platform/flutter-chat-header.ts";
+import type { ChatHeaderInput, ChatPickerItem } from "../src/platform/flutter-chat-header.ts";
 import type { ModelPickerSection } from "../src/ui/model-picker.ts";
 import type { SecurityChoice } from "../src/ui/security-level-model.ts";
 
@@ -201,4 +201,38 @@ test("安全面板：第一项是「跟随全局默认」，id 为空串", () =>
   assert.equal(view.items[0]?.id, "");
   assert.equal(view.items[0]?.label, "跟随全局默认");
   assert.equal(view.items[1]?.selected, true);
+});
+
+test("面板条目：insert 跟着 JSON 一起过去（提示词 / 斜线 / @ 文件靠它插输入框）", () => {
+  const item: ChatPickerItem = {
+    id: "file:src/a.ts",
+    label: "a.ts",
+    description: "src/a.ts",
+    insert: "@src/a.ts ",
+  };
+  const round = JSON.parse(JSON.stringify(item)) as ChatPickerItem;
+  assert.equal(round.insert, "@src/a.ts ");
+});
+
+test("模型面板的条目不带 insert：那些是真命令，必须回 WebView 执行", () => {
+  const view = buildModelPicker(
+    [
+      {
+        provider: "openai",
+        models: [
+          {
+            key: "openai\u0000gpt-5",
+            provider: "openai",
+            modelId: "gpt-5",
+            name: "gpt-5",
+            contextWindow: 128000,
+            inputPrice: null,
+            outputPrice: null,
+          },
+        ],
+      } as unknown as ModelPickerSection,
+    ],
+    "openai\u0000gpt-5",
+  );
+  for (const item of view.items) assert.equal(item.insert, undefined);
 });

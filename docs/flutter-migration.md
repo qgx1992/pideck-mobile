@@ -573,10 +573,75 @@ Dart 点「扫码配对」→ `openWebSheet('connection')` → 原生先 `notify
 | `chip` | `key` | `plan` 直接切计划模式；`dsh` 走 `leaveFlutterThen(openDshToolsSheet)`；其余开对应面板 |
 | `context` | — | 开上下文面板（百分比明细 + 「压缩上下文」） |
 | `prompts` | — | 开提示词面板（插 `/名字 ` 到输入框） |
+| `slash` | — | 开斜线命令面板（0.1.32） |
+| `mention` | — | 开 @ 文件面板（0.1.32） |
 | `sendMode` | — | 切换排队 / 插话 |
-| `pickerQuery` | `kind`, `query` | 重新取一次面板内容（模型 / 提示词） |
+| `pickerQuery` | `kind`, `query`, `context` | 重新取一次面板内容（模型 / 提示词 / 斜线 / @ 文件）；`context` 原样带回，@ 提及靠它留在当前目录 |
 | `pickerSelect` | `kind`, `id` | 先关面板再落地（压缩上下文要好几秒，面板开着会让人以为没点中） |
 | `closePicker` | — | 收起面板 |
+
+## 看图 + 斜杠 + @提及（0.1.32）：把「插入输入框」搬到 Dart
+
+这一批解决的是同一个矛盾：**面板内容由 WebView 算，但面板开着时输入框在 Dart 手上**。
+选择面板从 0.1.31 起就在快照里，可选完之后「插到光标处」这一步原来还要过桥回 WebView ——
+而 WebView 的输入框此刻是隐藏的，插进去用户根本看不见。
+
+### 纯文本动作：`insert` 字段
+
+`ChatPickerItem` 加了 `insert`：**有它就是纯文本动作**。
+
+- Dart 拿到 `insert` 直接写进自己的 `TextEditingController`，然后发一条 `closePicker` 收工；
+- 没有 `insert`（模型 / 思考 / 安全 / 压缩上下文 / `dir:` 目录）照旧回 `pickerSelect`，由 WebView 真去执行。
+
+提示词、斜线命令、@ 文件全部改成这一路。`applyFlutterPickerChoice` 里那条 prompt 分支保留做兜底
+（老版本 Dart 传上来的仍是 `pickerSelect`），但新路径不再经过它。
+
+### 触发字符：只认「刚敲进去的那一个字符」
+
+`/` 与 `@` 由 Dart 侧的输入框监听触发（WebView 的输入框这页不在场）。规则抽进了
+`flutter_module/lib/chat/composer_insert.dart` 的三个纯函数，理由是这三条都踩过：
+
+| 函数 | 守的是什么 |
+|---|---|
+| `composerTrigger()` | 只认长度 +1、光标折叠、字符正好是 `/` 或 `@`；`/` 还要求输入框里没有别的东西。粘贴 `@src/a.ts` 不该弹面板 |
+| `insertIntoComposer()` | 光标为 -1（刚清空、还没聚焦）时**追加到末尾**，不要因为起点 -1 就把整段文字当选区替换掉 |
+| `resolvePickerTap()` | 有 `insert` 就插文本 + 关面板，否则回 `pickerSelect` |
+
+再一个坑：打完 `/` 叫出面板，选中后插入的是 `/goal `，若直接按光标插入就成了 `//goal `；
+`@` 同理变 `@@src/a.ts `。所以触发时置 `_composerHoldsTrigger`，下一条插入整段替换。
+
+### @ 提及的目录钻取
+
+`/api/files` 只列一层，所以面板要能「往下点」。做法：
+
+- 目录条目 id 是 `dir:<相对路径>`，**不带 `insert`** → Dart 回 `pickerSelect`；
+- WebView 收到 `dir:` 前缀不关面板，直接换成那个目录的内容（`openFlutterPicker("mention", "", trail)`）；
+- `..` 也走 `dir:`（指向上一级），所以只需要一条规则；
+- 面板自己在 `ChatPickerView.context` 里带出当前位置，用户在面板里打字搜索时原样带回 ——
+  不然一搜索就跳回项目根目录。
+
+### 看图：`ImageViewerPage`
+
+`flutter_module/lib/chat/image_viewer.dart`：`PageView` + `InteractiveViewer`，捏合缩放、左右翻页、点一下关掉。
+两条踩坑记录：
+
+1. **`PageView` 的滑动收不到**。`InteractiveViewer` 的缩放手势会在手势竞技场里先赢，祖先的横向拖动全被吃掉
+   （`tester.drag` 实测完全不动）。所以 `PageView` 关掉物理滚动只当动画容器，翻页改成听
+   `InteractiveViewer.onInteractionEnd` 的速度：scale ≈ 1 且横向速度 > 240 才翻页；
+   放大状态下的拖动仍然交给 `InteractiveViewer`，否则放大后看不了边角。
+2. **大图解码要限宽**。`data:` 内联图的原始像素常常比屏幕大几倍，`Image.memory` 加
+   `cacheWidth = 屏宽 × devicePixelRatio`，不然后台几张图就能把内存吃满。
+
+### 新建会话 / 切后端：**故意没迁**
+
+`openWorkspacePicker`（新建会话选工作区 + 后端）与 `openBackendSheet`（已有会话切后端）仍走
+`leaveFlutterThen(...)` 回 WebView。理由不是没时间，是结构上不对：
+
+- 它们由**侧栏抽屉**发起，而抽屉盖在聊天页上面，内联面板会出现在抽屉背后；
+- 「新建会话」成功后要换一个会话，那需要聊天页整体重开，属于页面级导航而不是面板；
+- 两件都是低频动作，回 WebView 的代价只有一帧切换。
+
+真要迁，需要先给 Dart 侧加「全屏页面级面板」（`Navigator.push` 一个选择页），那是另一件事。
 
 ## 逐页迁移顺序（建议）
 
@@ -656,3 +721,10 @@ Dart 点「扫码配对」→ `openWebSheet('connection')` → 原生先 `notify
 - [ ] 真机：只选图不写字直接发 → 服务端收到「看下这张图」+ 图片
 - [ ] 真机：代码块点「保存到手机」→ 通知栏/文件管理器里 `下载/PiDeck/snippet-*.txt` 内容完整；工具卡同理
 - [ ] 真机：设置页「扫码配对 / 连接设置」→ 回到 WebView 并弹出连接面板，扫码能扫
+- [x] `flutter test` 81 项全绿（新增 `image_viewer_test.dart` 9 项、`composer_insert_test.dart` 13 项）
+- [x] `app/tests/flutter-chat-header.test.ts` 15 项（新增 insert 随 JSON 过去、模型条目不带 insert）
+- [ ] 真机：聊天里点图片 → 全屏看、双指缩放、左右甩翻页、点空白或 ✕ 关闭（0.1.32）
+- [ ] 真机：输入框打 `/` → 出斜线命令面板，选中后命令文本进输入框且**只有一个斜线**（0.1.32）
+- [ ] 真机：输入框打 `@` → 出文件面板，点目录能往下钻、`..` 回到上一级、选中文件插入 `@路径 `
+- [ ] 真机：@ 面板里打字搜索时仍停在当前目录（不会跳回项目根）
+- [ ] 真机：「+」旁提示词按钮 → 选一项后模板名进输入框
