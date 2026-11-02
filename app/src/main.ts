@@ -5396,6 +5396,11 @@ function dispatchFlutterSidebarAction(action: Record<string, unknown>): void {
   // 再调一次接口就会变成两次副作用（重命名两次、删两次、建出两个会话）。
   if (action.native === true || action.native === "true") {
     switch (type) {
+      case "sessionExport": {
+        // 文件已经在原生侧落盘并提示过了，这里只把可能还开着的会话菜单收掉。
+        closeSheet();
+        return;
+      }
       case "sessionRename":
       case "sessionCopy":
       case "sessionDelete":

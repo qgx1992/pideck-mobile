@@ -344,6 +344,10 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   成功后**带 `native: true` 回传**给 WebView，`dispatchFlutterSidebarAction` 里那条 native 分支只刷新 + 重画，
   绝不能再调一次接口 —— 一个动作只能有一次副作用（改名两次、删两次、建出两个会话都是这么来的）。
   删当前会话仍走 WebView：它要清 `activeSessionId`、关 channel、把页面退回空态。
+  会话导出（`sessionExport`，0.2.14 起）也归 Dart：`GET /api/sessions/:id/export-html` 用
+  **Authorization 头**取字节（不要拼 `?token=`，会落到浏览器历史 / 下载记录 / 系统 Intent），
+  再走宿主 `saveTextFile()` 落盘；文件名规则与 Web 的 `safeFileStem` 逐字一致
+  （`sidebar/session_actions.dart` 里的 `safeFileStem` / `exportStamp`，有单测锁住）。
 - **假 SSE 服务端必须 `response.bufferOutput = false`**：Dart 的 `HttpResponse` 默认把 body 攒到 close 才发，
   而流式连接永远不 close，客户端一帧都收不到（症状是 `store.ready` 永远不为真、测试 30s 超时）。
   测试和服务端 mock 一个都不能漏这一行。

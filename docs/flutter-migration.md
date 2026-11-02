@@ -1501,3 +1501,20 @@ JS 被唤醒（`MainActivity` 已被 Flutter 页 pause）。
 顺带修掉一个测试基建的坑：假 SSE 服务端必须 `response.bufferOutput = false`。
 Dart 的 `HttpResponse` 默认把 body 攒到 close 才发，而流式连接永远不 close ——
 不关缓冲的话客户端一个字节都收不到，症状是 `store.ready` 永远为假、测试 30s 超时。
+
+### 0.2.14：会话导出也交给 Dart
+
+`sessionExport` 是侧栏长按菜单里最后一条还要绕回 WebView 的数据动作。它只做两件事：
+取一段 HTML、落盘。
+
+- `GET /api/sessions/:id/export-html` 用 **`Authorization` 头**取字节
+  （`PiDeckClient.requestText()`，Dart 侧唯一「GET 也带鉴权头」的请求），
+  token 不进 URL —— 那会落到浏览器历史、下载记录、系统 Intent 里。
+- 文件名与 Web 逐字一致：`PiDeck-${safeFileStem(title)}-${stamp}.html`，
+  `safeFileStem` 把 `[\/:*?"<>|\s]` 换成 `-`、去首尾 `-`、空则 `session`、截 40 字符；
+  `stamp` 是 UTC `YYYY-MM-DDTHH:MM` 再把 `:`/`T` 换成 `-`（CI 在 UTC，别用本地时区）。
+- 落盘只走宿主 `saveFile` 通道（同一份 `SavedFiles`），Dart 侧不碰 MediaStore。
+- 保存失败（通道没响应）也要把 `native: true` 回传一次：让 WebView 把菜单收掉，
+  而不是用户再点一次导出、存出两份文件。
+- 测试：`session_actions_test.dart` 新增 4 项（鉴权头、文件名形状、落盘失败仍回传、
+  `safeFileStem` / `exportStamp` 纯函数），落盘通道可注入。

@@ -15,6 +15,7 @@ void main() {
   late PiDeckClient client;
   late StateStore store;
   late List<String> requests;
+  late List<String> auths;
   late List<Map<String, Object?>> bodies;
   late List<String> notices;
   late List<Map<String, Object?>> forwards;
@@ -22,6 +23,7 @@ void main() {
 
   setUp(() async {
     requests = <String>[];
+    auths = <String>[];
     bodies = <Map<String, Object?>>[];
     notices = <String>[];
     forwards = <Map<String, Object?>>[];
@@ -40,6 +42,7 @@ void main() {
     server.listen((HttpRequest request) async {
       final String path = request.uri.path;
       requests.add(path);
+      auths.add(request.headers.value('authorization') ?? '');
       final String raw = await utf8.decoder.bind(request).join();
       bodies.add(raw.isEmpty ? <String, Object?>{} : Map<String, Object?>.from(jsonDecode(raw) as Map));
       final HttpResponse response = request.response;
@@ -48,6 +51,12 @@ void main() {
         response.headers.contentType = ContentType('text', 'event-stream', charset: 'utf-8');
         response.write('event: state\ndata: ${jsonEncode(stateJson)}\n\n');
         await response.flush();
+        return;
+      }
+      if (path.endsWith('/export-html')) {
+        response.headers.contentType = ContentType('text', 'html', charset: 'utf-8');
+        response.write('<html><body>导出正文</body></html>');
+        await response.close();
         return;
       }
       response.headers.contentType = ContentType.json;
@@ -76,12 +85,13 @@ void main() {
     await server.close(force: true);
   });
 
-  SessionActions actionsOf({String activeSessionId = 's1'}) => SessionActions(
+  SessionActions actionsOf({String activeSessionId = 's1', SaveTextFileFn? saveFile}) => SessionActions(
         client: client,
         store: store,
         activeSessionId: activeSessionId,
         onNotice: notices.add,
         onForward: forwards.add,
+        saveFile: saveFile,
       );
 
   test('改名：标题去空白后提交，成功后回传 native 只重画', () async {
@@ -144,6 +154,61 @@ void main() {
       'projectId': 'p1',
       'id': 's9',
     });
+  });
+
+  test('导出：带 Authorization 取 HTML，文件名去掉非法字符后保存', () async {
+    String? savedName;
+    String? savedText;
+    String? savedMime;
+    final SessionActions actions = actionsOf(
+      saveFile: ({required String name, required String text, required String mime}) async {
+        savedName = name;
+        savedText = text;
+        savedMime = mime;
+        return '/sdcard/Download/PiDeck/$name';
+      },
+    );
+    await actions.export('s2');
+    final int index = requests.indexOf('/api/sessions/s2/export-html');
+    expect(index, greaterThanOrEqualTo(0));
+    // 导出整段 HTML 不能把 token 拼进 query（会落到下载记录 / 系统 Intent 里）。
+    expect(auths[index], 'Bearer t');
+    expect(savedText, '<html><body>导出正文</body></html>');
+    expect(savedMime, 'text/html');
+    expect(
+      RegExp(r'^PiDeck-第二个-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.html$').hasMatch(savedName!),
+      isTrue,
+      reason: '实际文件名：$savedName',
+    );
+    expect(notices.first, '正在导出 HTML…');
+    expect(notices.last, contains('已保存到'));
+    expect(forwards.single, <String, Object?>{'type': 'sessionExport', 'native': true, 'id': 's2'});
+  });
+
+  test('导出：落盘通道没响应时提示失败，但仍回传（不要重来一次）', () async {
+    final SessionActions actions = actionsOf(
+      saveFile: ({required String name, required String text, required String mime}) async => null,
+    );
+    await actions.export('s2');
+    expect(notices.last, contains('保存失败'));
+    expect(forwards.single['type'], 'sessionExport');
+  });
+
+  test('导出：空 id 不发请求、不提示', () async {
+    final SessionActions actions = actionsOf(
+      saveFile: ({required String name, required String text, required String mime}) async => '/x/$name',
+    );
+    await actions.export('');
+    expect(requests.where((String path) => path.contains('/export-html')), isEmpty);
+    expect(notices, isEmpty);
+    expect(forwards, isEmpty);
+  });
+
+  test('文件名清洗与时间戳：与 Web 的 safeFileStem 同一套规则', () {
+    expect(safeFileStem('  a/b:c*d?e"f<g>h|i  '), 'a-b-c-d-e-f-g-h-i');
+    expect(safeFileStem('   '), 'session');
+    expect(safeFileStem('x' * 60).length, 40);
+    expect(exportStamp(DateTime.utc(2026, 11, 2, 15, 24, 41)), '2026-11-02-15-24');
   });
 
   test('新建会话：一个项目都没有时只提示', () async {

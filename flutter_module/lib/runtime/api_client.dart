@@ -412,6 +412,33 @@ class PiDeckClient {
     }
   }
 
+  /// 取一段纯文本（会话导出用）。
+  ///
+  /// 与 `requestJson` 的差别只有一个：GET **也带** `Authorization` 头。
+  /// 导出的是整段 HTML，塞进 `?token=` 会落到浏览器历史 / 下载记录 / 系统 Intent 里。
+  Future<String> requestText(String path, {Map<String, Object?>? query}) async {
+    final Uri uri = buildUri(path, query);
+    final Map<String, String> head = headers(jsonBody: false, withAuth: true);
+    HttpClientResponse response;
+    try {
+      final HttpClientRequest request = await _client.openUrl('GET', uri).timeout(connectTimeout);
+      head.forEach(request.headers.set);
+      response = await request.close().timeout(timeout);
+    } on TimeoutException catch (error) {
+      throw PiDeckException(PiDeckErrorKind.offline, '请求超时', cause: error);
+    } on SocketException catch (error) {
+      throw PiDeckException(PiDeckErrorKind.offline, error.message, cause: error);
+    } on HttpException catch (error) {
+      throw PiDeckException(PiDeckErrorKind.offline, error.message, cause: error);
+    }
+    if (response.statusCode >= 400) throw await toError(response, '请求失败');
+    return utf8.decodeStream(response);
+  }
+
+  /// 会话导出成一段自包含 HTML（`GET /api/sessions/:id/export-html`）。
+  Future<String> sessionExportHtml(String sessionId) =>
+      requestText('/api/sessions/${Uri.encodeComponent(sessionId)}/export-html');
+
   /// SSE：连接 → 逐块喂 [SseParser] → 吐事件。
   ///
   /// 取消订阅时 `finally` 会关掉这一条流专用的 HttpClient（对应 TS 的 `AbortController`）。

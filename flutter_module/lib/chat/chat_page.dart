@@ -582,6 +582,10 @@ class _ChatScreenState extends State<ChatScreen> {
         unawaited(actions.removeProject('${action['projectId'] ?? ''}'));
       case 'createSession':
         unawaited(actions.create(projectId: '${action['projectId'] ?? ''}'));
+      case 'sessionExport':
+        // 导出 = 取一段 HTML + 落盘，跟 WebView 没有任何关系；带 Authorization 取字节，
+        // token 不进 URL（Web 那条路也是这么做的，只是它还绕了一圈 CapacitorHttp）。
+        unawaited(actions.export(id));
       default:
         return false;
     }

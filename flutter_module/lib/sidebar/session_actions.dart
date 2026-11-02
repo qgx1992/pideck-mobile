@@ -11,8 +11,30 @@
 ///     `activeSessionId` 怎么清，是 WebView 的事（还会牵到 channel 关闭）。
 library;
 
+import '../host_channel.dart' show saveTextFile;
 import '../runtime/api_client.dart';
 import '../runtime/state_store.dart';
+
+/// 落盘通道（页面注入真实现，测试注入假的）。
+typedef SaveTextFileFn = Future<String?> Function({
+  required String name,
+  required String text,
+  required String mime,
+});
+
+/// 导出的文件名去掉不能出现在文件名里的字符（与 Web 的 `safeFileStem` 逐字一致）。
+String safeFileStem(String value) {
+  final String cleaned = value.replaceAll(RegExp(r'[\/:*?"<>|\s]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+  final String stem = cleaned.isEmpty ? 'session' : cleaned;
+  return stem.length <= 40 ? stem : stem.substring(0, 40);
+}
+
+/// 文件名里的时间戳：`new Date().toISOString().slice(0, 16)` 再把 `:`/`T` 换成 `-`。
+String exportStamp(DateTime now) {
+  final String iso = now.toUtc().toIso8601String();
+  final String head = iso.length >= 16 ? iso.substring(0, 16) : iso;
+  return head.replaceAll(':', '-').replaceAll('T', '-');
+}
 
 class SessionActions {
   SessionActions({
@@ -21,7 +43,8 @@ class SessionActions {
     required this.activeSessionId,
     required this.onNotice,
     required this.onForward,
-  });
+    SaveTextFileFn? saveFile,
+  }) : saveFile = saveFile ?? saveTextFile;
 
   final PiDeckClient client;
   final StateStore store;
@@ -34,6 +57,9 @@ class SessionActions {
 
   /// 回传动作给 WebView（只用来刷新与重画，不再重复执行）。
   final void Function(Map<String, Object?> action) onForward;
+
+  /// 会话导出落盘（默认走原生 `SavedFiles`，测试里换掉）。
+  final SaveTextFileFn saveFile;
 
   /// 要不要由 Dart 处理：删当前会话时不行（要由 WebView 收尾）。
   bool canHandleDelete(String id) => id.isNotEmpty && id != activeSessionId;
@@ -112,6 +138,45 @@ class SessionActions {
       onNotice('$error');
       return null;
     }
+  }
+
+  /// 会话导出：带 `Authorization` 取整段 HTML，再交给原生落盘。
+  ///
+  /// 与 Web 版的差别：Web 走 `CapacitorHttp` + `FileSaver`，这里走自己的 HTTP 客户端 +
+  /// 宿主 `saveFile` 通道 —— 落到同一个目录（下载/PiDeck），但不用等 WebView 被唤醒。
+  Future<void> export(String id) async {
+    if (id.isEmpty) return;
+    final String title = _titleOf(id);
+    onNotice('正在导出 HTML…');
+    final String html;
+    try {
+      html = await client.sessionExportHtml(id);
+    } on PiDeckException catch (error) {
+      onNotice(error.describe());
+      return;
+    } on Object catch (error) {
+      onNotice('$error');
+      return;
+    }
+    String? location;
+    try {
+      location = await saveFile(
+        name: 'PiDeck-${safeFileStem(title)}-${exportStamp(DateTime.now())}.html',
+        text: html,
+        mime: 'text/html',
+      );
+    } on Object catch (error) {
+      onNotice('$error');
+      return;
+    }
+    onNotice(location == null ? '保存失败：原生保存通道没有响应' : '已保存到 $location');
+    onForward(<String, Object?>{'type': 'sessionExport', 'native': true, 'id': id});
+  }
+
+  String _titleOf(String id) {
+    final Object? rawTitle = store.session(id)?['title'];
+    final String title = rawTitle is String ? rawTitle.trim() : '';
+    return title.isEmpty ? 'session' : title;
   }
 
   String _fallbackProjectId() {
