@@ -5,6 +5,12 @@
 /// 因此本文件**不允许**做任何协议推断（拼接 delta、猜工具状态、自己算 token），
 /// 只能把 `ChatSnapshot` 里已有的东西摆出来。
 ///
+/// 0.2.10 起多了一条路：宿主传了 `endpoint` / `nativeRuntime` 时，**数据面**
+/// （帧流 / 历史 / 待答请求）改由 `runtime/chat_runtime.dart` 自己跑，产出的
+/// 仍是同一份 `ChatSnapshot` JSON；页面把两份 JSON 合并（Dart 赢冲突键），
+/// 控制面（顶栏 / 菜单 / 面板 / 工作区）继续用 WebView 那份。这样 WebView 被
+/// 系统挂起时聊天页也不会停在最后一条上。
+///
 /// 滚动行为对齐 Web 侧 `app/src/ui/chat-view.ts`：
 ///   - `stick` 阈值 80px（`:65-68`），用户往上翻就停止自动贴底；
 ///   - 新内容进来后若仍 `stick`，在下一帧跳到最大滚动位置（等价 `scrollToBottom()`）；
@@ -20,6 +26,8 @@ import 'package:flutter/services.dart';
 import '../app_theme.dart';
 import '../common/app_sheet.dart';
 import '../host_channel.dart';
+import '../runtime/api_client.dart';
+import '../runtime/chat_runtime.dart';
 import '../sidebar/sidebar_drawer.dart';
 import '../sidebar/sidebar_models.dart';
 import '../workspace/workspace_drawer.dart';
@@ -34,10 +42,30 @@ import 'markdown_view.dart';
 const double _stickThreshold = 80;
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, this.initialJson = ''});
+  const ChatScreen({
+    super.key,
+    this.initialJson = '',
+    this.sessionId = '',
+    this.baseUrl = '',
+    this.token = '',
+    this.nativeRuntime = false,
+  });
 
   /// 宿主在打开本页之前缓存的那份快照，用于首帧（避免白屏）。
   final String initialJson;
+
+  /// 打开时定位的会话（冷启动可能是空串 = 主界面）。
+  final String sessionId;
+
+  /// 当前活动端点 + token。三者齐了才让 Dart 自己跑数据面。
+  final String baseUrl;
+  final String token;
+
+  /// 宿主是否允许 Dart 跑数据面（老包没有这个 extra）。
+  final bool nativeRuntime;
+
+  bool get canRunNativeRuntime =>
+      nativeRuntime && baseUrl.isNotEmpty && sessionId.isNotEmpty;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -46,6 +74,20 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   ChatSnapshot _snapshot = const ChatSnapshot();
   SidebarSnapshot _sidebar = SidebarSnapshot.none;
+
+  /// WebView 推来的那份完整快照（控制面 + 数据面）。
+  ///
+  /// 为什么要留着而不是直接覆盖：Dart 运行时只产出数据面字段，顶栏 / 菜单 /
+  /// 面板 / 工作区 / 主题仍然只有 WebView 知道，两边是**合并**关系。
+  Map<String, Object?> _webJson = <String, Object?>{};
+
+  /// Dart 侧数据面（帧流 / 历史 / 待答请求）。宿主没给端点时为 null。
+  ChatRuntime? _runtime;
+
+  /// 运行时推送很密（流式时每帧一次），用 40ms 尾沿合并一次重建，
+  /// 与 Web 侧 `FlutterChatMirror` 同口径 —— 不为每个 token 重建整页。
+  Timer? _runtimeFlush;
+  bool _runtimeDirty = false;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   /// 右侧工作区抽屉「用户刚刚点了什么」。
@@ -120,6 +162,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     _scroll.addListener(_onScroll);
     if (widget.initialJson.isNotEmpty) _applyJson(widget.initialJson);
+    if (widget.canRunNativeRuntime) _ensureRuntime(widget.sessionId);
     loadInitialChat().then((String json) {
       if (json == '{}' || json == widget.initialJson) return;
       _applyJson(json);
@@ -141,6 +184,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _runtimeFlush?.cancel();
+    _runtime?.dispose();
     _workspaceWatchdog?.cancel();
     _sheetHost.dispose();
     _scroll.removeListener(_onScroll);
@@ -158,6 +203,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// 宿主推来一份完整快照：记下来，和运行时那份合并后一起画。
   void _applyJson(String json) {
     if (json.isEmpty) return;
     Map<String, Object?> decoded;
@@ -171,7 +217,66 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       return;
     }
-    final ChatSnapshot next = ChatSnapshot.fromJson(decoded);
+    _webJson = decoded;
+    // 换会话了：运行时跟着换（它按 sessionId 建流，留着旧的就是喂错会话）。
+    final String nextSession = str(decoded['sessionId']);
+    if (widget.nativeRuntime &&
+        nextSession.isNotEmpty &&
+        widget.baseUrl.isNotEmpty &&
+        _runtime?.sessionId != nextSession) {
+      _ensureRuntime(nextSession);
+    }
+    _applySnapshot();
+  }
+
+  /// 起（或换）Dart 运行时。
+  void _ensureRuntime(String sessionId) {
+    if (sessionId.isEmpty || widget.baseUrl.isEmpty) return;
+    _runtimeFlush?.cancel();
+    _runtimeFlush = null;
+    _runtimeDirty = false;
+    _runtime?.dispose();
+    final ChatRuntime runtime = ChatRuntime(
+      client: PiDeckClient(
+        baseUrl: widget.baseUrl,
+        token: widget.token,
+      ),
+      sessionId: sessionId,
+      onNotice: _notice,
+    );
+    runtime.addListener(_onRuntimeChanged);
+    _runtime = runtime;
+    unawaited(runtime.start());
+  }
+
+  /// 运行时变了：40ms 尾沿合并后重建一次。
+  void _onRuntimeChanged() {
+    if (!mounted) return;
+    if (_runtimeFlush != null) {
+      _runtimeDirty = true;
+      return;
+    }
+    _applySnapshot();
+    _runtimeFlush = Timer(const Duration(milliseconds: 40), () {
+      _runtimeFlush = null;
+      if (!mounted || !_runtimeDirty) return;
+      _runtimeDirty = false;
+      _onRuntimeChanged();
+    });
+  }
+
+  /// 合并：WebView 那份做底，运行时那份盖上去。
+  ///
+  /// 只有运行时**已经拿到过一次历史**才让它的字段生效 —— 连不上服务端时
+  /// 它全是空值，盖上去就是白屏，那种情况必须退回 WebView 那份。
+  Map<String, Object?> _mergedJson() {
+    final ChatRuntime? runtime = _runtime;
+    if (runtime == null || !runtime.historyLoaded) return _webJson;
+    return <String, Object?>{..._webJson, ...runtime.snapshotJson()};
+  }
+
+  void _applySnapshot() {
+    final ChatSnapshot next = ChatSnapshot.fromJson(_mergedJson());
     // `sessionId` 为空是**合法的**：那是「还没选会话」的主界面。
     // 以前这里直接 return，整份快照被丢掉 —— 表现就是「切了会话/回了主界面都不刷新」，
     // 页面永远停在上一次收到的那份内容上（0.2.8 修）。
@@ -399,6 +504,9 @@ class _ChatScreenState extends State<ChatScreen> {
       'text': text,
       if (images.isNotEmpty) 'images': images,
     });
+    // 写路径还在 WebView（那边有排队 / 计划模式等分支），历史由 Dart 这边重拉：
+    // 服务端落盘后才会有这条用户消息，不重拉就一直看不到自己刚发的那句。
+    _runtime?.notifyPromptSent();
   }
 
   /// 选图：解码与压缩都在原生侧做，这里只收结果。

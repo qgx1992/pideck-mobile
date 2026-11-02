@@ -15,7 +15,15 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 export interface FlutterHostBridge {
-  open(options: { route: string; sessionId?: string }): Promise<{ opened: boolean; route: string }>;
+  open(options: {
+    route: string;
+    sessionId?: string;
+    /** 当前活动端点，Dart 运行时自己连服务端要用（0.2.10 起）。 */
+    endpoint?: string;
+    token?: string;
+    /** 让 Dart 自己跑聊天数据面（帧流 / 历史 / 待答请求）。 */
+    nativeRuntime?: boolean;
+  }): Promise<{ opened: boolean; route: string }>;
   available(): Promise<{ available: boolean }>;
   /** 推一份最新的设置数据（JSON 字符串）；原生会缓存并在 Flutter 首帧同步返回。 */
   pushSettings(options: { json: string }): Promise<void>;
@@ -62,15 +70,44 @@ export async function isFlutterHostAvailable(): Promise<boolean> {
   }
 }
 
+export interface FlutterPageOptions {
+  /**
+   * 当前活动端点 + token。
+   *
+   * 为什么不复用设置缓存：`pushFlutterSettings` 只在打开设置页时推，
+   * 用户换过端点之后那份就是旧的；而 Dart 运行时必须连「此刻真正连着的那台」。
+   */
+  endpoint?: string;
+  token?: string;
+  /**
+   * 是否让 Dart 自己跑聊天数据面。
+   *
+   * 只对 chat 路由有意义：Dart 自己开帧流 / 拉历史 / 收待答请求，
+   * 产出的仍是同一份 `ChatSnapshot`，WebView 那份退化成控制面。
+   */
+  nativeRuntime?: boolean;
+}
+
 /**
  * 打开 Flutter 页。
  * @param route     路由名，Dart 侧按它决定渲染哪个页面
  * @param sessionId 可选，从聊天页跳过来时带上，Dart 侧可直接定位会话
+ * @param options   端点 / token / 原生运行时开关
  */
-export async function openFlutterPage(route: string, sessionId?: string): Promise<boolean> {
+export async function openFlutterPage(
+  route: string,
+  sessionId?: string,
+  options: FlutterPageOptions = {},
+): Promise<boolean> {
   if (!bridge || Capacitor.getPlatform() !== "android") return false;
   try {
-    const result = await bridge.open({ route, sessionId });
+    const result = await bridge.open({
+      route,
+      sessionId,
+      endpoint: options.endpoint,
+      token: options.token,
+      nativeRuntime: options.nativeRuntime === true,
+    });
     return result.opened === true;
   } catch (error) {
     console.warn("[flutter-host] 打开失败", error);

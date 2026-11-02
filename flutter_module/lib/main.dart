@@ -29,6 +29,9 @@ Future<void> main() async {
     PiDeckFlutterApp(
       route: args.route,
       sessionId: args.sessionId,
+      endpoint: args.endpoint,
+      token: args.token,
+      nativeRuntime: args.nativeRuntime,
       initialSettingsJson: initialJson,
       initialChatJson: initialChatJson,
       // 默认跟随系统：这是 0.2.0 起的产品决定（Web 侧旧默认是 dark）
@@ -52,6 +55,9 @@ class PiDeckFlutterApp extends StatefulWidget {
     super.key,
     required this.route,
     required this.sessionId,
+    this.endpoint = '',
+    this.token = '',
+    this.nativeRuntime = false,
     this.initialSettingsJson = '',
     this.initialChatJson = '',
     this.initialThemeMode = ThemeMode.system,
@@ -60,6 +66,13 @@ class PiDeckFlutterApp extends StatefulWidget {
 
   final String route;
   final String sessionId;
+
+  /// 当前活动端点：聊天页的 Dart 运行时自己连服务端（帧流 / 历史）要用。
+  final String endpoint;
+  final String token;
+
+  /// 聊天页是否由 Dart 跑数据面（Dart 侧接管开关）。
+  final bool nativeRuntime;
 
   /// 宿主在打开本页之前 push 的那份数据，用来让首帧直接是完整内容。
   final String initialSettingsJson;
@@ -113,7 +126,13 @@ class _PiDeckFlutterAppState extends State<PiDeckFlutterApp> {
               initialJson: widget.initialSettingsJson,
               onThemeModeChanged: (next) => _themeMode.value = next,
             ),
-            'chat' => ChatScreen(initialJson: widget.initialChatJson),
+            'chat' => ChatScreen(
+              initialJson: widget.initialChatJson,
+              sessionId: widget.sessionId,
+              baseUrl: widget.endpoint,
+              token: widget.token,
+              nativeRuntime: widget.nativeRuntime,
+            ),
             'sse-probe' => SseProbePage(
               baseUrl: widget.connection?.serviceUrl ?? '',
               token: widget.connection?.token ?? '',

@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 
 /// 与 `app/android/app/src/main/java/dev/pideck/mobile/FlutterHostActivity.java` 一一对应。
 ///
-///   getArgs()          → {"route": "...", "sessionId": "..."}
+///   getArgs()          → {"route", "sessionId", "endpoint", "token", "nativeRuntime"}
 ///   getSettings()      → 宿主缓存的 SettingsData JSON（首帧用，不等回程）
 ///   settingsAction(s)  → 把用户在 Flutter 页上的动作回传给 WebView 执行
 ///   close()            → 关掉本页，回到 WebView
@@ -15,10 +15,32 @@ import 'package:flutter/services.dart';
 const MethodChannel hostChannel = MethodChannel('pideck/flutter_host');
 
 class HostArgs {
-  const HostArgs({this.route = '', this.sessionId = ''});
+  const HostArgs({
+    this.route = '',
+    this.sessionId = '',
+    this.endpoint = '',
+    this.token = '',
+    this.nativeRuntime = false,
+  });
 
   final String route;
   final String sessionId;
+
+  /// 当前活动端点的 baseUrl / token。
+  ///
+  /// 只给「自己跑数据面」的页面用（聊天页）。不能用 `getSettings()` 里那份
+  /// connection：设置缓存只在打开设置页时推，换过端点之后它可能是旧的，
+  /// 而这里必须是「此刻真正连着的那台」。
+  final String endpoint;
+  final String token;
+
+  /// 聊天页是否由 Dart 自己跑帧流 / 历史 / 待答请求。
+  ///
+  /// 老包不带这个 extra → false，页面照旧只画 WebView 推来的快照。
+  final bool nativeRuntime;
+
+  bool get canRunNativeRuntime =>
+      nativeRuntime && endpoint.isNotEmpty && sessionId.isNotEmpty;
 }
 
 /// 取宿主传来的参数。宿主没给（比如直接 flutter run 调试）时给默认值，
@@ -31,6 +53,9 @@ Future<HostArgs> loadHostArgs() async {
     return HostArgs(
       route: (map['route'] as String?) ?? '',
       sessionId: (map['sessionId'] as String?) ?? '',
+      endpoint: (map['endpoint'] as String?) ?? '',
+      token: (map['token'] as String?) ?? '',
+      nativeRuntime: map['nativeRuntime'] == true,
     );
   } catch (_) {
     return const HostArgs();

@@ -245,6 +245,12 @@ public class FlutterLauncherPlugin extends Plugin {
             return;
         }
         String sessionId = call.getString("sessionId", "");
+        // 聊天页的 Dart 运行时自己连服务端，需要当前端点的 baseUrl / token。
+        // 从 intent extra 走而不是 getSettings：设置缓存只在打开设置页时推，
+        // 换过端点之后它可能是旧的，而这里必须是「此刻真正连着的那台」。
+        String endpoint = call.getString("endpoint", "");
+        String token = call.getString("token", "");
+        boolean nativeRuntime = Boolean.TRUE.equals(call.getBoolean("nativeRuntime", false));
 
         try {
             Intent intent = new Intent(getContext(), FlutterHostActivity.class);
@@ -252,6 +258,13 @@ public class FlutterLauncherPlugin extends Plugin {
             if (sessionId != null && !sessionId.isEmpty()) {
                 intent.putExtra(FlutterHostActivity.EXTRA_SESSION_ID, sessionId);
             }
+            if (endpoint != null && !endpoint.isEmpty()) {
+                intent.putExtra(FlutterHostActivity.EXTRA_ENDPOINT, endpoint);
+            }
+            if (token != null && !token.isEmpty()) {
+                intent.putExtra(FlutterHostActivity.EXTRA_TOKEN, token);
+            }
+            intent.putExtra(FlutterHostActivity.EXTRA_NATIVE_RUNTIME, nativeRuntime);
             getActivity().startActivity(intent);
             JSObject result = new JSObject();
             result.put("opened", true);

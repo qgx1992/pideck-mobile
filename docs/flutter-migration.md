@@ -1304,3 +1304,72 @@ false、`ChatScreen` 还在、并且通过 mock 通道收上来的动作里**没
 - [x] 真机：输入框打 `@` → 出文件面板，点目录能往下钻、`..` 回到上一级、选中文件插入 `@路径 `
 - [x] 真机：@ 面板里打字搜索时仍停在当前目录（不会跳回项目根）
 - [x] 真机：「+」旁提示词按钮 → 选一项后模板名进输入框
+
+## 0.2.10：聊天数据面下沉到 Dart（WebView 不再是唯一的帧流主人）
+
+### 问题
+
+0.2.1 之后聊天页是 Flutter 画的，但**帧流、历史、待答请求全在 WebView 里**：`src/api/frames.ts`
+的 reducer 跑在 WebView 的 JS 里，Flutter 只是把 `ChatSnapshot` 画出来。这在 App 被切到后台时
+会露馅 —— WebView 的 JS 定时器被系统压缩，帧到了也推不出来，回到前台看到的是「停在最后一条」，
+再等一轮快照才补齐。
+
+### 做了什么
+
+把**读侧**（帧流 / 历史 / 待答请求）搬到 Dart，写侧（`send` / `stop` / `respond`）和控制面
+（顶栏 chips、长按菜单、选择面板、工作区、主题）继续留在 WebView：
+
+```
+        ┌──────────────── Flutter ────────────────┐
+        │ ChatRuntime（帧流 / 历史 / pending）     │  ← 新：数据面
+        │ ChatSnapshot.fromJson ← 合并 ← WebView  │  ← 旧：控制面
+        └────────────────────────────────────────┘
+```
+
+- `flutter_module/lib/runtime/sse.dart`：`sse.ts` 的逐行移植（`\r\n|\r|\n`、末尾孤立 `\r` 等下一分片、
+  注释行、多行 data、`id` 跨事件保留、BOM、`flush()` 残留）。
+- `flutter_module/lib/runtime/frames.dart`：`ChatReducer` 的移植（含 `blocksToPlainText`、`markAborted`、
+  新增的 `clearLive()`），块的 JSON 形状与 TS 一字不差。
+- `flutter_module/lib/runtime/api_client.dart`：`dart:io` 版客户端。GET 走 `?token=`、非 GET 走
+  `Authorization: Bearer`（与 `client.ts` 同一套规则，避开 CORS 预检那条历史原因在原生侧已经不需要，
+  但保持同形是为了两端行为一致）；401→auth、409→runtime；`streamSse` 用独立的 `HttpClient`，
+  取消就是 `close(force: true)`。
+- `flutter_module/lib/runtime/history_model.dart`：`historyItemsOf` / `messageText` / `normalizeRole` /
+  `splitThinking` / `collectImageSources` 的移植，输出与 TS **逐字节相同**（用 node 跑 TS 版对 12 组
+  fixtures 对拍过）。
+- `flutter_module/lib/runtime/chat_runtime.dart`：把上面几件拼成一个 `ChangeNotifier`：帧循环（50s 无事件
+  即当假死收流重连）、状态循环（`/api/events`）、`settle`（finish 后 400ms 重拉历史再清流式块，
+  对齐 Web 的 `settleRun`）、`notifyPromptSent()`（发出去 650ms 后重拉，让用户那条消息尽快出现）。
+
+### 怎么接起来
+
+- 宿主把**当前活动端点**经 intent extra 传进来：`pideckFlutterEndpoint` / `pideckFlutterToken` /
+  `pideckFlutterNativeRuntime`（`FlutterLauncherPlugin.open` → `FlutterHostActivity.buildArgs` →
+  Dart `loadHostArgs()`）。**不要**改用 `getSettings()` 里那份 connection：它只在打开设置页时推，
+  换过端点就是旧的。
+- `chat_page.dart` 同时持有两份快照：`_webJson`（WebView 推的完整快照）和 `_runtime.snapshotJson()`
+  （Dart 的数据面），合并规则 `{..._webJson, ...runtime.snapshotJson()}` —— **Dart 赢冲突键**。
+- 只有 `runtime.historyLoaded == true`（成功拉到过历史）才让 Dart 那份生效。连不上服务端时它全是空值，
+  盖上去就是白屏，那种情况必须退回 WebView 那份。
+- 回退开关：`localStorage["pideck-native-chat"] = "off"` 之后 `openFlutterChatPage()` 不再传
+  `nativeRuntime`，页面回到「只画 WebView 快照」的老路径。
+
+### 为什么写侧不搬
+
+Web 的 `send()` 里还有计划模式注入（`buildPlanSubmission`）、排队 / 插话（`streamingBehavior`）、
+todo 归档、无会话自动建会话、`appendLocalUser` 本地回显。搬到 Dart 就是两个真相源，而稳定性痛点
+只在读侧 —— 后台被挂起时缺的是帧和重连，不是「谁去 POST /prompt」。
+
+### 两个坑
+
+- `app/tests/flutter-actions.test.ts` 会抓 Dart 里所有 `'type': <字符串字面量>` 当成聊天动作名，
+  它分不清「帧类型」和「动作名」。所以 `[DONE]` → finish 帧走 `api_client.dart` 的 `doneFrame()`
+  逐键赋值，**别在注释或代码里写出那个字面量**，否则测试会报「Dart 发了个叫 finish 的动作」。
+- 同一会话现在有两条 SSE 连接（WebView 的 `SsePlugin` + Dart 的 `HttpClient`）。会话流连上会整段回放，
+  两条都吃一次；这是有意的 —— 读侧完全独立，才可能在 WebView 被挂起时还在收帧。
+
+### 测试
+
+- `flutter_module/test/runtime_sse_test.dart`（11 项，与 `tests/sse.test.ts` 同口径）
+- `flutter_module/test/runtime_frames_test.dart`（12 项，含块 JSON 形状与 `clearLive`）
+- `flutter_module/test/runtime_history_test.dart`（11 项，与 TS 版对拍）

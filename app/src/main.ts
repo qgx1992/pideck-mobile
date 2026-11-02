@@ -6280,6 +6280,22 @@ async function applyFlutterPickerChoice(kind: string, id: string): Promise<void>
 }
 
 /**
+ * Dart 侧接管聊天数据面的总开关。
+ *
+ * 为什么留开关：数据面搬到 Dart 之后，「连不上 / 空列表」这类问题的定位点从
+ * WebView 挪到了 Dart，现场排障需要一条立刻退回旧路径的口子。值 `off` 关掉。
+ */
+const NATIVE_CHAT_KEY = "pideck-native-chat";
+
+function nativeChatEnabled(): boolean {
+  try {
+    return localStorage.getItem(NATIVE_CHAT_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+/**
  * 在 Flutter 里打开某个会话的聊天页。
  *
  * 顺序很重要：**先让 WebView 把这个会话打开**（历史、SSE、reducer 都在它身上），
@@ -6306,7 +6322,15 @@ async function openFlutterChatPage(sessionId: string): Promise<boolean> {
   // **先把 Flutter 页盖上来，再去背后开会话**。
   // 反过来的话 `openSession()` 会先渲染一遍网页版（侧栏 + 空聊天区），
   // 用户看到的就是「闪一下网页版再进原生页」。
-  const opened = await openFlutterPage("chat", sessionId);
+  // 端点 + token 走 intent extra 带给 Dart 运行时：聊天页自己要开帧流、拉历史，
+  // 用的是「此刻真正连着的那台」，不是设置页缓存里那份可能过期的。
+  const endpointUrl = runtime?.pairing.baseUrl ?? "";
+  const endpointToken = runtime?.pairing.token ?? "";
+  const opened = await openFlutterPage("chat", sessionId, {
+    endpoint: endpointUrl,
+    token: endpointToken,
+    nativeRuntime: nativeChatEnabled() && endpointUrl !== "" && sessionId !== "",
+  });
   if (!opened) {
     flutterChatOpen = false;
     flutterChatMirror?.dispose();

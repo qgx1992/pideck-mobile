@@ -53,6 +53,11 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
 
     static final String EXTRA_ROUTE = "pideckFlutterRoute";
     static final String EXTRA_SESSION_ID = "pideckFlutterSessionId";
+    /** 当前活动端点的 baseUrl / token：聊天页的 Dart 运行时自己连服务端要用。 */
+    static final String EXTRA_ENDPOINT = "pideckFlutterEndpoint";
+    static final String EXTRA_TOKEN = "pideckFlutterToken";
+    /** 是否让 Dart 自己跑聊天数据面（帧流 / 历史 / 发送）。老包没有这些 extra → false。 */
+    static final String EXTRA_NATIVE_RUNTIME = "pideckFlutterNativeRuntime";
 
     private static final String TAG = "PiDeckFlutterHost";
     private static final String CHANNEL = "pideck/flutter_host";
@@ -68,6 +73,9 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
 
     private String route = "";
     private String sessionId = "";
+    private String endpoint = "";
+    private String token = "";
+    private boolean nativeRuntime = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -96,6 +104,9 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
         Intent intent = getIntent();
         route = safe(intent.getStringExtra(EXTRA_ROUTE));
         sessionId = safe(intent.getStringExtra(EXTRA_SESSION_ID));
+        endpoint = safe(intent.getStringExtra(EXTRA_ENDPOINT));
+        token = safe(intent.getStringExtra(EXTRA_TOKEN));
+        nativeRuntime = intent.getBooleanExtra(EXTRA_NATIVE_RUNTIME, false);
     }
 
     /**
@@ -330,6 +341,11 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
             JSONObject args = new JSONObject();
             args.put("route", route);
             args.put("sessionId", sessionId);
+            // 端点信息只给「自己跑数据面」的页面用（聊天页）。设置页仍走 getSettings
+            // 里那份 connection，两处来源不同：这里是**当前真正连着**的那台。
+            args.put("endpoint", endpoint);
+            args.put("token", token);
+            args.put("nativeRuntime", nativeRuntime);
             return args.toString();
         } catch (Exception error) {
             Log.w(TAG, "参数序列化失败: " + error.getMessage());

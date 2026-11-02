@@ -292,6 +292,25 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 首屏空态的显示条件只有「没有历史 + 不在加载」，**不要**再加 `suggestions.isNotEmpty`
   这类条件：没提示词的项目会变成一片空白，用户以为页面挂了（0.2.8 修）。
 
+- **聊天数据面可以下沉到 Dart（0.2.10 起）**：`flutter_module/lib/runtime/` 里是协议核心的 Dart 移植
+  （`sse.dart` / `frames.dart` / `api_client.dart` / `history_model.dart` / `chat_runtime.dart`）。
+  规矩只有一条：**Dart 只产数据面字段**（sessionId/title/status/statusText/error/loading/history/live/pending），
+  控制面（`messageMenus` / `header` / `picker` / `suggestions` / `sheet` / `workspace` / `themeMode`）继续由
+  WebView 那份快照提供，页面按 `{..._webJson, ...runtime.snapshotJson()}` 合并（Dart 赢冲突键）。
+  写侧（`send` / `stop` / `respond`）**仍然走 WebView** —— 计划模式注入、排队/插话、todo 归档、
+  无会话自动建会话都在 `send()` 里，搬过去就是两个真相源。
+- 合并前必须查 `runtime.historyLoaded`：没成功拉到过历史时 Dart 那份全是空值，盖上去就是白屏。
+- 端点 + token 走 intent extra（`pideckFlutterEndpoint` / `pideckFlutterToken` / `pideckFlutterNativeRuntime`），
+  **不要**改用 `getSettings()` 里那份 connection —— 设置缓存只在打开设置页时推，换过端点就是旧的。
+- 回退开关是 `localStorage["pideck-native-chat"] = "off"`（`app/src/main.ts` 的 `nativeChatEnabled()`）。
+  出「聊天页空白 / 不更新」这类现场问题时先让用户关掉它，确认是不是 Dart 运行时那侧。
+- `app/tests/flutter-actions.test.ts` 会把 Dart 里任何 `'type': <字符串字面量>` 当成聊天动作名，
+  它分不清帧类型和动作名：`[DONE]` → finish 帧要用 `api_client.dart` 的 `doneFrame()` 逐键赋值，
+  **注释里也别写出那个字面量**（踩过：注释把它写进去，测试报「Dart 发了个叫 finish 的动作」）。
+- 移植协议核心时**先写测试再移植**：`runtime_sse_test.dart` / `runtime_frames_test.dart` /
+  `runtime_history_test.dart` 的用例是从 `tests/sse.test.ts` / `tests/frames.test.ts` 与 TS 对拍来的，
+  新增帧类型要在这三处同时补。
+
 ## 改动完成后必须跑的验证
 
 ```bash
