@@ -445,8 +445,11 @@ function setShellMode(enabled: boolean): void {
 async function enterFlutterShell(): Promise<void> {
   if (!shellModeEnabled() || flutterChatOpen) return;
   try {
-    const sessionId = activeSessionId ?? runtime?.store.state.sessions[0]?.id ?? "";
-    await openFlutterChatPage(sessionId);
+    // **只有当前已经选中的会话才恢复**，不要拿 `sessions[0]` 兜底：
+    // 冷启动时 `activeSessionId` 是空的，兜底会让人一开机就被塞进一个旧会话，
+    // 而且那个会话还是列表里最早的一个（用户原话：「冷启动一直进一个旧的会话」）。
+    // 空字符串 = 打开「主界面」，会话列表在抽屉里，点哪个进哪个。
+    await openFlutterChatPage(activeSessionId ?? "");
   } catch (error) {
     console.warn("[shell] 打开原生主界面失败，本次留在网页版", error);
   }
@@ -5500,7 +5503,9 @@ interface FlutterWorkspaceState {
 
 let flutterWorkspace: FlutterWorkspaceState = {
   open: false,
-  tab: "git",
+  // 默认看文件：大多数人打开这个抽屉是为了找/预览一个文件，
+  // 「改动」只在真的在改代码时才有内容，当默认页十次有八次是空的。
+  tab: "files",
   stack: [],
   preview: null,
   snapshot: emptyWorkspaceSnapshot(),
@@ -5510,7 +5515,13 @@ let flutterWorkspace: FlutterWorkspaceState = {
 function workspaceProjectId(): string | null {
   if (!runtime) return null;
   const session = activeSessionId ? runtime.store.session(activeSessionId) : undefined;
-  return session?.projectId ?? activeProjectId ?? runtime.store.projects()[0]?.id ?? null;
+  if (session?.projectId) return session.projectId;
+  if (activeProjectId) return activeProjectId;
+  // 没会话也没选项目（冷启动主界面）时，别退回内置 Chat 项目 —— 它没有目录，
+  // 抽屉里只会显示「这个项目没有目录」。优先挑第一个真有路径的项目。
+  const projects = runtime.store.projects();
+  const withPath = projects.find((item) => typeof item.path === "string" && item.path !== "");
+  return (withPath ?? projects[0])?.id ?? null;
 }
 
 function workspaceProjectPath(): string {
@@ -5535,6 +5546,23 @@ function closeFlutterWorkspace(): void {
 }
 
 /** 重新算一份快照：先推「加载中」，再推结果，抽屉里不会一片空白。 */
+/** 桌面端迟迟不回时不要一直转圈：超时当成一次失败，把错误文案推过去。 */
+const WORKSPACE_TIMEOUT_MS = 12000;
+
+async function withDeadline<T>(task: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label}超时（桌面端没有响应）`)), WORKSPACE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
 async function reloadFlutterWorkspace(): Promise<void> {
   if (!runtime) return;
   const projectId = workspaceProjectId();
@@ -5556,6 +5584,12 @@ async function reloadFlutterWorkspace(): Promise<void> {
     syncFlutterChat();
     return;
   }
+  // 内置 Chat 项目没有目录：别拿空路径去问桌面端要文件列表（那边会一直不回）
+  if (workspaceProjectPath() === "" && flutterWorkspace.tab !== "todos") {
+    flutterWorkspace.snapshot = { ...base, loading: false, empty: "这个项目没有目录" };
+    syncFlutterChat();
+    return;
+  }
 
   let next: WorkspaceSnapshot = { ...base, loading: false };
   try {
@@ -5573,10 +5607,13 @@ async function reloadFlutterWorkspace(): Promise<void> {
       }));
       if (next.todos.length === 0) next.empty = "这个会话还没有待办清单";
     } else if (flutterWorkspace.tab === "git") {
-      const [statusRaw, logRaw] = await Promise.all([
-        runtime.client.gitStatus(projectId),
-        runtime.client.gitLog(projectId, 20).catch(() => null),
-      ]);
+      const [statusRaw, logRaw] = await withDeadline(
+        Promise.all([
+          runtime.client.gitStatus(projectId),
+          runtime.client.gitLog(projectId, 20).catch(() => null),
+        ]),
+        "读取 Git 状态",
+      );
       const status = parseGitStatus(statusRaw, workspaceProjectPath());
       if (!status.isRepo) {
         next.empty = "这个项目不是 Git 仓库";
@@ -5593,7 +5630,10 @@ async function reloadFlutterWorkspace(): Promise<void> {
         }));
       }
     } else {
-      const nodes = await runtime.client.listFiles(projectId, crumbsToPath(base.crumbs));
+      const nodes = await withDeadline(
+        runtime.client.listFiles(projectId, crumbsToPath(base.crumbs)),
+        "读取目录",
+      );
       next.entries = sortWorkspaceEntries(
         nodes.map((node) => ({
           name: node.name,
@@ -5637,6 +5677,19 @@ async function previewFlutterWorkspaceFile(path: string): Promise<void> {
   syncFlutterChat();
 }
 
+/**
+ * 空态副标题。
+ *
+ * 「一个会话都没选」不等于「还没有会话」：老用户冷启动进主界面时，
+ * 会话全躺在抽屉里，副标题得告诉他去哪儿找，而不是继续念新用户的话术。
+ */
+function emptySubtitle(): string {
+  const hasSessions = (runtime?.store.state.sessions.length ?? 0) > 0;
+  if (!activeSessionId && hasSessions) return "点左上角菜单选择会话，或者直接发消息开始新的对话";
+  const project = activeProjectId ? runtime?.store.projects().find((item) => item.id === activeProjectId) : undefined;
+  return emptyStateSubtitle(suggestionContext(project));
+}
+
 function syncFlutterChat(): void {
   const mirror = flutterChatMirror;
   if (!mirror || !flutterChatOpen) return;
@@ -5645,7 +5698,8 @@ function syncFlutterChat(): void {
   mirror.update(
     buildChatSnapshot({
       sessionId: activeSessionId,
-      title: session?.title ?? "",
+      // 没有会话就是「主界面」，标题给个兜底，否则顶部会是一条空白栏
+      title: session?.title || "PiDeck",
       messages: sessionHistory,
       status: reducer?.status ?? "idle",
       error: chatError,
@@ -5660,7 +5714,7 @@ function syncFlutterChat(): void {
     themeMode: getThemeMode(),
     workspace: flutterWorkspace.open ? flutterWorkspace.snapshot : null,
       emptyTitle: emptyStateTitle(),
-      emptySubtitle: emptyStateSubtitle(suggestionContext(activeProjectId ? runtime?.store.projects().find((item) => item.id === activeProjectId) : undefined)),
+      emptySubtitle: emptySubtitle(),
       sheet: flutterChatSheet,
     }),
   );
@@ -6234,8 +6288,7 @@ async function applyFlutterPickerChoice(kind: string, id: string): Promise<void>
 async function openFlutterChatPage(sessionId: string): Promise<boolean> {
   // 冷启动可能一个会话都没有（或还没恢复出 activeSessionId）：
   // 这时也照样把 Flutter 页打开，让它自己画空态，不要拿空串去 openSession。
-  if (sessionId !== "" && activeSessionId !== sessionId) await openSession(sessionId);
-  if (flutterWorkspace.open) void reloadFlutterWorkspace();
+  const needsSession = sessionId !== "" && activeSessionId !== sessionId;
   flutterChatMirror = new FlutterChatMirror({ push: (json) => pushFlutterChat(json) });
   flutterChatOpen = true;
   flutterSidebarJson = "";
@@ -6250,6 +6303,9 @@ async function openFlutterChatPage(sessionId: string): Promise<boolean> {
       syncFlutterChat();
     }
   });
+  // **先把 Flutter 页盖上来，再去背后开会话**。
+  // 反过来的话 `openSession()` 会先渲染一遍网页版（侧栏 + 空聊天区），
+  // 用户看到的就是「闪一下网页版再进原生页」。
   const opened = await openFlutterPage("chat", sessionId);
   if (!opened) {
     flutterChatOpen = false;
@@ -6257,6 +6313,15 @@ async function openFlutterChatPage(sessionId: string): Promise<boolean> {
     flutterChatMirror = null;
     return false;
   }
+  if (needsSession) {
+    // 页已经挡住整屏了，这一跳用户看不见；快照会通过 mirror 流式推过去
+    try {
+      await openSession(sessionId);
+    } catch (error) {
+      console.warn("[shell] 背后加载会话失败", error);
+    }
+  }
+  if (flutterWorkspace.open) void reloadFlutterWorkspace();
   return true;
 }
 
@@ -6321,7 +6386,7 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
       return;
     case "workspaceTab": {
       const tab = text("tab");
-      flutterWorkspace.tab = tab === "files" || tab === "todos" ? tab : "git";
+      flutterWorkspace.tab = tab === "git" || tab === "todos" ? tab : "files";
       flutterWorkspace.stack = [];
       flutterWorkspace.preview = null;
       void reloadFlutterWorkspace();

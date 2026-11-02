@@ -1066,6 +1066,50 @@ if (!FlutterLauncherPlugin.webViewAlive()) {
 配套一处细节：`openSessionFromSidebar()` 的条件要把 `!shellModeEnabled()` 也算进去，
 否则用户刚关掉原生主界面，点侧栏会话又被弹进 Flutter 页。
 
+## 0.2.7：启动钻进旧会话、进页闪网页版、抽屉永远转圈
+
+三个都是「顺序」问题，不是组件写错。
+
+### 1. 冷启动自己打开了一个旧会话
+
+`enterFlutterShell()` 原来写的是 `activeSessionId ?? sessions[0]?.id` —— 冷启动时前者是
+`null`，于是退到「列表里第一个会话」。用户开机看到的是一个早就结束的对话，还以为
+「主界面没了」。
+
+改成 `activeSessionId ?? ""`：**只有当前确实选中的会话才恢复**。空字符串表示「主界面」，
+会话列表在抽屉里，点哪个进哪个。空态副标题也跟着分叉（`emptySubtitle()`）：
+有会话但没选中时说「点左上角菜单选择会话」，一个会话都没有才继续念新用户话术。
+
+### 2. 从网页版点会话，先闪一下网页版再进原生页
+
+`openFlutterChatPage()` 原来是：
+
+```ts
+if (sessionId !== "" && activeSessionId !== sessionId) await openSession(sessionId); // ← 先渲染网页版
+... await openFlutterPage("chat", sessionId);                                        // ← 再盖上原生页
+```
+
+`openSession()` 会把网页版的侧栏和聊天区整个画一遍（几百毫秒），用户看到的就是那一下闪。
+
+反过来了：先把 mirror 建好并推一版当前快照 → `await openFlutterPage()` 盖住整屏 →
+**再**在背后 `await openSession()`。这一步用户看不见，快照会通过 mirror 流式推过去。
+
+### 3. 右侧抽屉「一直在加载」
+
+两个来源：
+
+- 桌面端接口不返回时没有兜底。现在 `withDeadline()` 给 git / 目录请求加了 12s 上限，
+  超时按失败处理（`读取超时（桌面端没有响应）`），绝不会停在 `loading: true`。
+- 推送丢一次就一直转。Dart 侧加 `_kickWorkspaceWatchdog()`：抽屉开着且快照仍是
+  `loading` 时每 4s 补一次 `workspaceRefresh`，最多 3 次；拿到 `loading: false` 就清零。
+
+顺带两处：
+- 默认页从「改动」改成**文件**（`emptyWorkspaceSnapshot().tab`、`flutterWorkspace.tab`、
+  `WorkspaceSnapshot.tab` 三处都要改，漏一处就会出现「Dart 画文件页、Web 以为在改动页」）。
+- 内置 Chat 项目没有目录，别拿空路径去问桌面端要文件列表（那边会挂住）：
+  `workspaceProjectPath() === "" && tab !== "todos"` 时直接给「这个项目没有目录」。
+  `workspaceProjectId()` 也不再退回 Chat 项目，优先挑第一个真有路径的项目。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：

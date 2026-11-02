@@ -17,10 +17,11 @@ import {
   truncatePreview,
 } from "../src/platform/flutter-workspace.ts";
 
-test("空快照：关着、默认 git、各列表为空", () => {
+test("空快照：关着、默认看文件、各列表为空", () => {
   const snapshot = emptyWorkspaceSnapshot();
   assert.equal(snapshot.open, false);
-  assert.equal(snapshot.tab, "git");
+  // 默认页是「文件」：抽屉多数时候是用来找文件的，「改动」经常是空的
+  assert.equal(snapshot.tab, "files");
   assert.equal(snapshot.loading, false);
   assert.deepEqual(snapshot.changes, []);
   assert.deepEqual(snapshot.entries, []);

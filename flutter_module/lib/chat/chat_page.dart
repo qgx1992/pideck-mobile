@@ -57,6 +57,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// 抽屉当前实际显示的开关（快照没给意见时的兜底）。
   bool _workspaceOpen = false;
+
+  /// 抽屉卡在「加载中」时的补问定时器（见 `_kickWorkspaceWatchdog`）。
+  Timer? _workspaceWatchdog;
+  int _workspaceRetries = 0;
   final ScrollController _scroll = ScrollController();
   final TextEditingController _composer = TextEditingController();
 
@@ -137,6 +141,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _workspaceWatchdog?.cancel();
     _sheetHost.dispose();
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
@@ -210,6 +215,13 @@ class _ChatScreenState extends State<ChatScreen> {
     sendChatAction(<String, Object?>{
       'type': open ? 'workspaceOpen' : 'workspaceClose',
     });
+    if (open) {
+      _workspaceRetries = 0;
+      _kickWorkspaceWatchdog();
+    } else {
+      _workspaceWatchdog?.cancel();
+      _workspaceWatchdog = null;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ScaffoldState? scaffold = _scaffoldKey.currentState;
@@ -219,6 +231,25 @@ class _ChatScreenState extends State<ChatScreen> {
       } else if (!open && scaffold.isEndDrawerOpen) {
         Navigator.of(context).pop();
       }
+    });
+  }
+
+  /// 抽屉开着、快照还停在「加载中」时，隔几秒自己再问一次 Web。
+  ///
+  /// 推送是异步的（80ms 合并 + Web 侧还要等桌面端接口返回），只要有一次丢包或
+  /// 一次请求挂住，抽屉就会永远转圈 —— 用户看到的「右侧栏一直在加载文件」就是它。
+  /// 兜底只负责「再问一遍」，真正的加载仍然是 Web 侧的事（那边还带 12s 超时）。
+  void _kickWorkspaceWatchdog() {
+    if (_workspaceWatchdog != null) return;
+    if (!_workspaceOpen || _workspaceRetries >= 3) return;
+    _workspaceWatchdog = Timer(const Duration(seconds: 4), () {
+      _workspaceWatchdog = null;
+      if (!mounted || !_workspaceOpen) return;
+      final WorkspaceSnapshot? snapshot = _snapshot.workspace;
+      if (snapshot != null && !snapshot.loading) return;
+      _workspaceRetries += 1;
+      sendChatAction(<String, Object?>{'type': 'workspaceRefresh'});
+      _kickWorkspaceWatchdog();
     });
   }
 
@@ -233,6 +264,8 @@ class _ChatScreenState extends State<ChatScreen> {
       _workspaceIntent = null;
     }
     if (workspace != null) _workspaceOpen = workspace.open;
+    if (workspace != null && !workspace.loading) _workspaceRetries = 0;
+    _kickWorkspaceWatchdog();
     final bool want = _workspaceIntent ?? _workspaceOpen;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;

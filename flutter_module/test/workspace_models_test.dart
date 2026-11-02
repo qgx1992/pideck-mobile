@@ -58,6 +58,11 @@ void main() {
     expect(snapshot.todos.single.text, contains('• 二'));
   });
 
+  test('没给 tab 时默认看文件', () {
+    expect(WorkspaceSnapshot.fromJson(const <String, Object?>{}).tab, 'files');
+    expect(const WorkspaceSnapshot().tab, 'files');
+  });
+
   test('坏数据兜底：非法 tab / 缺字段 / null', () {
     final WorkspaceSnapshot snapshot = WorkspaceSnapshot.fromJson(<String, Object?>{'tab': 'nope'});
     expect(snapshot.tab, 'nope');

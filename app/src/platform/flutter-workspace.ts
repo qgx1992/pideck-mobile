@@ -64,7 +64,8 @@ export const PREVIEW_MAX_CHARS = 8000;
 export function emptyWorkspaceSnapshot(): WorkspaceSnapshot {
   return {
     open: false,
-    tab: "git",
+    // 与 main.ts 的初始 tab 一致：默认看文件
+    tab: "files",
     title: "",
     loading: false,
     empty: "",

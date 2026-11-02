@@ -215,6 +215,16 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   都进网页版，且没有入口改回来。失败只 warn（留本次在网页版）；用户主动点「返回网页版」才写。
   对应的自救入口是设置页「界面 → 用原生界面做主界面」（`SettingsData.shell.native` / 动作 `shell`）。
   `openSessionFromSidebar()` 里也要加 `!shellModeEnabled()`，否则关掉之后点会话又被弹进 Flutter 页。
+- **冷启动不恢复「最后一个会话」，只恢复「明确选中的会话」**（0.2.7）：`enterFlutterShell()`
+  用 `activeSessionId ?? ""`，**不要**退回 `sessions[0]` —— 那会让人一开机被塞进列表里最老的会话。
+  空 sessionId = 主界面（抽屉里选会话）。
+- **开 Flutter 页的顺序：先开页、后加载会话**（0.2.7）：`openFlutterChatPage()` 里
+  `await openSession()` 放在 `await openFlutterPage()` **之后**。反过来会先渲染一遍网页版，
+  用户看到「闪一下网页版再进原生页」。
+- **工作区抽屉不许无限 loading**（0.2.7）：Web 侧 `withDeadline()`（12s）兜住挂住的请求，
+  Dart 侧 `_kickWorkspaceWatchdog()`（4s × 3）补问 `workspaceRefresh`。
+  默认页是「文件」，改默认值要同时改三处（`emptyWorkspaceSnapshot().tab` /
+  `flutterWorkspace.tab` / `WorkspaceSnapshot.tab`）。
 - 系统栏只在一处定义：`piSystemUiOverlayStyle(dark)`（`flutter_module/lib/app_theme.dart`），
   由 `MaterialApp.builder` 的 `AnnotatedRegion` 下发；`SystemUiMode.edgeToEdge` + 透明栏 +
   `ContrastEnforced: false`，否则系统补的遮罩色会让状态栏/手势条和主题对不上。

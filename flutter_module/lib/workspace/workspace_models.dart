@@ -94,7 +94,7 @@ class WorkspacePreview {
 class WorkspaceSnapshot {
   const WorkspaceSnapshot({
     this.open = false,
-    this.tab = 'git',
+    this.tab = 'files',
     this.title = '',
     this.loading = false,
     this.empty = '',
@@ -112,7 +112,7 @@ class WorkspaceSnapshot {
     final Object? preview = json['preview'];
     return WorkspaceSnapshot(
       open: json['open'] == true,
-      tab: _str(json['tab']).isEmpty ? 'git' : _str(json['tab']),
+      tab: _str(json['tab']).isEmpty ? 'files' : _str(json['tab']),
       title: _str(json['title']),
       loading: json['loading'] == true,
       empty: _str(json['empty']),
