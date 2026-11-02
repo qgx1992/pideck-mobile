@@ -204,7 +204,12 @@ class _ChatScreenState extends State<ChatScreen> {
       _batchReview = false;
     }
     setState(() => _snapshot = next);
-    _afterLayout();
+    if (sessionChanged) {
+      // 换会话：停在「最新那一条消息」，不是列表最底（最底是 footer）
+      _scrollToLatest();
+    } else {
+      _afterLayout();
+    }
     _syncWorkspaceDrawer(next.workspace);
     // 弹层要等这一帧画完再弹：setState 期间不能开路由
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -258,7 +263,11 @@ class _ChatScreenState extends State<ChatScreen> {
       if (open && !scaffold.isEndDrawerOpen) {
         scaffold.openEndDrawer();
       } else if (!open && scaffold.isEndDrawerOpen) {
-        Navigator.of(context).pop();
+        // 必须用 closeEndDrawer()，**不能** Navigator.pop()：
+        // 抽屉是挂在当前路由上的一段 local history，pop 掉那个条目才关抽屉；
+        // 一旦这一帧里条目已经没了（用户点 X 与快照到达同帧各 pop 一次），
+        // 第二次 pop 就把整页路由弹掉 —— 黑屏，再按返回就退回网页版。
+        scaffold.closeEndDrawer();
       }
     });
   }
@@ -305,7 +314,8 @@ class _ChatScreenState extends State<ChatScreen> {
       if (want) {
         scaffold.openEndDrawer();
       } else {
-        Navigator.of(context).pop();
+        // 同 _setWorkspaceOpen：只能用 Scaffold 的关闭接口，pop 会把页面路由一起弹掉
+        scaffold.closeEndDrawer();
       }
     });
   }
@@ -318,6 +328,31 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
       _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    });
+  }
+
+  /// 跳到最新一条消息，而不是滚到列表最底。
+  ///
+  /// 列表最后一项是 footer（加载中 / 错误卡 / 提问卡 / token 统计），
+  /// 直接 `jumpTo(maxScrollExtent)` 会停在 footer 下面：长会话里 footer 只有 4px
+  /// 看不出差别，但带错误卡或提问卡时就会看到「一大片空白」，像是没滚到位。
+  /// 这里先跳到底把最后一条建出来（懒构建），下一帧再把它对齐到视口底部。
+  void _scrollToLatest() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scroll.hasClients) return;
+        final int last = _snapshot.history.length - 1;
+        final BuildContext? target =
+            last >= 0 ? _historyKeys[last]?.currentContext : null;
+        if (target == null) return;
+        Scrollable.ensureVisible(
+          target,
+          alignment: 1,
+          duration: Duration.zero,
+        );
+      });
     });
   }
 
@@ -574,18 +609,21 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       // 右侧工作区：数据来自快照（可能还没到），开合状态本地先记一份。
       // 滑动手势保留 —— 用户的第一反应就是从右边缘往左滑。
-      endDrawer: workspaceOpen
-          ? WorkspaceDrawer(
-              snapshot: snapshot.workspace ??
-                  WorkspaceSnapshot(
-                    open: true,
-                    loading: true,
-                    title: snapshot.title,
-                  ),
-              onAction: sendChatAction,
-              onClose: () => _setWorkspaceOpen(false),
-            )
-          : null,
+      // 抽屉**必须常挂**：把它从树里摘掉（`endDrawer: null`）看着「干净」，
+      // 但抽屉是挂在当前路由上的一段 local history，摘 widget 不等于 pop 那段历史 ——
+      // 留下一条悬空的 entry，之后任何一次 pop 都会被它吃掉或直接弹掉整页路由：
+      // 用户看到的是黑屏，再按返回就退回网页版（0.2.9 修）。
+      // 开合只走 openEndDrawer() / closeEndDrawer()。
+      endDrawer: WorkspaceDrawer(
+        snapshot: snapshot.workspace ??
+            WorkspaceSnapshot(
+              open: true,
+              loading: true,
+              title: snapshot.title,
+            ),
+        onAction: sendChatAction,
+        onClose: () => _setWorkspaceOpen(false),
+      ),
       onEndDrawerChanged: (bool opened) {
         final bool current =
             _workspaceIntent ?? _snapshot.workspace?.open ?? _workspaceOpen;

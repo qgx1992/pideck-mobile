@@ -202,6 +202,14 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   带来，源头是 `src/ui/message-actions-model.ts` 的 `actionsForRole(role, backend)`
   （ACP 会话只剩「复制」）。Dart 只决定怎么画（danger 标红）与哪两步本地确认
   （删除二次确认、编辑输入框）—— 这两步的确认框原本在 WebView 里，被盖着看不见。
+- **抽屉 / 弹层这种「挂在路由上的东西」不要用「挂不挂」表达开关**（0.2.9）：`endDrawer: open ? X : null`
+  看着干净，但 widget 被摘掉后路由上那条 local history 还在，再配 `Navigator.pop()` 就会把**整页路由**
+  弹掉 —— 症状是点关闭黑屏、再按返回退回网页版。抽屉常驻（没数据喂占位快照），开合只用
+  `openEndDrawer()` / `closeEndDrawer()`，**任何地方都不要用 `Navigator.pop()` 关抽屉**。
+- **切换会话要显式重置滚动锚点，而且「贴底」≠「停在最新一条」**（0.2.9）：`jumpTo(maxScrollExtent)`
+  落点是列表最底，最后一项是 footer（加载中 / 错误卡 / 提问卡 / token 统计），长会话里看起来像停在
+  页尾空白。切会话走 `_scrollToLatest()`：先跳到底把最后一条建出来，下一帧再
+  `Scrollable.ensureVisible(key, alignment: 1)` 对齐最新那条的底边。
 - **主界面是 Flutter 页，WebView 只当协议引擎**（0.2.1 起）：`bootstrap()` 连上后 `enterFlutterShell()`
   直接把聊天页盖到整屏（`localStorage` 键 `pideck-flutter-shell`，值 `"flutter"` / `"web"`）。
   壳可以换，`src/api/frames.ts` 的 reducer / SSE 解析**只能有一份**；Flutter 侧的动作必须落回

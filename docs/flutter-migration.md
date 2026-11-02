@@ -1159,6 +1159,56 @@ if (next.sessionId.isEmpty) return;   // ✗
   切会话后列表换成新会话的最新消息 / 点侧栏会话页面立刻切过去。
 - `flutter_module/test/workspace_drawer_test.dart` 新增 1 项：点 X 之后抽屉不会回来。
 
+## 0.2.9：关抽屉把页面关没了（黑屏），以及「切过去停在中间」
+
+两个问题都不大，但都属于「看起来像玄学」的那一类，根子都在这句：**抽屉是挂在当前路由上的一段
+local history，不是一层可以随便插拔的 widget。**
+
+### 一、点 ✕ 黑屏
+
+0.2.4 为了让「快照说关着就别弹」，把抽屉写成了条件挂载：
+
+```dart
+endDrawer: workspaceOpen ? WorkspaceDrawer(...) : null,
+```
+
+看着干净，实际上有两条路会打架：
+
+1. 用户点 ✕ → `_setWorkspaceOpen(false)` 先 `setState`，下一帧 build 时 `workspaceOpen` 已经是
+   false，**抽屉 widget 直接从树里消失**，但它压进路由的那条 local history 条目还在；
+2. 关抽屉的老写法是 `Navigator.of(context).pop()` —— pop 的是「路由栈顶的那一条」，条目还在时关抽屉，
+   条目不在了就把**整页路由**弹掉。于是：黑屏（路由没了，Scaffold 也没了），再按返回键把
+   Activity 收掉，露出底下的网页版。
+
+`Scaffold.isEndDrawerOpen` 在 widget 被摘掉之后是 `false`，两个 post-frame 回调谁先谁后完全看
+这一帧里快照什么时候到（80ms 一次），所以症状是「有时候关得掉、有时候黑屏」。
+
+**修法（两条一起，缺一不可）**
+
+- 抽屉**常挂**：`endDrawer` 永远给 `WorkspaceDrawer`，没数据就喂一个 `loading: true` 的占位快照
+  （反正关着的时候看不见）。开合只表达在「开/关」的动作上，不表达在「挂不挂」上。
+- 关闭走 `ScaffoldState.closeEndDrawer()`，**永远不要** `Navigator.pop()`。前者是幂等的接口，
+  后者是「弹路由栈」，两者的语义差着一条历史记录。
+
+回归测试在 `flutter_module/test/workspace_drawer_test.dart`：点 ✕ 之后断言 `isEndDrawerOpen` 为
+false、`ChatScreen` 还在、并且通过 mock 通道收上来的动作里**没有 `exitApp`**（老实现弹到空路由时
+会走 PopScope 的兜底退出）。
+
+### 二、切会话停在中间
+
+`_stick`（是否贴底）在切会话时没重置，`_afterLayout()` 又只在 `_stick` 为 true 时才跳。更细的一条：
+就算跳了，`jumpTo(maxScrollExtent)` 落到的是**列表最底**，而列表最后一项是 footer（加载中、错误卡、
+提问卡、token 统计），footer 高的会话里看起来就是「停在页尾空白处」。
+
+现在切会话走专门的 `_scrollToLatest()`：先 `jumpTo(maxScrollExtent)` 把最后一条建出来（懒构建列表
+不建就拿不到 `RenderBox`），下一帧再 `Scrollable.ensureVisible(lastKey.currentContext, alignment: 1)`
+—— 把**最新那条消息**的底边对齐视口底边，footer 自然被挤到看不见的地方。
+
+### 记进 AGENTS.md 的两条
+
+- 抽屉 / 弹层这类「挂在路由上的东西」，不要用「挂不挂」表达开关状态，也不要拿 `Navigator.pop()` 当关闭；
+- 切会话要显式重置滚动锚点，且「贴底」不等于「停在最新一条」。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
