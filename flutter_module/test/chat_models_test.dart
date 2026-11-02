@@ -288,4 +288,46 @@ void main() {
       expect(picker.items.last.danger, isFalse);
     });
   });
+
+  test('待办清单：逐条解析，total 缺失时退回 open+done', () {
+    final ChatHeaderView view = ChatHeaderView.fromJson(<String, Object?>{
+      'title': '会话',
+      'todo': <String, Object?>{
+        'open': 2,
+        'done': 1,
+        'current': '写测试',
+        'items': <Object?>[
+          <String, Object?>{'text': '读代码', 'status': 'completed'},
+          <String, Object?>{'text': '写测试', 'status': 'in_progress'},
+        ],
+      },
+    });
+    final ChatTodoSummary todo = view.todo!;
+    expect(todo.total, 3, reason: '老快照没有 total，别显示 0');
+    expect(todo.current, '写测试');
+    expect(todo.items.length, 2);
+    expect(todo.items.first.text, '读代码');
+    expect(todo.items.first.status, 'completed');
+    expect(todo.items.last.status, 'in_progress');
+  });
+
+  test('待办清单：没有 items 时是空列表（不能是 null，展开要能点到）', () {
+    final ChatHeaderView view = ChatHeaderView.fromJson(<String, Object?>{
+      'todo': <String, Object?>{'open': 1, 'done': 0, 'total': 1},
+    });
+    expect(view.todo!.items, isEmpty);
+    expect(view.todo!.total, 1);
+  });
+
+  test('空态提示词：只有字符串会被收下', () {
+    final ChatSnapshot snapshot = ChatSnapshot.fromJson(<String, Object?>{
+      'suggestions': <Object?>['介绍一下这个项目', 42, null, '跑一下测试'],
+    });
+    expect(snapshot.suggestions, <String>['介绍一下这个项目', '跑一下测试']);
+  });
+
+  test('hasHistory 决定「历史」chip，解析时不猜', () {
+    expect(ChatHeaderView.fromJson(<String, Object?>{'hasHistory': true}).hasHistory, isTrue);
+    expect(ChatHeaderView.fromJson(<String, Object?>{}).hasHistory, isFalse);
+  });
 }

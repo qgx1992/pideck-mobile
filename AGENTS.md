@@ -182,6 +182,12 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   别在 `chat_page.dart` 里重写一遍，那里踩过两个坑：`/` 插成 `//goal`、光标 -1 时把整段文字删掉。
 - 看图用 `flutter_module/lib/chat/image_viewer.dart`，**不要换回 `PageView` 自带滑动**：
   `InteractiveViewer` 会抢走横向拖动，翻页只能听 `onInteractionEnd` 的速度。
+- 「历史」跳转（0.1.33 起）**在 Dart 本地滚**，不发 `pickerSelect` 回 WebView：历史 id → 下标就在
+  `ChatSnapshot.history` 里。懒构建列表里定位用**二分**（`_renderedHistoryRange()` 看这一帧构建出
+  哪些下标），不要用「平均高度 × 下标」估算 —— 长回答和短回答差一个数量级，长会话里最不准。
+- 待办清单的**展开态是 Dart 本地状态**（`_todoExpanded`），不要推回 WebView；清单条目本身不可点选
+  （由 agent 维护）。`ChatTodoSummary.total` 老快照没有时要退回 `open + done`，否则会显示 `0/0`。
+- 空态提示词（`ChatSnapshot.suggestions`）点一下**只填输入框、不直接发送**。
 
 ## 改动完成后必须跑的验证
 

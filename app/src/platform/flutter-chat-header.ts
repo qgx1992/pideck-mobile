@@ -26,7 +26,7 @@ import type { SendMode } from "../ui/send-mode.ts";
  * 所以新增 chip 必须同时在 `dispatchFlutterChatAction` 里加分支。
  */
 export interface ChatChip {
-  key: "model" | "thinking" | "security" | "plan" | "dsh";
+  key: "model" | "thinking" | "security" | "plan" | "dsh" | "history";
   label: string;
   /** 灰色：还没选（模型占位、思考未设、安全未设） */
   muted?: boolean;
@@ -34,11 +34,20 @@ export interface ChatChip {
   active?: boolean;
 }
 
+export interface ChatTodoItem {
+  text: string;
+  /** `pending` / `in_progress` / `completed` */
+  status: string;
+}
+
 export interface ChatTodoSummary {
   open: number;
   done: number;
+  total: number;
   /** 正在做的那一条（有就显示） */
   current?: string;
+  /** 展开后逐条显示；顺序就是 agent 给的顺序 */
+  items: ChatTodoItem[];
 }
 
 export interface ChatSubagentSummary {
@@ -71,6 +80,8 @@ export interface ChatHeaderView {
   promptCount: number;
   todo: ChatTodoSummary | null;
   subagents: ChatSubagentSummary | null;
+  /** 有没有历史消息（`buildChatHeaderView` 据此决定「历史」chip 出不出现） */
+  hasHistory: boolean;
 }
 
 export interface ChatHeaderInput {
@@ -89,6 +100,8 @@ export interface ChatHeaderInput {
   promptCount: number;
   todo: ChatTodoSummary | null;
   subagents: ChatSubagentSummary | null;
+  /** 有已加载的历史消息时给一个「历史」入口（跳转到某条消息） */
+  hasHistory: boolean;
 }
 
 /** 上下文短标签：「12.3K / 128K」，>1M 用 M。 */
@@ -131,6 +144,8 @@ export function buildChatHeaderView(input: ChatHeaderInput): ChatHeaderView {
   if (input.caps.dsh && input.dsh) {
     chips.push({ key: "dsh", label: "DSH" });
   }
+  // 「历史」放最后：它是导航而不是状态，排在前面的 chip 都在说「当前用的是什么」
+  if (input.hasHistory) chips.push({ key: "history", label: "历史" });
 
   return {
     title: input.title,
@@ -151,6 +166,7 @@ export function buildChatHeaderView(input: ChatHeaderInput): ChatHeaderView {
     promptCount: input.promptCount,
     todo: input.todo,
     subagents: input.subagents,
+    hasHistory: input.hasHistory,
   };
 }
 

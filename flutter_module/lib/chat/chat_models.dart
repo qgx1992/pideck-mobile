@@ -294,6 +294,7 @@ class ChatSnapshot {
     this.messageMenus = const <String, List<ChatMenuItem>>{},
     this.header = const ChatHeaderView(),
     this.picker,
+    this.suggestions = const <String>[],
   });
 
   final String sessionId;
@@ -315,6 +316,11 @@ class ChatSnapshot {
   /// 内容由 WebView 的 `actionsForRole()` 决定（ACP 会话只剩「复制」），
   /// 这里**不维护**一份自己的动作表 —— 后端能力一变两边就会分叉。
   final Map<String, List<ChatMenuItem>> messageMenus;
+
+  /// 空会话的快捷提示词：点一下插到输入框（不直接发）。
+  ///
+  /// WebView 只在「没有已加载历史」时给，Dart 也只在没历史时画。
+  final List<String> suggestions;
 
   /// 顶栏（标题 / meta / chips / 上下文 / 发送模式 / 待办与子代理摘要）。
   ///
@@ -361,6 +367,7 @@ class ChatSnapshot {
       messageMenus: _menusOf(json['messageMenus']),
       header: header is Map<Object?, Object?> ? ChatHeaderView.fromJson(mapOf(header)) : const ChatHeaderView(),
       picker: picker is Map<Object?, Object?> ? ChatPickerView.fromJson(mapOf(picker)) : null,
+      suggestions: listOf(json['suggestions']).whereType<String>().toList(growable: false),
     );
   }
 }
@@ -517,20 +524,51 @@ class ChatContextChip {
 }
 
 /// 待办摘要（顶栏下面那一行）。
+/// 任务清单里的一条（只显示，不可点选：清单由 agent 维护）。
+class ChatTodoItem {
+  const ChatTodoItem({this.text = '', this.status = 'pending'});
+
+  final String text;
+
+  /// `pending` / `in_progress` / `completed`
+  final String status;
+
+  factory ChatTodoItem.fromJson(Map<String, Object?> json) =>
+      ChatTodoItem(text: str(json['text']), status: str(json['status'], 'pending'));
+}
+
 class ChatTodoSummary {
-  const ChatTodoSummary({this.open = 0, this.done = 0, this.current = ''});
+  const ChatTodoSummary({
+    this.open = 0,
+    this.done = 0,
+    this.total = 0,
+    this.current = '',
+    this.items = const <ChatTodoItem>[],
+  });
 
   final int open;
   final int done;
+  final int total;
   final String current;
 
-  int get total => open + done;
+  /// 展开后逐条显示
+  final List<ChatTodoItem> items;
 
-  factory ChatTodoSummary.fromJson(Map<String, Object?> json) => ChatTodoSummary(
-        open: intOrNull(json['open']) ?? 0,
-        done: intOrNull(json['done']) ?? 0,
-        current: str(json['current']),
-      );
+  factory ChatTodoSummary.fromJson(Map<String, Object?> json) {
+    final int open = intOrNull(json['open']) ?? 0;
+    final int done = intOrNull(json['done']) ?? 0;
+    return ChatTodoSummary(
+      open: open,
+      done: done,
+      // 老快照没有 total：退回 open + done，别显示 0
+      total: intOrNull(json['total']) ?? (open + done),
+      current: str(json['current']),
+      items: listOf(json['items'])
+          .whereType<Map<Object?, Object?>>()
+          .map((Map<Object?, Object?> item) => ChatTodoItem.fromJson(mapOf(item)))
+          .toList(growable: false),
+    );
+  }
 }
 
 /// 子代理摘要。
@@ -560,6 +598,7 @@ class ChatHeaderView {
     this.promptCount = 0,
     this.todo,
     this.subagents,
+    this.hasHistory = false,
   });
 
   final String title;
@@ -577,6 +616,9 @@ class ChatHeaderView {
   final int promptCount;
   final ChatTodoSummary? todo;
   final ChatSubagentSummary? subagents;
+
+  /// 有没有历史消息（WebView 据此决定「历史」chip 出不出现，Dart 只管画）
+  final bool hasHistory;
 
   factory ChatHeaderView.fromJson(Map<String, Object?> json) {
     final Object? context = json['context'];
@@ -598,6 +640,7 @@ class ChatHeaderView {
       todo: todo is Map<Object?, Object?> ? ChatTodoSummary.fromJson(mapOf(todo)) : null,
       subagents:
           subagents is Map<Object?, Object?> ? ChatSubagentSummary.fromJson(mapOf(subagents)) : null,
+      hasHistory: json['hasHistory'] == true,
     );
   }
 }

@@ -37,6 +37,7 @@ function input(overrides: Partial<ChatHeaderInput> = {}): ChatHeaderInput {
     promptCount: 3,
     todo: null,
     subagents: null,
+    hasHistory: false,
     ...overrides,
   };
 }
@@ -49,6 +50,49 @@ test("chip 顺序：模型 → 思考 → 安全 → 计划 → DSH", () => {
     view.chips.map((chip) => chip.key),
     ["model", "thinking", "security", "plan", "dsh"],
   );
+});
+
+test("有历史时「历史」chip 排在最后（导航类，不挤状态 chip 的顺序）", () => {
+  const view = buildChatHeaderView(
+    input({ security: { label: "标准", muted: false }, hasHistory: true }),
+  );
+  assert.deepEqual(
+    view.chips.map((chip) => chip.key),
+    ["model", "thinking", "security", "plan", "history"],
+  );
+  assert.equal(view.chips.at(-1)?.label, "历史");
+});
+
+test("没有历史就不给「历史」入口", () => {
+  assert.deepEqual(buildChatHeaderView(input()).chips.map((chip) => chip.key), [
+    "model",
+    "thinking",
+    "plan",
+  ]);
+});
+
+test("待办摘要带上逐条清单与总数（展开要用）", () => {
+  const view = buildChatHeaderView(
+    input({
+      todo: {
+        open: 2,
+        done: 1,
+        total: 3,
+        current: "写测试",
+        items: [
+          { text: "读代码", status: "completed" },
+          { text: "写测试", status: "in_progress" },
+          { text: "出包", status: "pending" },
+        ],
+      },
+    }),
+  );
+  assert.equal(view.todo?.total, 3);
+  assert.deepEqual(view.todo?.items.map((item) => item.status), [
+    "completed",
+    "in_progress",
+    "pending",
+  ]);
 });
 
 test("ACP 会话（没有模型/思考/计划能力）只剩标题，chip 全不出现", () => {

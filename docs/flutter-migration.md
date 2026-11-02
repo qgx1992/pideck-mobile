@@ -643,6 +643,46 @@ Dart 点「扫码配对」→ `openWebSheet('connection')` → 原生先 `notify
 
 真要迁，需要先给 Dart 侧加「全屏页面级面板」（`Navigator.push` 一个选择页），那是另一件事。
 
+## 历史跳转 + 待办展开 + 空态建议（0.1.33）：本地能算的就不问 WebView
+
+这一批三个都是「用户点了要立刻有反应」的小东西，做法上共同点只有一个：
+**能在 Dart 侧用手上已有的快照算出来的，就不要绕回 WebView。**
+
+### 「历史」跳转：二分定位，不按平均高度估
+
+Web 版是 `chatView.scrollToMessage(id)`，操作的是 DOM。Dart 侧的历史是一份
+`ChatSnapshot.history`（有 `id`），所以跳转完全可以在本地做：
+
+1. `_onPickerTap` 里特判 `picker.kind === "history"`：发 `closePicker`，然后本地滚，**不**发 `pickerSelect`。
+2. `ListView.builder` 是懒构建的，目标项没渲染就没有 `BuildContext` 可以 `ensureVisible`。
+   于是在 `[0, maxScrollExtent]` 上**二分**：跳到中点 → 这一帧渲染出来的下标区间
+   （`_renderedHistoryRange()` 扫 `_historyKeys` 里 `currentContext != null` 的项）若包含目标就收敛，
+   否则按目标在中点之上/之下砍半。下标随偏移严格单调，3~5 跳就落到目标附近。
+3. 落到之后 `Scrollable.ensureVisible(alignment: 0.12)`，再高亮 1.4 秒（`_highlightId`）。
+
+为什么不用「平均高度 × 下标」估算：长回答和短回答的高度差一个数量级，
+估算值在最需要它的长会话里最不准；二分只依赖单调性，和高度分布无关。
+
+**没做到的地方**（诚实记录）：只能跳到**已加载**的历史。更早的消息需要先向上滚动加载，
+目标不在快照里时给一句「这条消息不在已加载范围内」，而不是假装跳了。
+
+### 待办清单：展开态是本地状态
+
+顶栏那一行摘要（`任务 2/5 · 正在写测试`）现在可点，展开后逐条列出（对勾 / 实心点 / 空心圈，
+完成项划掉）。三个约定：
+
+- **展开态不推回 WebView**：它纯属本机 UI 偏好（和 Web 版 `createTodoStrip()` 的 `collapsed`
+  一样只存内存），推回去只会多一个需要同步的字段。
+- 条目**不可点选**：清单由 agent 维护，用户点它没有语义。
+- `total` 从快照带过来（`ChatTodoSummary.total`），老快照没有这个字段时退回 `open + done`，
+  否则会显示 `任务 0/0`。
+
+### 空态建议：只填不发
+
+`empty-suggestions.ts` 的三条按项目类型给的提示词，随快照的 `suggestions` 一起推；
+Dart 只在「没历史、也没有正在跑的块」时画（`bare`），点一下把文字填进输入框并聚焦 —— 和 Web 版
+`onSuggestion` 一致。**不直接发送**：用户几乎总要先改两个字。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
@@ -672,11 +712,13 @@ Dart 点「扫码配对」→ `openWebSheet('connection')` → 原生先 `notify
 5. ~~**顶栏 + 输入框附属面板**~~ —— **0.1.31 已完成**（见上一节）：顶栏 chips、上下文用量、
    模型 / 思考 / 安全 / 提示词面板、排队与插话切换都进了 Flutter。
 
+6. ~~**看图 / 斜杠 / @提及**~~ —— **0.1.32 已完成**。
+7. ~~**历史跳转 / 待办展开 / 空态建议**~~ —— **0.1.33 已完成**（见上一节）。
+
 **剩下没迁的**：
-启动页 `splash.ts`、空态建议 `empty-suggestions.ts`、斜杠命令 `slash-model.ts`、@提及
-`mention-model.ts`、输入历史 `history-*`、以及十七个 sheet（连接、端点、主题、安全、DSH 工具、
-用量、工作区选择器、后端、重命名、编辑消息、历史、提及、斜杠、上下文、发送历史）、
-图片查看器 `image-lightbox.ts`、扫码覆盖层 `scan-overlay.ts`、文件引用/下载。
+启动页 `splash.ts`、输入历史 `history-*`、以及十来个 sheet（连接、端点、主题、安全、DSH 工具、
+用量、工作区选择器、后端、重命名、编辑消息、发送历史、上下文）、扫码覆盖层 `scan-overlay.ts`、
+文件引用/下载、`acp-notice.ts`、`run-completion.ts`。
 这些都不在主路径上：点它们会 `leaveFlutterThen()` 回 WebView 开原生弹层，行为一致，只是闪一下。
 
 各插件对应关系：

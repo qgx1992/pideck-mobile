@@ -5430,6 +5430,7 @@ function syncFlutterChat(): void {
       backend: activeBackend(),
       header: chatHeaderView(),
       picker: flutterPicker,
+      suggestions: emptySuggestions(),
     }),
   );
 }
@@ -5444,6 +5445,18 @@ function syncFlutterChat(): void {
  * `subagentView`），这里只做摊平 —— 不在 Flutter 侧重新判断「ACP 有没有模型入口」
  * 这类事，否则后端能力一变两边就会分叉。
  */
+/**
+ * 空会话的快捷提示词（按项目类型给不同的三条）。
+ *
+ * 只在「没有已加载历史」时推 —— Dart 侧也在没历史时才画，两边都不做多余判断。
+ */
+function emptySuggestions(): string[] {
+  if (!runtime || sessionHistory.length > 0) return [];
+  const session = activeSessionId ? runtime.store.session(activeSessionId) : undefined;
+  const project = session ? runtime.store.projects().find((item) => item.id === session.projectId) : undefined;
+  return [...suggestionsFor(suggestionContext(project))];
+}
+
 function chatHeaderView(): ChatHeaderView {
   const sessionId = activeSessionId;
   const session = sessionId && runtime ? runtime.store.session(sessionId) : undefined;
@@ -5488,7 +5501,13 @@ function chatHeaderView(): ChatHeaderView {
     promptCount: promptTemplateCount,
     todo:
       todos && todos.total > 0
-        ? { open: todos.total - todos.done, done: todos.done, ...(current ? { current: current.text } : {}) }
+        ? {
+            open: todos.total - todos.done,
+            done: todos.done,
+            total: todos.total,
+            ...(current ? { current: current.text } : {}),
+            items: todos.items.map((item) => ({ text: item.text, status: item.status })),
+          }
         : null,
     subagents:
       subagentView.length > 0
@@ -5497,6 +5516,8 @@ function chatHeaderView(): ChatHeaderView {
             total: subagentView.length,
           }
         : null,
+    // 只有已经加载出历史才给「历史」入口：没有历史时点开只会看到空面板
+    hasHistory: sessionHistory.length > 0,
   });
 }
 
@@ -5648,6 +5669,27 @@ async function openFlutterPicker(kind: string, query = "", trail: string[] = [])
       empty: view.nodes.length > 0 ? "没有匹配的文件" : "这个目录里没有文件",
       context: joinPath(trail),
       items,
+    });
+    return;
+  }
+
+  if (kind === "history") {
+    // 条目来源与 Web 版一致：`collectJumpTargets(sessionHistory)`。
+    // 选中后由 **Dart 自己滚**（它手里就有这份历史的 id → 下标），
+    // 不绕回 WebView 去操作一个用户看不见的 DOM。
+    const all = collectJumpTargets(sessionHistory);
+    const items = filterJumpTargets(all, query);
+    setFlutterPicker({
+      kind,
+      title: `跳转到消息（${items.length}）`,
+      subtitle: "只覆盖已加载的历史，更早的消息要先向上滚动加载",
+      searchable: true,
+      empty: all.length === 0 ? "这个会话里还没有可定位的消息" : "没有匹配的消息",
+      items: items.map((item) => ({
+        id: item.id,
+        label: `${roleLabel(item.role)} · ${item.preview}`,
+        description: item.timestamp ? fmtShortTime(item.timestamp) : undefined,
+      })),
     });
     return;
   }
@@ -5889,6 +5931,7 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
         return;
       }
       if (key === "model" || key === "thinking" || key === "security") void openFlutterPicker(key);
+      if (key === "history") void openFlutterPicker("history");
       return;
     }
     case "context":

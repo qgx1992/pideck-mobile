@@ -146,6 +146,14 @@ test("buildChatSnapshot：空输入给安全默认值", () => {
   assert.equal(snapshot.live, null);
   assert.equal(snapshot.pending, null);
   assert.deepEqual(snapshot.history, []);
+  assert.deepEqual(snapshot.suggestions, []);
+});
+
+test("buildChatSnapshot：空态提示词原样带过去（拷贝，不是引用）", () => {
+  const suggestions = ["介绍一下这个项目", "跑一下测试"];
+  const snapshot = buildChatSnapshot({ sessionId: "s1", messages: [], suggestions });
+  assert.deepEqual(snapshot.suggestions, suggestions);
+  assert.notEqual(snapshot.suggestions, suggestions, "要拷贝：调用方之后改数组不该影响已推的快照");
 });
 
 test("FlutterChatMirror：40ms 内的多次更新只推最后一次", async () => {

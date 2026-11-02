@@ -11,6 +11,7 @@
 ///   - 键盘弹出 / 文本变长导致的尺寸变化同样走这条路径（`keepBottomOnResize()`）。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -50,6 +51,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// 输入框里此刻只剩触发的 `/` 或 `@`：下一条 insert 要整段替换
   bool _composerHoldsTrigger = false;
+
+  /// 任务清单展开着没（折叠状态只在内存里，和 Web 版一致）
+  bool _todoExpanded = false;
+
+  /// 刚跳过去的那条消息（高亮 1.4 秒）
+  String _highlightId = '';
+
+  /// 历史条目的 key：`/history` 面板跳转要按消息 id 找到它再滚过去
+  final Map<int, GlobalKey> _historyKeys = <int, GlobalKey>{};
   final TextEditingController _pickerSearch = TextEditingController();
   /// 当前面板的种类，用来判断要不要清空搜索框（换面板时清）
   String _pickerKind = '';
@@ -441,8 +451,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   itemBuilder: (BuildContext context, int index) {
                     if (index < historyCount) {
                       return _HistoryTile(
-                        key: ValueKey<String>('h:${snapshot.history[index].id}:$index'),
+                        key: _historyKeys.putIfAbsent(index, () => GlobalKey()),
                         item: snapshot.history[index],
+                        highlighted: _highlightId.isNotEmpty && snapshot.history[index].id == _highlightId,
                         onLongPress: () => _showMessageMenu(snapshot.history[index]),
                       );
                     }
@@ -509,6 +520,21 @@ class _ChatScreenState extends State<ChatScreen> {
             textAlign: TextAlign.center,
             style: TextStyle(color: c.textMuted, fontSize: 13, height: 1.5),
           ),
+        ),
+      ));
+    }
+    final bool bare = snapshot.history.isEmpty && snapshot.live == null;
+    if (bare && snapshot.suggestions.isNotEmpty) {
+      children.add(Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          alignment: WrapAlignment.center,
+          children: <Widget>[
+            for (final String prompt in snapshot.suggestions)
+              _suggestionChip(c, prompt),
+          ],
         ),
       ));
     }
@@ -1017,18 +1043,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           if (chips.isNotEmpty) Wrap(spacing: 6, runSpacing: 6, children: chips),
-          if (todo != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                todo.current.isEmpty
-                    ? '任务 ${todo.done}/${todo.total}'
-                    : '任务 ${todo.done}/${todo.total} · ${todo.current}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11, color: c.textMuted),
-              ),
-            ),
+          if (todo != null) _todoRow(c, todo),
           if (subagents != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -1040,6 +1055,130 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  /// 空态提示词：点一下填进输入框（不直接发 —— 用户多半想改两个字再发）。
+  Widget _suggestionChip(PiColors c, String prompt) {
+    return InkWell(
+      onTap: () {
+        _composer.value = TextEditingValue(
+          text: prompt,
+          selection: TextSelection.collapsed(offset: prompt.length),
+        );
+        _composerText = prompt;
+        _composerHoldsTrigger = false;
+        _composerFocus.requestFocus();
+        setState(() {});
+      },
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: c.divider),
+          color: c.surface,
+        ),
+        child: Text(prompt, style: TextStyle(fontSize: 12.5, color: c.textSecondary)),
+      ),
+    );
+  }
+
+  /// 任务清单：一行摘要，点一下展开逐条（清单由 agent 维护，条目本身不可点选）。
+  Widget _todoRow(PiColors c, ChatTodoSummary todo) {
+    final String summary = todo.current.isEmpty
+        ? '任务 ${todo.done}/${todo.total}'
+        : '任务 ${todo.done}/${todo.total} · ${todo.current}';
+    final bool expandable = todo.items.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          InkWell(
+            onTap: expandable ? () => setState(() => _todoExpanded = !_todoExpanded) : null,
+            borderRadius: BorderRadius.circular(6),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    summary,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11, color: c.textMuted),
+                  ),
+                ),
+                if (expandable)
+                  Icon(
+                    _todoExpanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                    size: 14,
+                    color: c.textMuted,
+                  ),
+              ],
+            ),
+          ),
+          if (expandable && _todoExpanded)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  for (final ChatTodoItem item in todo.items)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          _todoGlyph(c, item.status),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              item.text,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                height: 1.35,
+                                color: item.status == 'completed' ? c.textMuted : c.textSecondary,
+                                decoration: item.status == 'completed' ? TextDecoration.lineThrough : null,
+                                decorationColor: c.textMuted,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 单条状态图标：完成=对勾，进行中=实心点，待办=空心圈。
+  Widget _todoGlyph(PiColors c, String status) {
+    if (status == 'completed') {
+      return Icon(Icons.check_rounded, size: 12, color: c.accent);
+    }
+    if (status == 'in_progress') {
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(color: c.accent, shape: BoxShape.circle),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Container(
+        width: 7,
+        height: 7,
+        decoration: BoxDecoration(
+          border: Border.all(color: c.textMuted, width: 1.2),
+          shape: BoxShape.circle,
+        ),
       ),
     );
   }
@@ -1073,6 +1212,13 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 输入框再回一条 `closePicker`。其余（模型、思考、安全、压缩上下文）要
   /// WebView 真去干活，照旧回 `pickerSelect`。
   void _onPickerTap(ChatPickerView picker, ChatPickerItem item) {
+    // 「历史」面板是唯一不进输入框、也不回 WebView 的一种：它要的是滚动，
+    // 而这份历史的 id → 下标就在本地快照里，绕回 WebView 去操作用户看不见的 DOM 没有意义。
+    if (picker.kind == 'history') {
+      sendChatAction(<String, Object?>{'type': 'closePicker'});
+      unawaited(_jumpToHistoryMessage(item.id));
+      return;
+    }
     final PickerTap tap = resolvePickerTap(item);
     if (tap.kind == PickerTapKind.insert) {
       _insertComposerText(tap.text);
@@ -1080,6 +1226,68 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     sendChatAction(<String, Object?>{'type': 'pickerSelect', 'kind': picker.kind, 'id': tap.itemId});
+  }
+
+  /// 滚到某条历史消息，并高亮 1.4 秒。
+  ///
+  /// `ListView.builder` 是懒构建的：目标项没渲染出来就没有 context 可 `ensureVisible`。
+  /// 所以先在 `[0, maxScrollExtent]` 上做**二分**：跳到中点 → 这一帧渲染出来的下标区间
+  /// 若包含目标就收敛，否则按目标在中点之上/之下砍半。单调性严格成立（下标随偏移单调），
+  /// 一般 3~5 跳就能落到目标附近，比按「平均高度 × 下标」估算稳得多。
+  Future<void> _jumpToHistoryMessage(String id) async {
+    final int target = _snapshot.history.indexWhere((ChatHistoryItem item) => item.id == id);
+    if (target < 0) {
+      _notice('这条消息不在已加载范围内，先向上滚动加载更早的历史');
+      return;
+    }
+    if (!_scroll.hasClients) return;
+    double lo = 0;
+    double hi = _scroll.position.maxScrollExtent;
+    for (int step = 0; step < 16; step++) {
+      if (_historyKeys[target]?.currentContext != null) break;
+      final double mid = (lo + hi) / 2;
+      if ((mid - _scroll.offset).abs() < 1 || hi - lo < 1) break;
+      _scroll.jumpTo(mid.clamp(0, hi));
+      await WidgetsBinding.instance.endOfFrame;
+      final (int first, int last) = _renderedHistoryRange();
+      if (first < 0) break;
+      if (target < first) {
+        hi = mid;
+      } else if (target > last) {
+        lo = mid;
+      } else {
+        break;
+      }
+    }
+    final BuildContext? ctx = _historyKeys[target]?.currentContext;
+    if (!mounted) return;
+    if (ctx == null) {
+      _notice('已跳到附近，继续向上滑动可以加载更早的历史');
+      return;
+    }
+    if (!ctx.mounted) return;
+    await Scrollable.ensureVisible(
+      ctx,
+      alignment: 0.12,
+      duration: const Duration(milliseconds: 180),
+    );
+    if (!mounted) return;
+    setState(() => _highlightId = id);
+    await Future<void>.delayed(const Duration(milliseconds: 1400));
+    if (!mounted || _highlightId != id) return;
+    setState(() => _highlightId = '');
+  }
+
+  /// 当前这一帧里真正构建出来的历史下标区间；一条都没建出来时返回 `(-1, -1)`。
+  (int, int) _renderedHistoryRange() {
+    int first = -1;
+    int last = -1;
+    for (final MapEntry<int, GlobalKey> entry in _historyKeys.entries) {
+      if (entry.value.currentContext == null) continue;
+      if (first < 0 || entry.key < first) first = entry.key;
+      if (entry.key > last) last = entry.key;
+    }
+    return (first, last);
   }
 
   /// 往输入框光标处插一段文本。
@@ -1412,13 +1620,34 @@ class _ChatScreenState extends State<ChatScreen> {
 /* ------------------------------ 历史条目 ------------------------------ */
 
 class _HistoryTile extends StatelessWidget {
-  const _HistoryTile({super.key, required this.item, required this.onLongPress});
+  const _HistoryTile({
+    super.key,
+    required this.item,
+    required this.onLongPress,
+    this.highlighted = false,
+  });
 
   final ChatHistoryItem item;
   final VoidCallback onLongPress;
 
+  /// 从「历史」面板跳过来的那一条：淡一层底色，让人看清落点
+  final bool highlighted;
+
   @override
   Widget build(BuildContext context) {
+    final Widget body = _body(context);
+    if (!highlighted) return body;
+    final PiColors c = PiColors.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: c.accent.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: body,
+    );
+  }
+
+  Widget _body(BuildContext context) {
     final PiColors c = PiColors.of(context);
 
     if (item.isTool) {

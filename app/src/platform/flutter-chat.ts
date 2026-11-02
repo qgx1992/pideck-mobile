@@ -75,6 +75,8 @@ export interface ChatSnapshot {
    * 多一条通道只会多一处不同步。
    */
   picker: ChatPickerView | null;
+  /** 空会话时的快捷提示词（点一下插到输入框，不直接发） */
+  suggestions: string[];
 }
 
 /** 长按菜单里的一项。 */
@@ -195,6 +197,8 @@ export interface ChatSnapshotInput {
   header?: ChatHeaderView;
   /** 当前选择面板；缺省 null */
   picker?: ChatPickerView | null;
+  /** 空会话时的快捷提示词；Dart 只在「没历史、也没有正在跑的块」时显示 */
+  suggestions?: readonly string[];
 }
 
 /** 组装快照（纯函数，方便单测）。 */
@@ -220,6 +224,7 @@ export function buildChatSnapshot(input: ChatSnapshotInput): ChatSnapshot {
     },
     header: input.header ?? emptyHeader(),
     picker: input.picker ?? null,
+    suggestions: [...(input.suggestions ?? [])],
   };
 }
 
@@ -237,6 +242,7 @@ function emptyHeader(): ChatHeaderView {
     promptCount: 0,
     todo: null,
     subagents: null,
+    hasHistory: false,
   };
 }
 
