@@ -5391,6 +5391,32 @@ function dispatchFlutterSidebarAction(action: Record<string, unknown>): void {
   const type = typeof action.type === "string" ? action.type : "";
   const text = (key: string): string => (typeof action[key] === "string" ? (action[key] as string) : "");
 
+  // 0.2.13：会话改名 / 复制 / 删除 / 移除项目 / 新建会话的**接口调用**已经归 Dart。
+  // 带 native 回传说明「副作用已经做完了」，这里只刷新状态与重画 ——
+  // 再调一次接口就会变成两次副作用（重命名两次、删两次、建出两个会话）。
+  if (action.native === true || action.native === "true") {
+    switch (type) {
+      case "sessionRename":
+      case "sessionCopy":
+      case "sessionDelete":
+      case "projectRemove":
+      case "createSession": {
+        const id = text("id");
+        // 闭包里不能再依赖 `runtime` 的非空收窄，先抓一份。
+        const current = runtime;
+        closeSheet();
+        void current.store.refresh().then(() => {
+          renderSidebar(current.store.state);
+          renderHeader(current.store.state);
+          if (type === "createSession" && id) void openSession(id);
+        });
+        return;
+      }
+      default:
+        break;
+    }
+  }
+
   switch (type) {
     case "close":
       leaveFlutterThen(() => undefined);

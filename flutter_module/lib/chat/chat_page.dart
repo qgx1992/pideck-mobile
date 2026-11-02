@@ -30,10 +30,12 @@ import '../runtime/api_client.dart';
 import '../runtime/chat_runtime.dart';
 import '../sidebar/drawer_state.dart';
 import '../sidebar/sidebar_drawer.dart';
+import '../sidebar/session_actions.dart';
 import '../sidebar/sidebar_models.dart';
 import '../sidebar/sidebar_native.dart';
 import '../workspace/workspace_drawer.dart';
 import '../workspace/workspace_models.dart';
+import '../workspace/workspace_runtime.dart';
 import '../theme_mode.dart';
 import 'chat_models.dart';
 import 'composer_insert.dart';
@@ -93,6 +95,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Dart 侧数据面（帧流 / 历史 / 待答请求）。宿主没给端点时为 null。
   ChatRuntime? _runtime;
+
+  /// 工作区抽屉的数据来源（`git` / `files` / 预览）。
+  ///
+  /// 0.2.13 起跟着运行时一起建：它要靠状态仓解析「当前会话属于哪个项目」，
+  /// 状态仓没 `ready` 之前不接管 —— 那时算出来的是空项目，抽屉会空转。
+  /// `todos` 页签仍在 WebView 算（待办历史存在那边的 localStorage 里）。
+  WorkspaceRuntime? _workspace;
 
   /// 运行时推送很密（流式时每帧一次），用 40ms 尾沿合并一次重建，
   /// 与 Web 侧 `FlutterChatMirror` 同口径 —— 不为每个 token 重建整页。
@@ -260,6 +269,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _runtimeFlush?.cancel();
+    _workspace?.dispose();
     _runtime?.dispose();
     _workspaceWatchdog?.cancel();
     _sheetHost.dispose();
@@ -338,7 +348,73 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) _onRuntimeChanged();
     });
     _runtime = runtime;
+    // 工作区数据也跟着换会话重建：项目来自会话，留着旧的就是在画上一个项目。
+    _workspace?.dispose();
+    final WorkspaceRuntime workspace = WorkspaceRuntime(
+      client: runtime.client,
+      store: runtime.store,
+      sessionId: sessionId,
+      onNotice: _notice,
+    )..addListener(_onRuntimeChanged);
+    _workspace = workspace;
     unawaited(runtime.start());
+  }
+
+  /// 现在能不能用 Dart 那份工作区数据。
+  ///
+  /// 三个条件缺一不可：运行时在、状态仓拿到过完整状态（否则不知道是哪个项目）、
+  /// 当前页签不是 `todos`（那边仍是 WebView 算）。
+  WorkspaceRuntime? get _nativeWorkspace {
+    final WorkspaceRuntime? workspace = _workspace;
+    final ChatRuntime? runtime = _runtime;
+    if (workspace == null || runtime == null || !runtime.store.ready) return null;
+    // 看**这份数据自己的**页签，不看快照里的：用户刚点了「待办」时快照还没跟上，
+    // 拿旧快照判断会把这一个动作丢回 WebView，表现就是点了没反应。
+    if (workspace.tab == 'todos') return null;
+    return workspace;
+  }
+
+  /// 工作区抽屉的动作：本地先算一份（UI 立刻响应），再原样转给 WebView。
+  ///
+  /// 为什么还要转：`workspaceMention` 要往 WebView 的输入框里插 `@路径`，
+  /// 打开/关闭也要让那边的工作区状态跟上（多设备 / 回退路径都靠它）。
+  /// 合并快照时 Dart 这份赢，所以两边短暂不一致也不会闪。
+  void _onWorkspaceAction(Map<String, Object?> action) {
+    final WorkspaceRuntime? workspace = _nativeWorkspace;
+    final String type = str(action['type']);
+    if (workspace != null) {
+      switch (type) {
+        case 'workspaceOpen':
+          unawaited(workspace.openDrawer());
+        case 'workspaceClose':
+          workspace.close();
+        case 'workspaceTab':
+          unawaited(workspace.setTab(str(action['tab'])));
+        case 'workspaceEnter':
+          unawaited(workspace.enter(str(action['path'])));
+        case 'workspaceCrumb':
+          final Object? depth = action['depth'];
+          unawaited(workspace.crumb(depth is num ? depth.toInt() : 0));
+        case 'workspaceRefresh':
+          unawaited(workspace.refresh());
+        case 'workspacePreview':
+          unawaited(workspace.preview(str(action['path'])));
+        case 'workspacePreviewClose':
+          workspace.closePreview();
+        case 'workspaceMention':
+          // 引用路径由 WebView 插进输入框（那边才是输入框的真相源），
+          // 这里只负责把抽屉收起来 —— 等它绕一圈太慢，观感像没反应。
+          workspace.close();
+      }
+    }
+    sendChatAction(action);
+    if (type == 'workspaceOpen') {
+      _workspaceRetries = 0;
+      _kickWorkspaceWatchdog();
+    } else if (type == 'workspaceClose') {
+      _workspaceWatchdog?.cancel();
+      _workspaceWatchdog = null;
+    }
   }
 
   /// 运行时变了：40ms 尾沿合并后重建一次。
@@ -371,6 +447,10 @@ class _ChatScreenState extends State<ChatScreen> {
     };
     // 顶栏是 WebView 算的（chips / 能否插话 / 队列模式），但 `running` 得听运行时的：
     // WebView 被挂起时它的状态会停在旧值上，按钮就会在该显示「停止」的时候显示「发送」。
+    // 工作区：Dart 自己算出来的那份盖掉 WebView 的（它被挂起时会停在旧数据上）。
+    // 连不上 / 状态仓没就绪时 `_nativeWorkspace` 是 null，自然退回 WebView 那份。
+    final WorkspaceRuntime? workspace = _nativeWorkspace;
+    if (workspace != null) merged['workspace'] = workspace.snapshotJson();
     final Object? header = merged['header'];
     if (header is Map) {
       final Map<String, Object?> patched = <String, Object?>{
@@ -443,6 +523,9 @@ class _ChatScreenState extends State<ChatScreen> {
     // 先本地落一次意图，抽屉立刻重算 —— 不必等 WebView 算完再推回来。
     // 动作照旧转发：WebView 那边是回退路径，两边状态不能漂。
     final String type = '${action['type'] ?? ''}';
+    // 会改数据的动作（改名 / 复制 / 删除别的会话 / 移除项目 / 新建会话）0.2.13 起
+    // 由 Dart 直接调接口，成功后带 native 回传只让 WebView 重画。
+    if (_runDataAction(type, action)) return;
     switch (type) {
       case 'toggleTab':
         _drawer.toggleTab('${action['tab'] ?? ''}');
@@ -471,21 +554,48 @@ class _ChatScreenState extends State<ChatScreen> {
     _refreshSidebar();
   }
 
+  /// 数据类侧栏动作：Dart 自己调接口，成功了再让 WebView 重画。
+  ///
+  /// 返回 true 表示「已经接手，不要再转发」。
+  bool _runDataAction(String type, Map<String, Object?> action) {
+    final ChatRuntime? runtime = _runtime;
+    if (runtime == null || !runtime.historyLoaded) return false;
+    final String id = '${action['id'] ?? ''}';
+    final SessionActions actions = SessionActions(
+      client: runtime.client,
+      store: runtime.store,
+      activeSessionId: _snapshot.sessionId,
+      onNotice: _notice,
+      onForward: sendSidebarAction,
+    );
+    switch (type) {
+      case 'sessionRename':
+        unawaited(actions.rename(id, '${action['title'] ?? ''}'));
+      case 'sessionCopy':
+        unawaited(actions.copy(id));
+      case 'sessionDelete':
+        // 删当前会话要先由 WebView 收尾（清 activeSessionId、关 channel），
+        // 所以那条路径继续走回传。
+        if (!actions.canHandleDelete(id)) return false;
+        unawaited(actions.delete(id));
+      case 'projectRemove':
+        unawaited(actions.removeProject('${action['projectId'] ?? ''}'));
+      case 'createSession':
+        unawaited(actions.create(projectId: '${action['projectId'] ?? ''}'));
+      default:
+        return false;
+    }
+    return true;
+  }
+
   void _setWorkspaceOpen(bool open) {
     setState(() {
       _workspaceIntent = open;
       _workspaceOpen = open;
     });
-    sendChatAction(<String, Object?>{
+    _onWorkspaceAction(<String, Object?>{
       'type': open ? 'workspaceOpen' : 'workspaceClose',
     });
-    if (open) {
-      _workspaceRetries = 0;
-      _kickWorkspaceWatchdog();
-    } else {
-      _workspaceWatchdog?.cancel();
-      _workspaceWatchdog = null;
-    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ScaffoldState? scaffold = _scaffoldKey.currentState;
@@ -516,7 +626,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final WorkspaceSnapshot? snapshot = _snapshot.workspace;
       if (snapshot != null && !snapshot.loading) return;
       _workspaceRetries += 1;
-      sendChatAction(<String, Object?>{'type': 'workspaceRefresh'});
+      _onWorkspaceAction(<String, Object?>{'type': 'workspaceRefresh'});
       _kickWorkspaceWatchdog();
     });
   }
@@ -912,7 +1022,7 @@ class _ChatScreenState extends State<ChatScreen> {
               loading: true,
               title: snapshot.title,
             ),
-        onAction: sendChatAction,
+        onAction: _onWorkspaceAction,
         onClose: () => _setWorkspaceOpen(false),
       ),
       onEndDrawerChanged: (bool opened) {

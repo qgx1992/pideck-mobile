@@ -622,8 +622,17 @@ class PiDeckClient {
     );
   }
 
-  Future<Object?> getTodo(String sessionId) async {
-    final Map<String, Object?>? body =
+  /// `POST /api/projects/:id/delete`：移除项目（只是从列表里移除，不动磁盘）。
+  Future<bool> deleteProject(String projectId) async {
+    final Map<String, Object?>? body = await requestJson(
+      '/api/projects/${Uri.encodeComponent(projectId)}/delete',
+      method: 'POST',
+      body: <String, Object?>{},
+    );
+    return body != null && body['deleted'] == true;
+  }
+
+  Future<Object?> getTodo(String sessionId) async {    final Map<String, Object?>? body =
         await requestJson('/api/sessions/${Uri.encodeComponent(sessionId)}/todo');
     return body?['todo'];
   }
@@ -635,4 +644,69 @@ class PiDeckClient {
     final Object? models = body?['models'];
     return models is List ? List<Object?>.from(models) : <Object?>[];
   }
+
+  /// `GET /api/files?projectId&dir`。
+  ///
+  /// 参数名是 **dir** 不是 path —— 服务端只认 dir，传 path 会被静默忽略，
+  /// 表现就是「点进目录后看到的还是根目录」（对应 `src/api/client.ts:719-733`）。
+  Future<List<Map<String, Object?>>> listFiles(String projectId, String dir) async {
+    final Map<String, Object?>? body = await requestJson(
+      '/api/files',
+      query: <String, Object?>{
+        'projectId': projectId,
+        if (dir.isNotEmpty) 'dir': dir,
+      },
+    );
+    final Object? nodes = body?['nodes'];
+    if (nodes is! List) return const <Map<String, Object?>>[];
+    return <Map<String, Object?>>[
+      for (final Object? item in nodes)
+        if (item is Map) Map<String, Object?>.from(item),
+    ];
+  }
+
+  /// `GET /api/file-content?projectId&path`：只对文本成立。
+  ///
+  /// 服务端分四种情况（`src/api/client.ts:745-781`）：正常 `{content,size}`、
+  /// 二进制 `{binary:true,size}`、超 2MB `{truncated:true,content,size}`、
+  /// 读不到句柄 `{tooLarge:true,size}`。调用方必须看 [FileContent.kind]，
+  /// 不能默默把空串当内容存下来。
+  Future<FileContent> fileContent(String projectId, String path) async {
+    final Map<String, Object?>? body = await requestJson(
+      '/api/file-content',
+      query: <String, Object?>{'projectId': projectId, 'path': path},
+    );
+    final Map<String, Object?> raw = body ?? const <String, Object?>{};
+    return FileContent(
+      kind: raw['binary'] == true
+          ? 'binary'
+          : raw['truncated'] == true
+              ? 'truncated'
+              : raw['tooLarge'] == true
+                  ? 'tooLarge'
+                  : 'text',
+      content: raw['content'] is String ? raw['content']! as String : '',
+      size: raw['size'] is num ? (raw['size']! as num).toInt() : 0,
+    );
+  }
+
+  /// `GET /api/git/status?projectId`：形状由调用方解析（`workspace_native.dart`）。
+  Future<Object?> gitStatus(String projectId) =>
+      requestJson('/api/git/status', query: <String, Object?>{'projectId': projectId});
+
+  Future<Object?> gitLog(String projectId, {int limit = 20}) => requestJson(
+        '/api/git/log',
+        query: <String, Object?>{'projectId': projectId, 'limit': limit},
+      );
+}
+
+/// 文件正文结果：`kind` 决定能不能当文本预览。
+class FileContent {
+  const FileContent({this.kind = 'text', this.content = '', this.size = 0});
+
+  final String kind;
+  final String content;
+  final int size;
+
+  bool get isText => kind == 'text' || kind == 'truncated';
 }

@@ -1461,3 +1461,43 @@ JS 被唤醒（`MainActivity` 已被 Flutter 页 pause）。
 
 回退开关没变：`localStorage["pideck-native-chat"] = "off"` 之后聊天页只画 WebView 快照，
 发送 / 状态流 / 侧栏全部回到老路径。
+
+### 0.2.13：工作区数据与侧栏数据动作交给 Dart
+
+两块的共同点：**只是「打接口 + 排版」**，没有 WebView 的 DOM 参与，留在那边唯一的效果是
+用户点了之后要等一个被盖住的页面被唤醒。
+
+工作区（`workspace/workspace_runtime.dart` + `workspace/workspace_native.dart`）：
+
+- `git` / `files` 两个页签、文件预览、面包屑全部由 Dart 直接打接口：
+  `GET /api/git/status`、`GET /api/git/log?limit=20`、`GET /api/files?projectId&dir`、
+  `GET /api/file-content?projectId&path`。
+- `todos` 页签仍由 WebView 算：待办历史的持久化就在 WebView 的 localStorage
+  （`todo-history-model.ts`），搬过去等于另起一套存储，收益低、风险高。
+- 门禁是 `store.ready && WorkspaceRuntime.tab != 'todos'`；看**自己那份 tab**，
+  因为快照里的 tab 会晚一拍。
+- 12s 超时（`_deadline`）沿用 Web 的 `withDeadline`，超时文案也是同一句
+  「…超时（桌面端没有响应）」；过期结果用 `_generation` 丢弃，避免快速点页签时旧结果覆盖新页。
+- 两个容易抄错的点：`workspaceEnter` / `workspaceCrumb` 的 `depth` 是「保留几段 stack」
+  （0 = 回到项目根），不是面包屑下标；`/api/files` 的路径参数名是 `dir`，传 `path` 会被静默忽略。
+
+侧栏数据动作（`sidebar/session_actions.dart`）：
+
+- 接手 `sessionRename` / `sessionCopy` / `sessionDelete`（仅非当前会话）/ `projectRemove` /
+  `createSession`：Dart 调接口 → `store.refresh()` → 提示一句 → **带 `native: true` 回传**。
+- `dispatchFlutterSidebarAction` 里那条 native 分支只做「刷新 + 重画 + （新建时）打开会话」，
+  **不再调接口**。一个动作只有一次副作用；重复执行的表现是重命名两次、删两次、建出两个会话。
+- 删当前会话不接手：要清 `activeSessionId`、关 channel、把页面退回空态，那是 WebView 的活。
+- 会话导出（`sessionExport`）与切后端（`sessionBackend`）仍在 WebView：前者要落文件（MediaStore
+  路径在原生侧但流程在 `exportSessionHtml`），后者要开 WebView 的弹层。
+
+测试：
+
+- `flutter_module/test/workspace_native_test.dart`（17 项，期望值由 node 直接跑 TS 生成）
+- `flutter_module/test/workspace_runtime_test.dart`（7 项，真开 HttpServer）
+- `flutter_module/test/session_actions_test.dart`（8 项：调了哪个接口、body 长什么样、
+  回传带没带 `native`、删当前会话时是否让位给 WebView）
+
+顺带修掉一个测试基建的坑：假 SSE 服务端必须 `response.bufferOutput = false`。
+Dart 的 `HttpResponse` 默认把 body 攒到 close 才发，而流式连接永远不 close ——
+不关缓冲的话客户端一个字节都收不到，症状是 `store.ready` 永远为假、测试 30s 超时。

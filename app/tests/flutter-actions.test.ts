@@ -103,7 +103,13 @@ function dartSidebarActions(): Set<string> {
 const mainTs = readFileSync(MAIN_TS, "utf-8");
 
 test("聊天页动作：Dart 发出的每个 type 都有 Web 侧分支", () => {
-  const handled = caseNames(mainTs, "dispatchFlutterChatAction");
+  // 页面里发出去的动作可能落在两个 dispatcher 上：聊天动作归 chat，开关抽屉 /
+  // 会话改名之类归 sidebar（0.2.13 起数据动作由 Dart 执行完再带 native 回传给
+  // sidebar dispatcher 重画）。所以「有人接」= 两个 dispatcher 的并集。
+  const handled = new Set([
+    ...caseNames(mainTs, "dispatchFlutterChatAction"),
+    ...caseNames(mainTs, "dispatchFlutterSidebarAction"),
+  ]);
   const { names, dynamic } = dartChatActions();
   const missing = [...names].filter((name) => !handled.has(name)).sort();
   assert.deepEqual(missing, [], `这些动作 Dart 会发、main.ts 没人接：${missing.join(", ")}`);

@@ -333,6 +333,23 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   用户发完常常直接上滑回桌面，等 WebView 的 SSE 推到 running 再启动前台服务，进程可能已被冻结，
   那一轮跑完就没有通知（Android 12+ 也不允许后台启动前台服务）。
 
+- **工作区数据 0.2.13 起归 Dart**（`workspace/workspace_runtime.dart` + `workspace/workspace_native.dart`）：
+  `git` / `files` 两个页签与文件预览由原生侧直接打接口（`gitStatus` / `gitLog` / `listFiles` / `fileContent`），
+  `todos` 页签仍由 WebView 算（待办历史的持久化在 WebView 的 localStorage，搬它要另起一套存储，收益低）。
+  门禁是 `store.ready && 自己那份 tab != 'todos'`——**看 `WorkspaceRuntime.tab` 而不是快照里的 tab**，
+  否则刚点完页签、快照还没回来时会拿错数据源。`workspaceEnter` / `workspaceCrumb` 的 `depth` 语义是
+  「保留几段 stack」（0 = 回到项目根），不是「第几段面包屑」。列表路径参数名是 `dir` 不是 `path`。
+- **侧栏里会改数据的动作 0.2.13 起由 Dart 调接口**（`sidebar/session_actions.dart`）：
+  `sessionRename` / `sessionCopy` / `sessionDelete`（仅非当前会话）/ `projectRemove` / `createSession`。
+  成功后**带 `native: true` 回传**给 WebView，`dispatchFlutterSidebarAction` 里那条 native 分支只刷新 + 重画，
+  绝不能再调一次接口 —— 一个动作只能有一次副作用（改名两次、删两次、建出两个会话都是这么来的）。
+  删当前会话仍走 WebView：它要清 `activeSessionId`、关 channel、把页面退回空态。
+- **假 SSE 服务端必须 `response.bufferOutput = false`**：Dart 的 `HttpResponse` 默认把 body 攒到 close 才发，
+  而流式连接永远不 close，客户端一帧都收不到（症状是 `store.ready` 永远不为真、测试 30s 超时）。
+  测试和服务端 mock 一个都不能漏这一行。
+- `flutter-actions.test.ts` 的「聊天页动作」扫描现在取 `dispatchFlutterChatAction` + `dispatchFlutterSidebarAction`
+  两个 dispatcher 的并集：数据动作虽然由 Dart 执行，但回传时落在 sidebar dispatcher 上。
+
 ## 改动完成后必须跑的验证
 
 ```bash
