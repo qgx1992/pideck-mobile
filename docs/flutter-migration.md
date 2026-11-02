@@ -1518,3 +1518,26 @@ Dart 的 `HttpResponse` 默认把 body 攒到 close 才发，而流式连接永�
   而不是用户再点一次导出、存出两份文件。
 - 测试：`session_actions_test.dart` 新增 4 项（鉴权头、文件名形状、落盘失败仍回传、
   `safeFileStem` / `exportStamp` 纯函数），落盘通道可注入。
+
+### 0.2.15：端到端接缝测试 + 回显对账修复
+
+0.2.10 到 0.2.14 每一块都有单测，但**它们之间**没人测：发送、收帧、收口、重拉历史、
+工作区、侧栏快照各自绿，接缝出错时单测全绿。这一版补了
+`flutter_module/test/runtime_full_turn_test.dart`（真开 `HttpServer`，三条用例：
+
+1. **一轮对话**：`submit()` → 服务端推 `start` / `text-start` / `text-delta` / `text-end` / `finish`
+   → `finished` → 400ms 后 `_settle()` 重拉历史并清空 `live` → 650ms 后回显对账摘掉乐观气泡；
+   断言历史恰好 3 条（用户那句只出现一次）。
+2. **工作区**：`openDrawer()` 拿 `files`（目录排前）、`setTab('git')` 拿分支/改动/提交、`preview()` 拿正文。
+3. **侧栏快照**：`DrawerState().toInput()` → `buildSidebarSnapshot()`，会话行与 `deviceCount` 都在。
+
+写这条用例时踩到三件事，都已写进注释：假 `stream` 服务端要保活（帧是发送之后才推的，
+连上就写 `[DONE]` 后面一帧都收不到）；`snapshotJson()['live']` 永远不是 null，settle 的判据是
+`blocks.isEmpty`；`/api/files` 的 `type` 是 `"directory"` 不是 `"dir"`。
+
+**顺带修掉一个真 bug**：`ChatRuntime._reloadAndDropEcho()` 里判「这条落盘了吗」原本只认
+字符串 `content`，而真实消息的 `content` 是块数组（`[{type:'text',text:…}]`），对账永远判不出
+→ 乐观回显撤不掉 → **用户刚发的那句话在页面上留两份**（历史里一份、乐观气泡一份）。
+改用 `history_model.dart` 的 `messageText()`。这是 0.2.12 引入的缺陷，单测盖不到，端到端用例一跑就露。
+
+`flutter test` 现 260 条（+3）。

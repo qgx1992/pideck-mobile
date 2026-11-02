@@ -323,12 +323,11 @@ class ChatRuntime extends ChangeNotifier {
     }
   }
 
-  /// 历史条目里的正文（用户消息就是 `content`）。
-  String _textOf(Map<String, Object?> item) {
-    final Object? content = item['content'] ?? item['text'];
-    if (content is String) return content.trim();
-    return '';
-  }
+  /// 历史条目里的正文。
+  ///
+  /// 消息的 `content` 可能是字符串，也可能是块数组（`[{type:'text',text:…}]`）——
+  /// 只认字符串会让对账永远失败，用户那句乐观气泡就再也撤不掉。
+  String _textOf(Map<String, Object?> item) => messageText(item).trim();
 
   /* ------------------------------- 快照 ------------------------------- */
 

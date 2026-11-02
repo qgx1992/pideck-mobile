@@ -317,7 +317,9 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   `shouldRollbackRejection` 收不收气泡。三个坑：① `/prompt` 的透传字段是**平铺**的
   （`agentMessage` 在顶层，套一层 `{extra: ...}` 服务端读不到，计划模式会静默失效）；
   ② 发出去到第一帧 `start` 到达之间要按「运行中」画（`_awaitingTurn`），否则发送键会闪回可点；
-  ③ 乐观回显只能靠 650ms 后的历史对账清掉，别在发送成功时就删。
+  ③ 乐观回显只能靠 650ms 后的历史对账清掉，别在发送成功时就删 —— 对账里的「这条落盘了吗」
+  必须用 `history_model.dart` 的 `messageText()` 取正文：消息的 `content` 可能是块数组
+  （`[{type:'text',text:…}]`），只认字符串会让对账永远判不出，用户那句话在页面上留两份（0.2.15 修）。
 - **状态流也归 Dart 了**（`runtime/state_store.dart`，对齐 `src/state/store.ts`）：`/api/events`
   只处理 `event === "state"`，先 `refresh()` 对账再进流，auth 错误停、协议不支持或连续失败 3 次降轮询，
   轮询/重连退避 1s→15s。`store.ready` 为假（还没拿到过完整状态）时**不许**拿它算任何界面数据。
@@ -353,6 +355,12 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   测试和服务端 mock 一个都不能漏这一行。
 - `flutter-actions.test.ts` 的「聊天页动作」扫描现在取 `dispatchFlutterChatAction` + `dispatchFlutterSidebarAction`
   两个 dispatcher 的并集：数据动作虽然由 Dart 执行，但回传时落在 sidebar dispatcher 上。
+- **接缝要有一条端到端自测**：`flutter_module/test/runtime_full_turn_test.dart` 真开 `HttpServer`，把
+  「发送 → 收帧 → 收口 → 重拉历史 → live 清空 → 回显对账」「工作区（文件 / 改动 / 预览）」「侧栏快照」
+  串成三条用例。单测各自绿的时候，坏掉的往往正是它们中间那一格（0.2.15 的回显重复就是它抓出来的）。
+  写这条用例的三个坑：假 `stream` 服务端要**保活**（帧是发送之后才推的，连上就写 `[DONE]` 后面一帧都收不到）、
+  `snapshotJson()['live']` 永远不是 null（settle 的判据是 `blocks.isEmpty`）、`/api/files` 的
+  `type` 是 `"directory"` 不是 `"dir"`。
 
 ## 改动完成后必须跑的验证
 
