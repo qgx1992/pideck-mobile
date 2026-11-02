@@ -80,4 +80,24 @@ void main() {
 
     expect(find.text('改动'), findsNothing);
   });
+
+  testWidgets('点右上角 X 能关掉抽屉，不会被「刚点的意图」拉回来', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPiTheme(Brightness.dark),
+        home: ChatScreen(initialJson: _snapshot(open: true)),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(WorkspaceDrawer), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.close_rounded));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // 关不掉的老病根：X 只发了 workspaceClose，没改本地意图，
+    // 下一帧 openEndDrawer() 又把抽屉打开了。
+    expect(find.byType(WorkspaceDrawer), findsNothing, reason: '点 X 之后抽屉还在 = 关闭意图没生效');
+  });
 }

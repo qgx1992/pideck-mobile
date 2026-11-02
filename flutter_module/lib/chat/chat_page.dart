@@ -172,7 +172,17 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     final ChatSnapshot next = ChatSnapshot.fromJson(decoded);
-    if (next.sessionId.isEmpty) return;
+    // `sessionId` 为空是**合法的**：那是「还没选会话」的主界面。
+    // 以前这里直接 return，整份快照被丢掉 —— 表现就是「切了会话/回了主界面都不刷新」，
+    // 页面永远停在上一次收到的那份内容上（0.2.8 修）。
+    // 换会话时把滚动锚点掰回「贴底」并清掉上一次的高亮：新会话必须停在最新一条，
+    // 否则沿用上一个会话的滚动偏移，用户看到的是一堆旧消息，像是没切过去。
+    final bool sessionChanged = next.sessionId != _snapshot.sessionId;
+    if (sessionChanged) {
+      _stick = true;
+      _highlightId = '';
+      _historyKeys.clear();
+    }
     // 主题：快照里带着 light / dark / system，写进全局 notifier 让 MaterialApp 重建。
     // 放在 setState 外面 —— 它是整棵树的事，不是这一页的事。
     applyThemeMode(next.themeMode);
@@ -207,6 +217,25 @@ class _ChatScreenState extends State<ChatScreen> {
   ///
   /// 少了最后那一步 `openEndDrawer()` 就只是把 `endDrawer` 挂上去，
   /// 抽屉不会自己滑出来 —— 这也是「按钮点了没反应」的原因之一。
+  /// 侧栏动作的本地拦截：`openSession` 先把页面切过去，再交给 WebView。
+  ///
+  /// 只拦截「换会话」这一条：其余动作（页签、搜索、菜单）本来就是 Web 侧的事，
+  /// 多插一手只会让两个真相源打架。
+  void _onSidebarAction(Map<String, Object?> action) {
+    sendSidebarAction(action);
+    if ('${action['type']}' != 'openSession') return;
+    final String id = '${action['id'] ?? ''}';
+    if (id.isEmpty || id == _snapshot.sessionId) return;
+    setState(() {
+      // 内容先清空并显示加载中：否则抽屉收起后看到的是上一个会话的消息，
+      // 用户会以为没点中（0.2.8 的「切换会话没效果」就是这个观感）。
+      _snapshot = _snapshot.withSession(id, '${action['title'] ?? ''}');
+      _stick = true;
+      _highlightId = '';
+      _historyKeys.clear();
+    });
+  }
+
   void _setWorkspaceOpen(bool open) {
     setState(() {
       _workspaceIntent = open;
@@ -540,7 +569,7 @@ class _ChatScreenState extends State<ChatScreen> {
       backgroundColor: c.background,
       drawer: SidebarDrawer(
         snapshot: _sidebar,
-        onAction: sendSidebarAction,
+        onAction: _onSidebarAction,
         onClose: () => _scaffoldKey.currentState?.closeDrawer(),
       ),
       // 右侧工作区：数据来自快照（可能还没到），开合状态本地先记一份。
@@ -554,6 +583,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     title: snapshot.title,
                   ),
               onAction: sendChatAction,
+              onClose: () => _setWorkspaceOpen(false),
             )
           : null,
       onEndDrawerChanged: (bool opened) {
@@ -636,7 +666,10 @@ class _ChatScreenState extends State<ChatScreen> {
           children: <Widget>[
             _headerBar(c, snapshot.header),
             Expanded(
-              child: bare && snapshot.suggestions.isNotEmpty
+              // 一条消息都没有、也不在加载 → 画首屏引导。
+              // 不能拿 `suggestions.isNotEmpty` 当条件：没提示词的项目（或后端没给）
+              // 就会变成一片空白，用户以为页面挂了。
+              child: bare && !snapshot.loading
                   ? _emptyState(c, snapshot)
                   : Stack(
                       children: <Widget>[

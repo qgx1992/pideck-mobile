@@ -185,6 +185,16 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   并立刻按意图画，同时把 `workspaceOpen` / `workspaceClose` 发给 Web；快照的 `open` 和意图一致后才清掉意图。
   **只挂 `endDrawer` 不会让抽屉出现**，必须显式调 `openEndDrawer()`（踩过：只按快照开合 + 禁掉滑动，
   用户点按钮毫无反应）。数据一律 Web 侧取（git 状态 / 目录 / 待办在 `main.ts` 的 `reloadFlutterWorkspace()`）。
+  抽屉里的关闭按钮**必须走 `_setWorkspaceOpen(false)`**（`WorkspaceDrawer.onClose`），不能只发
+  `workspaceClose` —— 本地意图还停在 `true`，快照回来说关反而跟意图打架，下一帧又被打开
+  （踩过：右上角 X 怎么点都关不掉，0.2.8 修）。
+- **快照里 `sessionId` 为空是合法状态**（还没选会话的主界面），`_applyJson()` 不许因为它丢掉整份快照
+  （踩过：切会话 / 回主界面 / 改标题全都不刷新，页面停在上一次收到的内容上，0.2.8 修）。
+  换会话时同时把滚动锚点掰回「贴底」并清掉历史项的 `GlobalKey`，否则会沿用上一个会话的滚动偏移，
+  用户看到一堆旧消息，以为没切过去。
+- **点侧栏会话要先本地切过去**（`_onSidebarAction` → `ChatSnapshot.withSession()`）：Web 侧要等
+  历史加载完才推快照，那几百毫秒里页面还是上一个会话的内容，用户判定「点了没反应」就再点一次。
+  先把会话 id / 标题换掉并置 `loading`，真实快照到了直接覆盖。
 - 往 Dart 搬菜单时**不要照搬到不了的分支**：`openProjectMenu` 里「内置 Chat 项目不能移除」
   永远走不到（Chat 项目在「聊天」段平铺，进不了项目分组），所以 Dart 侧没有这个判断，
   快照里也就没有对应的 `chatProject` 字段。搬之前先验证前端能不能触发那条分支。
@@ -271,6 +281,8 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   写的时候注意两个坑：`Scaffold.drawer` 里的 widget 没打开也在树里（找到 ≠ 点到，测内容就直接
   把抽屉当页面画）；带输入框的页面 `pumpAndSettle()` 永远超时（光标闪烁），用固定 `pump(Duration)`。
 - 空态提示词（`ChatSnapshot.suggestions`）点一下**只填输入框、不直接发送**。
+- 首屏空态的显示条件只有「没有历史 + 不在加载」，**不要**再加 `suggestions.isNotEmpty`
+  这类条件：没提示词的项目会变成一片空白，用户以为页面挂了（0.2.8 修）。
 
 ## 改动完成后必须跑的验证
 

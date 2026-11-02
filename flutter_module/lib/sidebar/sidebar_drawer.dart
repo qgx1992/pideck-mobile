@@ -392,7 +392,9 @@ class _SidebarDrawerState extends State<SidebarDrawer> {
     return InkWell(
       onTap: () {
         widget.onClose();
-        _send('openSession', <String, Object?>{'id': row.id});
+        // 带上标题：聊天页要先把标题换过去（本地先行），否则要等 Web 侧往返完才变。
+        // Web 侧只认 `id`，多一个键不影响分发。
+        _send('openSession', <String, Object?>{'id': row.id, 'title': row.title});
       },
       onLongPress: () => _sessionMenu(row),
       child: Container(

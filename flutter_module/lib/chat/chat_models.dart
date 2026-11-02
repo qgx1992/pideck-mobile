@@ -354,6 +354,29 @@ class ChatSnapshot {
   /// 开合状态由 Web 侧决定（`open`），Dart 只跟着快照开/关，避免两边各开一次。
   final WorkspaceSnapshot? workspace;
 
+  /// 换会话的「本地先行版」：只把身份换掉、内容清空、置为加载中。
+  ///
+  /// 为什么需要：侧栏点会话要等 WebView 加载完历史再推回来（一次往返），
+  /// 那几百毫秒里页面还停在上一个会话上 —— 用户会判定「点了没反应」，
+  /// 于是再点一次。这里先把页面的「当前会话」改掉并显示加载中，真实快照到了再覆盖。
+  ChatSnapshot withSession(String nextSessionId, String nextTitle) {
+    return ChatSnapshot(
+      sessionId: nextSessionId,
+      title: nextTitle.isEmpty ? title : nextTitle,
+      status: 'idle',
+      statusText: '',
+      loading: true,
+      messageMenus: messageMenus,
+      header: header,
+      suggestions: suggestions,
+      emptyTitle: emptyTitle,
+      emptySubtitle: emptySubtitle,
+      themeMode: themeMode,
+      sheet: sheet,
+      workspace: workspace,
+    );
+  }
+
   /// 取某个角色能用的菜单项（工具条不给菜单）。
   List<ChatMenuItem> menusFor(String role) {
     if (role == 'tool') return const <ChatMenuItem>[];

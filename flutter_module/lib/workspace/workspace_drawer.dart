@@ -7,10 +7,22 @@ import 'workspace_models.dart';
 /// 数据全在快照里（Web 侧算），这里只画 + 把点击变成动作发回去。
 /// 抽屉宽度取「屏幕的 92%、最多 380」，因为手机上默认 304 会把文件路径截掉一半。
 class WorkspaceDrawer extends StatelessWidget {
-  const WorkspaceDrawer({super.key, required this.snapshot, required this.onAction});
+  const WorkspaceDrawer({
+    super.key,
+    required this.snapshot,
+    required this.onAction,
+    this.onClose,
+  });
 
   final WorkspaceSnapshot snapshot;
   final void Function(Map<String, Object?> action) onAction;
+
+  /// 关抽屉的本地入口。
+  ///
+  /// 不能只发 `workspaceClose`：聊天页那边有个「用户刚点的意图」，光发动作不改意图的话
+  /// 快照回来（open=false）反而会和意图（open=true）打架，抽屉刚关又被打开（0.2.8 踩过：
+  /// 右上角 X 怎么点都关不掉）。必须走 `_setWorkspaceOpen(false)` 把意图一起改掉。
+  final VoidCallback? onClose;
 
   static const List<String> _tabs = <String>['git', 'files', 'todos'];
   static const List<String> _labels = <String>['改动', '文件', '待办'];
@@ -49,7 +61,8 @@ class WorkspaceDrawer extends StatelessWidget {
                   ),
                   IconButton(
                     tooltip: '关闭',
-                    onPressed: () => onAction(<String, Object?>{'type': 'workspaceClose'}),
+                    onPressed: onClose ??
+                        () => onAction(<String, Object?>{'type': 'workspaceClose'}),
                     icon: const Icon(Icons.close_rounded),
                   ),
                 ],

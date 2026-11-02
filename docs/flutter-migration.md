@@ -1110,6 +1110,55 @@ if (sessionId !== "" && activeSessionId !== sessionId) await openSession(session
   `workspaceProjectPath() === "" && tab !== "todos"` 时直接给「这个项目没有目录」。
   `workspaceProjectId()` 也不再退回 Chat 项目，优先挑第一个真有路径的项目。
 
+## 0.2.8：点了没反应的三种写法
+
+真机反馈两条：「右侧栏右上角的 X 关不掉」「左侧栏切换会话没效果、也不显示最新消息」。
+三条独立原因，全是**本地状态和快照对不上**这一类的，写下来当判据。
+
+### 1. 关闭按钮只发动作，没改本地意图
+
+抽屉的开关是「本地意图 + Web 快照」两层（0.2.4）。X 按钮当时只做了第一层的一半：
+
+```dart
+onPressed: () => onAction({'type': 'workspaceClose'})   // 只发动作
+```
+
+`_workspaceIntent` 还停在打开时写下的 `true`，而 `_syncWorkspaceDrawer()` 是
+`want = _workspaceIntent ?? _workspaceOpen` —— 快照回来说 `open: false` 反倒跟意图打架，
+于是 post-frame 又 `openEndDrawer()`。**凡是能改变抽屉开合的入口，都必须走 `_setWorkspaceOpen()`**
+（它同时写意图、发动作、开合），`WorkspaceDrawer` 因此加了 `onClose` 回调。
+
+### 2. `sessionId` 为空被当成「坏数据」丢掉
+
+`_applyJson()` 原本第一件事是：
+
+```dart
+if (next.sessionId.isEmpty) return;   // ✗
+```
+
+空 `sessionId` 是**合法状态**——还没选会话的主界面就是它。结果主界面那份快照被整份丢掉，
+页面停在上一次收到的内容上：切会话、回主界面、改标题全都不刷新。
+现在只保留「JSON 解析失败」这一层兜底，换会话时额外做两件事：滚动锚点掰回贴底（`_stick = true`）、
+清掉历史项的 `GlobalKey`。否则会沿用上一个会话的滚动偏移，用户看到一堆旧消息。
+
+### 3. 等 Web 侧往返的那几百毫秒，页面还是旧会话
+
+点侧栏会话 → `openSession` → 请求历史 → 推快照，中间是两次往返。这段时间页面没变化，
+用户判定「没点中」就再点一次。Dart 侧现在先本地切（`ChatSnapshot.withSession(id, title)`：
+换 id/标题、清内容、置 `loading`），真实快照到了直接覆盖。
+侧栏行的动作因此多带一个 `title`（Web 侧只认 `id`，多一个键不影响分发）。
+
+### 顺手修掉的第四处
+
+首屏空态的显示条件原来是 `bare && snapshot.suggestions.isNotEmpty` —— 没提示词的项目直接一片空白。
+改成 `bare && !snapshot.loading`。
+
+### 测试
+
+- `flutter_module/test/chat_session_switch_test.dart`（3 项）：空 `sessionId` 的快照也要渲染 /
+  切会话后列表换成新会话的最新消息 / 点侧栏会话页面立刻切过去。
+- `flutter_module/test/workspace_drawer_test.dart` 新增 1 项：点 X 之后抽屉不会回来。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
