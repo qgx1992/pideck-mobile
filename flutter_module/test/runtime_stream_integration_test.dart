@@ -17,6 +17,7 @@ const String _token = 'tok-123';
 final List<String> _seen = <String>[];
 final List<String> _authHeaders = <String>[];
 final List<String> _accepts = <String>[];
+final List<String> _posts = <String>[];
 
 Future<HttpServer> _startServer() async {
   final HttpServer server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -24,6 +25,14 @@ Future<HttpServer> _startServer() async {
     _seen.add('${request.uri.path}?${request.uri.query}');
     _authHeaders.add(request.headers.value('authorization') ?? '');
     _accepts.add(request.headers.value('accept') ?? '');
+    if (request.method == 'POST') {
+      final String raw = await utf8.decoder.bind(request).join();
+      _posts.add('${request.uri.path} $raw');
+      request.response.headers.contentType = ContentType.json;
+      request.response.write('{}');
+      await request.response.close();
+      return;
+    }
     if (request.uri.path == '/api/sessions/s1/messages') {
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode(<String, Object?>{
@@ -74,6 +83,7 @@ void main() {
     _seen.clear();
     _authHeaders.clear();
     _accepts.clear();
+    _posts.clear();
     server = await _startServer();
     client = PiDeckClient(baseUrl: 'http://127.0.0.1:${server.port}', token: _token);
   });
@@ -113,6 +123,50 @@ void main() {
     expect(window.messages.length, 1);
     expect((window.messages.first as Map<String, Object?>)['role'], 'user');
     expect(window.truncated, isFalse);
+  });
+
+  test('abort 带 target，activate 不带（和 TS 侧同一套契约）', () async {
+    const Map<String, Object?> target = <String, Object?>{
+      'sessionId': 's1',
+      'agentId': 'a9',
+      'runtimeGeneration': 3,
+    };
+    await client.runtimeAction('s1', 'abort', target: target);
+    expect(_posts.single, startsWith('/api/sessions/s1/runtime/abort '));
+    final Map<String, Object?> abortBody =
+        jsonDecode(_posts.single.split(' ').skip(1).join(' ')) as Map<String, Object?>;
+    expect(abortBody['target'], target);
+
+    await client.runtimeAction('s1', 'activate');
+    final Map<String, Object?> activateBody =
+        jsonDecode(_posts.last.split(' ').skip(1).join(' ')) as Map<String, Object?>;
+    expect(activateBody.containsKey('target'), isFalse);
+
+    // 没有 target 又不带 activate：本地就拦下来，不发请求
+    expect(
+      () => client.runtimeAction('s1', 'abort'),
+      throwsA(isA<PiDeckException>()),
+    );
+  });
+
+  test('respondUi 的 body 是平铺的待答请求（不是 {target: ...} 包一层）', () async {
+    const PendingUiRequest pending = PendingUiRequest(
+      sessionId: 's1',
+      requestId: 'r1',
+      method: 'confirm',
+      agentId: 'a9',
+      runtimeGeneration: 3,
+    );
+    await client.respondUi(pending, <String, Object?>{'confirmed': true});
+    expect(_posts.single, startsWith('/api/ui-response '));
+    final Map<String, Object?> body =
+        jsonDecode(_posts.single.split(' ').skip(1).join(' ')) as Map<String, Object?>;
+    expect(body['sessionId'], 's1');
+    expect(body['agentId'], 'a9');
+    expect(body['runtimeGeneration'], 3);
+    expect(body['requestId'], 'r1');
+    expect(body['response'], <String, Object?>{'confirmed': true});
+    expect(body.containsKey('target'), isFalse);
   });
 
   test('鉴权失败映射成 auth：401 → isAuth', () async {

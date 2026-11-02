@@ -1373,3 +1373,21 @@ todo 归档、无会话自动建会话、`appendLocalUser` 本地回显。搬到
 - `flutter_module/test/runtime_sse_test.dart`（11 项，与 `tests/sse.test.ts` 同口径）
 - `flutter_module/test/runtime_frames_test.dart`（12 项，含块 JSON 形状与 `clearLive`）
 - `flutter_module/test/runtime_history_test.dart`（11 项，与 TS 版对拍）
+
+### 0.2.11：`stop` / `respond` 也交给 Dart
+
+0.2.10 只搬了读侧，`send` / `stop` / `respond` 三个动作仍然回传 WebView。其中「停止」和「回答提问卡」
+是最不该绕路的两个：按钮就画在 Flutter 页上，用户在等着它立刻生效，而回传一次要等 WebView 那边的
+JS 被唤醒（`MainActivity` 已被 Flutter 页 pause）。
+
+现在 `chat_page.dart` 的 `_stop()` / `_respond()` 先走 `ChatRuntime.stop()` / `.respond()`：
+
+- `stop()`：`abort` + `target`，409（运行时换代）时刷一次 `/api/state` 再重发，成功后 `reducer.markAborted()`；
+- `respond()`：把界面传回来的 label 映射回 option 的 `value` 再 `POST /api/ui-response`（body 平铺，
+  **不是** `{target: ...}` 包一层），发完把本地 `pending` 清掉。
+
+两条路都要过两关才切到 Dart：运行时存在、`historyLoaded` 为真；`_respond()` 还要求运行时手里的
+`pending.requestId` 与页面上的是同一条（否则可能答的是上一条）。任一不满足就退回原来的
+`sendChatAction({'type': 'stop'|'respond'})`，WebView 那边照旧能处理。
+
+`send` 没动：计划模式注入、排队/插话、todo 归档、无会话自动建会话都在 `main.ts` 的 `send()` 里。

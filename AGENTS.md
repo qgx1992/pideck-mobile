@@ -297,8 +297,10 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   规矩只有一条：**Dart 只产数据面字段**（sessionId/title/status/statusText/error/loading/history/live/pending），
   控制面（`messageMenus` / `header` / `picker` / `suggestions` / `sheet` / `workspace` / `themeMode`）继续由
   WebView 那份快照提供，页面按 `{..._webJson, ...runtime.snapshotJson()}` 合并（Dart 赢冲突键）。
-  写侧（`send` / `stop` / `respond`）**仍然走 WebView** —— 计划模式注入、排队/插话、todo 归档、
-  无会话自动建会话都在 `send()` 里，搬过去就是两个真相源。
+  发消息（`send`）**仍然走 WebView** —— 计划模式注入、排队/插话、todo 归档、无会话自动建会话
+  都在 `send()` 里，搬过去就是两个真相源。**`stop` 与「回答提问卡」（`respond`）0.2.11 起改由 Dart 直发**
+  （`ChatRuntime.stop()` / `.respond()`），失败或 `historyLoaded` 为假时才回退 WebView：这两个动作
+  按下去就要有反应，绕回 WebView 得等那边的 JS 被唤醒一次。
 - 合并前必须查 `runtime.historyLoaded`：没成功拉到过历史时 Dart 那份全是空值，盖上去就是白屏。
 - 端点 + token 走 intent extra（`pideckFlutterEndpoint` / `pideckFlutterToken` / `pideckFlutterNativeRuntime`），
   **不要**改用 `getSettings()` 里那份 connection —— 设置缓存只在打开设置页时推，换过端点就是旧的。

@@ -522,9 +522,39 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  /// 停止本轮：本地运行时在就自己发 abort，不绕 WebView。
+  ///
+  /// 「停止」和「回答提问卡」等不起那一跳 —— 按钮就在这一页上，按下去要立刻有反应，
+  /// 而绕回 WebView 得等那边的 JS 被唤醒一次。发消息（`_send`）仍然走 WebView：
+  /// 计划模式注入、排队/插话、todo 归档都在 `main.ts` 的 `send()` 里，搬过来就是两份真相源。
+  Future<void> _stop() async {
+    final ChatRuntime? runtime = _runtime;
+    if (runtime != null && runtime.historyLoaded) {
+      try {
+        await runtime.stop();
+        return;
+      } on PiDeckException catch (error) {
+        _notice(error.describe());
+        return;
+      }
+    }
+    await sendChatAction(<String, Object?>{'type': 'stop'});
+  }
+
   Future<void> _respond(Map<String, Object?> response) async {
     final ChatPending? pending = _snapshot.pending;
     if (pending == null) return;
+    final ChatRuntime? runtime = _runtime;
+    // 只有本地运行时手里也是这一条待答请求时才自己发（否则可能答的是上一条）。
+    if (runtime != null && runtime.pending?.requestId == pending.requestId) {
+      try {
+        await runtime.respond(response);
+        return;
+      } on PiDeckException catch (error) {
+        _notice(error.describe());
+        return;
+      }
+    }
     await sendChatAction(<String, Object?>{
       'type': 'respond',
       'requestId': pending.requestId,
@@ -2195,8 +2225,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       tooltip: '停止',
                       style: IconButton.styleFrom(foregroundColor: c.danger),
                       icon: const Icon(Icons.stop_rounded),
-                      onPressed: () =>
-                          sendChatAction(<String, Object?>{'type': 'stop'}),
+                      onPressed: _stop,
                     )
                   else
                     ValueListenableBuilder<TextEditingValue>(
