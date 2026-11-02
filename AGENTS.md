@@ -177,6 +177,13 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   时间行 10px 且在气泡外、消息图 128×128、输入框圆角 10、空态是「徽标 + 标题 + 副标题 + 提示词」整块。
   0.1.37 之前的偏差清单见 `docs/flutter-migration.md`。半透明色一律 `Color.alphaBlend(色.withValues(alpha: x), 真正的底色)`，
   不要直接叠页面底色（Web 的 `color-mix` 是对着 `--bg-soft` 混的）。纯黑底的页面（看图页）不许用主题色画按钮。
+- **App 级状态要进快照或全局 notifier**（0.2.3）：主题 / 语言 / 安全等级这类「整棵树」的状态，
+  不能只存在某个页面自己的回调里 —— 换一个入口改，另一个入口看不见（踩过：Web 改「跟随系统」，
+  Flutter 主界面还按缓存的 dark 画）。主题走 `flutter_module/lib/theme_mode.dart` 的 `piThemeMode`，
+  快照里的 `themeMode` 只是「Web 侧的当前值」。
+- **抽屉的开合只有一个方向**（0.2.3）：`workspace.open` 决定 Flutter 端开还是关，`endDrawerEnableOpenDragGesture: false`。
+  允许滑动开抽屉就会出现「Web 侧不知道的抽屉」，下一份快照一到又把它关掉，看起来像抽风。
+  同理，工作区里的数据一律 Web 侧取（git 状态 / 目录 / 待办都在 `main.ts` 的 `reloadFlutterWorkspace()`）。
 - 往 Dart 搬菜单时**不要照搬到不了的分支**：`openProjectMenu` 里「内置 Chat 项目不能移除」
   永远走不到（Chat 项目在「聊天」段平铺，进不了项目分组），所以 Dart 侧没有这个判断，
   快照里也就没有对应的 `chatProject` 字段。搬之前先验证前端能不能触发那条分支。

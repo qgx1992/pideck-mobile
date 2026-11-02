@@ -898,6 +898,56 @@ MainActivity(WebView 起来，加载 pideck)
 3. 任何「盖住整屏」的页面都必须处理返回键（`PopScope`），否则 Android 会直接 finish 掉整个 App。
 4. 系统栏样式一处定义（`piSystemUiOverlayStyle`），不要在每个页面里各写一份 `SystemChrome.setSystemUIOverlayStyle`。
 
+## 0.2.3：主题跟着走 + 右侧工作区抽屉
+
+### 主题为「明明选了跟随系统，界面还是黑的」
+
+不是 `ThemeMode.system` 没生效，是**主界面的快照里根本没有主题字段**。
+
+Flutter 页的主题模式只从两处拿：启动时宿主缓存（`settings.theme.mode`，只有进过 Flutter 设置页才会被写）
+和设置页的回调。聊天主界面把快照从 Web 推到 Dart，却从没推过主题 —— Web 版里改了「跟随系统」，
+主界面不知道，就一直用缓存里的 `dark`。
+
+修法三处：
+
+1. `app/src/platform/flutter-chat.ts` 的 `ChatSnapshot` 带 `themeMode`（Web 侧的 `getThemeMode()`）；
+2. `app/src/main.ts` 在 `onThemeChange` 里重推一次快照（主界面盖着整屏，不跟着变就是「设置改了没反应」）；
+3. Dart 侧把主题模式提成全局 `ValueNotifier<ThemeMode>`（`flutter_module/lib/theme_mode.dart`），
+   `main.dart` 的 `MaterialApp` 直接听它，`chat_page.dart` 的 `_applyJson` 调 `applyThemeMode(next.themeMode)`。
+
+判断准则：**凡是「App 级」的状态（主题、语言、安全等级），都不要只存在某个页面自己的回调里**，
+要么进快照，要么进全局 notifier —— 否则换一个入口改，另一个入口就看不见。
+
+### 右侧「工作区」抽屉
+
+Web 版这块读三样东西：Git 状态与最近提交、目录树、会话的待办历史。全部异步，且各有解析规则
+（`parseGitStatus` / `parseGitLog` / `sortWorkspaceEntries`）。所以照老办法：**Web 侧取数 + 压快照，Dart 只画**。
+
+快照形状（`app/src/platform/flutter-workspace.ts`）：
+
+```json
+{
+  "open": true, "tab": "git", "title": "PiDeck", "loading": false, "empty": "",
+  "branch": "master", "changedTotal": 2,
+  "changes": [{ "letter": "M", "path": "app/src/main.ts", "group": "已修改" }],
+  "commits": [{ "sha": "abc1234", "subject": "feat: x", "date": "11-02 18:00" }],
+  "crumbs": ["PiDeck", "app"], "entries": [{ "name": "src", "path": "app/src", "dir": true }],
+  "preview": { "path": "a.md", "content": "# hi", "truncated": false },
+  "todos": [{ "text": "✓ 一
+• 二", "status": "completed", "at": "1/2 · 18:00" }]
+}
+```
+
+动作：`workspaceOpen` / `workspaceClose` / `workspaceTab` / `workspaceEnter` / `workspaceCrumb` /
+`workspaceRefresh` / `workspacePreview` / `workspacePreviewClose` / `workspaceMention`。
+
+两个刻意的取舍：
+
+- **开合方向只有一个**：由快照里的 `open` 驱动 Dart 开/关抽屉，滑动开抽屉被禁掉
+  （`endDrawerEnableOpenDragGesture: false`）。否则用户滑开一个 Web 侧不知道的抽屉，
+  下一份快照（最快 80ms 后）一到就被强行关掉，看起来像「抽屉抽风」。
+- **文件预览在 Drawer 里就地显示**，不回 WebView：抽屉是覆盖层，跳走再回来会丢掉位置。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
@@ -931,6 +981,7 @@ MainActivity(WebView 起来，加载 pideck)
 7. ~~**历史跳转 / 待办展开 / 空态建议**~~ —— **0.1.33 已完成**。
 8. ~~**项目长按菜单**~~ —— **0.1.34 已完成**。
 9. ~~**通用底部弹层：新建会话 / 切换后端 / DSH 工具**~~ —— **0.1.35 已完成**（见上一节）。
+10. ~~**右侧工作区抽屉**~~ —— **0.2.3 已完成**（Git 改动 / 文件浏览 / 待办历史）。
    至此 Flutter 页里点得到的东西**没有一处**需要闪回网页版，除了扫码配对与子代理历史这两条
    「页面级 / 长文本」的例外。
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'app_theme.dart';
+import 'theme_mode.dart';
 import 'chat/chat_page.dart';
 import 'host_channel.dart';
 import 'probe/sse_probe_page.dart';
@@ -21,6 +22,9 @@ Future<void> main() async {
   final SettingsData? seed = _parse(initialJson);
   // 聊天页的首帧快照是另一份缓存；只在真的要进聊天页时多要一次。
   final String initialChatJson = args.route == 'chat' ? await loadInitialChat() : '';
+  // 首帧就用对主题：Web 侧存的是 light / dark / system，但只有快照才知道最新值，
+  // 这里的 seed 只是"上一次设置页推过来的"—— 聊天页首帧之后会立刻按快照纠正。
+  piThemeMode.value = themeModeFrom(seed?.theme.mode ?? 'system');
   runApp(
     PiDeckFlutterApp(
       route: args.route,
@@ -50,7 +54,7 @@ class PiDeckFlutterApp extends StatefulWidget {
     required this.sessionId,
     this.initialSettingsJson = '',
     this.initialChatJson = '',
-    this.initialThemeMode = ThemeMode.dark,
+    this.initialThemeMode = ThemeMode.system,
     this.connection,
   });
 
@@ -72,15 +76,16 @@ class PiDeckFlutterApp extends StatefulWidget {
 }
 
 class _PiDeckFlutterAppState extends State<PiDeckFlutterApp> {
-  /// 主题跟着 Web 侧走：页面收到新数据就改这里，整个 MaterialApp 重建。
-  late final ValueNotifier<ThemeMode> _themeMode = ValueNotifier<ThemeMode>(
-    widget.initialThemeMode,
-  );
+  /// 主题跟着 Web 侧走：全局 notifier（页面收到新快照就写它），整个 MaterialApp 重建。
+  ValueNotifier<ThemeMode> get _themeMode => piThemeMode;
 
   @override
-  void dispose() {
-    _themeMode.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    // 宿主显式传进来的模式（设置页路由）优先级最高
+    if (piThemeMode.value != widget.initialThemeMode) {
+      piThemeMode.value = widget.initialThemeMode;
+    }
   }
 
   @override

@@ -167,6 +167,14 @@ import type { SendMode } from "./ui/send-mode.ts";
 import { attachPressable } from "./ui/press.ts";
 import { attachDrawerGestures } from "./ui/drawer-gestures.ts";
 import { attachBackButton } from "./platform/back-button.ts";
+import {
+  crumbsToPath,
+  emptyWorkspaceSnapshot,
+  lastSegment,
+  sortWorkspaceEntries,
+  truncatePreview,
+} from "./platform/flutter-workspace.ts";
+import type { WorkspaceSnapshot, WorkspaceTab as FlutterWorkspaceTab } from "./platform/flutter-workspace.ts";
 import { App as CapacitorApp } from "@capacitor/app";
 import { armSplashWatchdog, hideSplash, setSplashHint } from "./ui/splash.ts";
 import {
@@ -5461,6 +5469,160 @@ function dispatchFlutterSidebarAction(action: Record<string, unknown>): void {
 }
 
 /** 把聊天页当前状态组装成快照推给 Flutter（没开 Flutter 页时什么都不做）。 */
+/**
+ * Flutter 右侧「工作区」抽屉的状态。
+ *
+ * 数据仍然由 Web 侧取（Git 状态、目录列表、待办历史），Dart 只画快照 ——
+ * 和侧栏/聊天页同一套原则：规则一份，界面可以两份。
+ */
+interface FlutterWorkspaceState {
+  open: boolean;
+  tab: FlutterWorkspaceTab;
+  /** 文件 Tab 的目录栈（相对项目根） */
+  stack: string[];
+  preview: { path: string; content: string; truncated: boolean } | null;
+  snapshot: WorkspaceSnapshot;
+}
+
+let flutterWorkspace: FlutterWorkspaceState = {
+  open: false,
+  tab: "git",
+  stack: [],
+  preview: null,
+  snapshot: emptyWorkspaceSnapshot(),
+};
+
+/** 工作区跟着当前会话的项目走；没有会话就退回当前项目 / 第一个项目。 */
+function workspaceProjectId(): string | null {
+  if (!runtime) return null;
+  const session = activeSessionId ? runtime.store.session(activeSessionId) : undefined;
+  return session?.projectId ?? activeProjectId ?? runtime.store.projects()[0]?.id ?? null;
+}
+
+function workspaceProjectPath(): string {
+  if (!runtime) return "";
+  const project = runtime.store.projects().find((item) => item.id === workspaceProjectId());
+  return typeof project?.path === "string" ? project.path : "";
+}
+
+async function openFlutterWorkspace(): Promise<void> {
+  if (!runtime) return;
+  if (!workspaceProjectId()) {
+    pushFlutterNotice("没有可用项目：请先在桌面端添加项目目录");
+    return;
+  }
+  flutterWorkspace = { ...flutterWorkspace, open: true, preview: null, stack: [] };
+  await reloadFlutterWorkspace();
+}
+
+function closeFlutterWorkspace(): void {
+  flutterWorkspace = { ...flutterWorkspace, open: false, preview: null };
+  syncFlutterChat();
+}
+
+/** 重新算一份快照：先推「加载中」，再推结果，抽屉里不会一片空白。 */
+async function reloadFlutterWorkspace(): Promise<void> {
+  if (!runtime) return;
+  const projectId = workspaceProjectId();
+  const project = projectId ? runtime.store.projects().find((item) => item.id === projectId) : undefined;
+  const title = project ? projectLabel(project) ?? "项目" : "";
+  const base: WorkspaceSnapshot = {
+    ...emptyWorkspaceSnapshot(),
+    open: true,
+    tab: flutterWorkspace.tab,
+    title,
+    loading: true,
+    crumbs: [title || "项目", ...flutterWorkspace.stack],
+    preview: flutterWorkspace.preview,
+  };
+  flutterWorkspace.snapshot = base;
+  syncFlutterChat();
+  if (!projectId) {
+    flutterWorkspace.snapshot = { ...base, loading: false, empty: "没有可用项目" };
+    syncFlutterChat();
+    return;
+  }
+
+  let next: WorkspaceSnapshot = { ...base, loading: false };
+  try {
+    if (flutterWorkspace.tab === "todos") {
+      const entries = currentTodoHistory();
+      next.todos = entries.map((entry) => ({
+        text: entry.items
+          .map((item) => {
+            const mark = item.status === "completed" ? "✓" : item.status === "in_progress" ? "▸" : "•";
+            return `${mark} ${item.text}`;
+          })
+          .join("\n"),
+        status: entry.finished ? "completed" : "pending",
+        at: `${entry.done}/${entry.total} · ${fmtShortTime(entry.lastChangedAt)}`,
+      }));
+      if (next.todos.length === 0) next.empty = "这个会话还没有待办清单";
+    } else if (flutterWorkspace.tab === "git") {
+      const [statusRaw, logRaw] = await Promise.all([
+        runtime.client.gitStatus(projectId),
+        runtime.client.gitLog(projectId, 20).catch(() => null),
+      ]);
+      const status = parseGitStatus(statusRaw, workspaceProjectPath());
+      if (!status.isRepo) {
+        next.empty = "这个项目不是 Git 仓库";
+      } else {
+        next.branch = status.branch;
+        next.changedTotal = status.total;
+        next.changes = status.groups.flatMap((group) =>
+          group.files.map((file) => ({ letter: file.letter, path: file.relativePath, group: group.title })),
+        );
+        next.commits = (logRaw ? parseGitLog(logRaw) : []).map((commit) => ({
+          sha: commit.shortHash,
+          subject: commit.message,
+          date: formatCommitDate(commit.authorDate),
+        }));
+      }
+    } else {
+      const nodes = await runtime.client.listFiles(projectId, crumbsToPath(base.crumbs));
+      next.entries = sortWorkspaceEntries(
+        nodes.map((node) => ({
+          name: node.name,
+          path: node.relativePath,
+          dir: node.type === "directory",
+        })),
+      );
+      if (next.entries.length === 0) next.empty = "空目录";
+    }
+  } catch (error) {
+    next = { ...next, empty: `读取失败：${describeError(error)}` };
+  }
+  // 期间用户可能已经关了抽屉或换了 Tab：过期的结果直接丢掉
+  if (!flutterWorkspace.open || flutterWorkspace.tab !== next.tab) return;
+  flutterWorkspace.snapshot = next;
+  syncFlutterChat();
+}
+
+async function previewFlutterWorkspaceFile(path: string): Promise<void> {
+  if (!runtime) return;
+  const projectId = workspaceProjectId();
+  if (!projectId) return;
+  const base: WorkspaceSnapshot = {
+    ...flutterWorkspace.snapshot,
+    loading: true,
+    empty: "",
+  };
+  flutterWorkspace.snapshot = base;
+  syncFlutterChat();
+  try {
+    const raw = await runtime.client.fileContent(projectId, path);
+    const text = typeof raw === "string" ? raw : JSON.stringify(raw);
+    const cut = truncatePreview(text);
+    flutterWorkspace.preview = { path, ...cut };
+    flutterWorkspace.snapshot = { ...base, loading: false, preview: flutterWorkspace.preview };
+  } catch (error) {
+    flutterWorkspace.preview = null;
+    flutterWorkspace.snapshot = { ...base, loading: false, empty: `读不了这个文件：${describeError(error)}` };
+  }
+  flutterWorkspace.preview = flutterWorkspace.snapshot.preview;
+  syncFlutterChat();
+}
+
 function syncFlutterChat(): void {
   const mirror = flutterChatMirror;
   if (!mirror || !flutterChatOpen) return;
@@ -5481,6 +5643,8 @@ function syncFlutterChat(): void {
       header: chatHeaderView(),
       picker: flutterPicker,
       suggestions: emptySuggestions(),
+    themeMode: getThemeMode(),
+    workspace: flutterWorkspace.open ? flutterWorkspace.snapshot : null,
       emptyTitle: emptyStateTitle(),
       emptySubtitle: emptyStateSubtitle(suggestionContext(activeProjectId ? runtime?.store.projects().find((item) => item.id === activeProjectId) : undefined)),
       sheet: flutterChatSheet,
@@ -6057,6 +6221,7 @@ async function openFlutterChatPage(sessionId: string): Promise<boolean> {
   // 冷启动可能一个会话都没有（或还没恢复出 activeSessionId）：
   // 这时也照样把 Flutter 页打开，让它自己画空态，不要拿空串去 openSession。
   if (sessionId !== "" && activeSessionId !== sessionId) await openSession(sessionId);
+  if (flutterWorkspace.open) void reloadFlutterWorkspace();
   flutterChatMirror = new FlutterChatMirror({ push: (json) => pushFlutterChat(json) });
   flutterChatOpen = true;
   flutterSidebarJson = "";
@@ -6134,6 +6299,55 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
       setShellMode(false);
       void closeFlutterPage();
       return;
+    case "workspaceOpen":
+      void openFlutterWorkspace();
+      return;
+    case "workspaceClose":
+      closeFlutterWorkspace();
+      return;
+    case "workspaceTab": {
+      const tab = text("tab");
+      flutterWorkspace.tab = tab === "files" || tab === "todos" ? tab : "git";
+      flutterWorkspace.stack = [];
+      flutterWorkspace.preview = null;
+      void reloadFlutterWorkspace();
+      return;
+    }
+    case "workspaceEnter": {
+      const path = text("path");
+      if (path) flutterWorkspace.stack = [...flutterWorkspace.stack, lastSegment(path)];
+      flutterWorkspace.preview = null;
+      void reloadFlutterWorkspace();
+      return;
+    }
+    case "workspaceCrumb": {
+      const depth = Number(action["depth"]);
+      if (Number.isFinite(depth) && depth >= 0) {
+        flutterWorkspace.stack = flutterWorkspace.stack.slice(0, depth);
+        flutterWorkspace.preview = null;
+        void reloadFlutterWorkspace();
+      }
+      return;
+    }
+    case "workspaceRefresh":
+      void reloadFlutterWorkspace();
+      return;
+    case "workspacePreview":
+      void previewFlutterWorkspaceFile(text("path"));
+      return;
+    case "workspacePreviewClose":
+      flutterWorkspace.preview = null;
+      flutterWorkspace.snapshot = { ...flutterWorkspace.snapshot, preview: null };
+      syncFlutterChat();
+      return;
+    case "workspaceMention": {
+      const path = text("path");
+      if (!path) return;
+      closeFlutterWorkspace();
+      insertAtCursor(`@${path}`);
+      pushFlutterNotice("已引用到输入框");
+      return;
+    }
     case "exitApp": {
       // Flutter 页上的返回键。shell 模式下它盖着整屏，退回去就是"什么都没有"的网页版，
       // 所以直接退出 App；用户之前明确选了网页版，就按「返回网页版」处理。
@@ -6852,8 +7066,12 @@ async function removeProject(projectId: string): Promise<void> {
 function bootstrap(): void {
   // 万一某个初始化分支挂住，启动动画也必须自己收掉（否则界面被挡死）
   armSplashWatchdog();
-  // 首次跑多端版本：只让当前这台参与同时连接，其余等用户主动开
+  // 首次跑多端版本：只让当前这台同时连接，其余等用户主动开
   ensureMultiEndpointDefaults();
+  // 主题一变就把新快照推过去：Flutter 主界面盖在整屏上，它不跟着变就成了「设置改了没反应」
+  onThemeChange(() => {
+    if (flutterChatOpen) syncFlutterChat();
+  });
 
   const saved = loadPairing();
   // 同时连接的是「启用的那几台」；一台都没启用就退回单台（兼容老数据）

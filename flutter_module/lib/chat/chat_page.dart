@@ -22,6 +22,9 @@ import '../common/app_sheet.dart';
 import '../host_channel.dart';
 import '../sidebar/sidebar_drawer.dart';
 import '../sidebar/sidebar_models.dart';
+import '../workspace/workspace_drawer.dart';
+import '../workspace/workspace_models.dart';
+import '../theme_mode.dart';
 import 'chat_models.dart';
 import 'composer_insert.dart';
 import 'image_viewer.dart';
@@ -155,6 +158,9 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     final ChatSnapshot next = ChatSnapshot.fromJson(decoded);
     if (next.sessionId.isEmpty) return;
+    // 主题：快照里带着 light / dark / system，写进全局 notifier 让 MaterialApp 重建。
+    // 放在 setState 外面 —— 它是整棵树的事，不是这一页的事。
+    applyThemeMode(next.themeMode);
     // 换了面板类型就清掉搜索词。放在这里而不是 build 里：build 期间清 controller
     // 会通知 ValueListenableBuilder，在构建中 setState 直接抛断言。
     final String nextKind = next.picker?.kind ?? '';
@@ -174,10 +180,31 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     setState(() => _snapshot = next);
     _afterLayout();
+    _syncWorkspaceDrawer(next.workspace);
     // 弹层要等这一帧画完再弹：setState 期间不能开路由
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _sheetHost.sync(context, next.sheet);
+    });
+  }
+
+  /// 把「Web 侧说抽屉该开着」翻译成真的开/关。
+  ///
+  /// 两边状态必须由快照单向驱动：Dart 自己开抽屉只会让 Web 侧不知道，
+  /// 下一次推送一到（每 80ms 都可能）抽屉就会被强行关掉。
+  void _syncWorkspaceDrawer(WorkspaceSnapshot? workspace) {
+    final bool want = workspace?.open ?? false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ScaffoldState? scaffold = _scaffoldKey.currentState;
+      if (scaffold == null) return;
+      final bool showing = scaffold.isEndDrawerOpen;
+      if (want == showing) return;
+      if (want) {
+        scaffold.openEndDrawer();
+      } else {
+        Navigator.of(context).pop();
+      }
     });
   }
 
@@ -441,6 +468,15 @@ class _ChatScreenState extends State<ChatScreen> {
         onAction: sendSidebarAction,
         onClose: () => _scaffoldKey.currentState?.closeDrawer(),
       ),
+      // 右侧工作区：开合状态由 Web 侧快照决定（`workspace.open`），所以禁掉滑动，
+      // 免得用户滑开一个 Web 侧并不知道的抽屉，下一次快照就被强行关掉。
+      endDrawerEnableOpenDragGesture: false,
+      endDrawer: snapshot.workspace == null
+          ? null
+          : WorkspaceDrawer(
+              snapshot: snapshot.workspace!,
+              onAction: sendChatAction,
+            ),
       appBar: AppBar(
         titleSpacing: 0,
         leading: IconButton(
@@ -470,6 +506,18 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: <Widget>[
           IconButton(
+            tooltip: snapshot.workspace?.open == true ? '收起工作区' : '工作区',
+            icon: Icon(
+              snapshot.workspace?.open == true
+                  ? Icons.view_sidebar_rounded
+                  : Icons.view_sidebar_outlined,
+              color: c.textMuted,
+            ),
+            onPressed: () => sendChatAction(<String, Object?>{
+              'type': snapshot.workspace?.open == true ? 'workspaceClose' : 'workspaceOpen',
+            }),
+          ),
+          IconButton(
             tooltip: '刷新',
             icon: Icon(Icons.refresh_rounded, color: c.textMuted),
             onPressed: () =>
@@ -491,6 +539,10 @@ class _ChatScreenState extends State<ChatScreen> {
           final ScaffoldState? scaffold = _scaffoldKey.currentState;
           if (scaffold != null && scaffold.isDrawerOpen) {
             scaffold.closeDrawer();
+            return;
+          }
+          if (scaffold != null && scaffold.isEndDrawerOpen) {
+            sendChatAction(<String, Object?>{'type': 'workspaceClose'});
             return;
           }
           if (_snapshot.picker != null) {

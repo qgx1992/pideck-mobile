@@ -12,6 +12,7 @@
  */
 
 import type { ChatBlock, PendingUiRequest, RunStatus, WireMessage } from "@core/types.ts";
+import type { WorkspaceSnapshot } from "./flutter-workspace.ts";
 import { messageText, normalizeRole } from "../ui/chat-view.ts";
 import { clockOf } from "../ui/dom.ts";
 import { splitThinking } from "../ui/thinking-tags.ts";
@@ -70,6 +71,22 @@ export interface ChatSnapshot {
    * 规则全在 `ui/header-model.ts` 等模块里 —— Dart 只画。
    */
   header: ChatHeaderView;
+  /**
+   * 当前主题模式（`light` / `dark` / `system`）。
+   *
+   * 为什么塞在聊天快照里而不是另开一条通道：Flutter 主界面就是这一页，
+   * 而主题是「跟这个 App 走的」，不是「跟这一次推送走的」—— 混在快照里，
+   * 用户在设置里改完，下一次推送就把深浅色一起带过来了，不会出现
+   * 「设置页变了、聊天页还是旧的」。
+   */
+  themeMode: string;
+  /**
+   * 右侧「工作区」抽屉；null 表示关着。
+   *
+   * 里面是 Git 状态 / 目录列表 / 待办历史，数据仍由 Web 侧取（`main.ts` 的
+   * `reloadFlutterWorkspace()`），Dart 只负责画并把点击变成动作传回来。
+   */
+  workspace: WorkspaceSnapshot | null;
   /**
    * 当前要显示的选择面板（模型 / 思考 / 安全 / 提示词 / 上下文）；null = 不显示。
    *
@@ -206,6 +223,10 @@ export interface ChatSnapshotInput {
   picker?: ChatPickerView | null;
   /** 空会话时的快捷提示词；Dart 只在「没历史、也没有正在跑的块」时显示 */
   suggestions?: readonly string[];
+  /** 主题模式；不传按 `system`（跟随系统）处理。 */
+  themeMode?: string;
+  /** 工作区抽屉快照；不传按「关着」处理。 */
+  workspace?: WorkspaceSnapshot | null;
   emptyTitle?: string;
   emptySubtitle?: string;
   sheet?: SheetView | null;
@@ -233,6 +254,8 @@ export function buildChatSnapshot(input: ChatSnapshotInput): ChatSnapshot {
       assistant: menuItemsFor("assistant", input.backend),
     },
     header: input.header ?? emptyHeader(),
+    themeMode: input.themeMode ?? "system",
+    workspace: input.workspace ?? null,
     picker: input.picker ?? null,
     suggestions: [...(input.suggestions ?? [])],
     emptyTitle: input.emptyTitle ?? "",

@@ -10,6 +10,7 @@ library;
 import 'dart:convert';
 
 import '../common/app_sheet.dart';
+import '../workspace/workspace_models.dart';
 
 /// 一条已落盘的历史消息（工具条目也是这个形状，用 [toolName] 区分）。
 class ChatHistoryItem {
@@ -300,6 +301,8 @@ class ChatSnapshot {
     this.emptyTitle = '',
     this.emptySubtitle = '',
     this.sheet,
+    this.workspace,
+    this.themeMode = 'system',
   });
 
   final String sessionId;
@@ -339,8 +342,17 @@ class ChatSnapshot {
   /// 当前要显示的选择面板；null 表示不显示。
   final ChatPickerView? picker;
 
+  /// 主题模式（`light` / `dark` / `system`）。由 Web 侧一起带过来，
+  /// 页面收到就写进全局 `piThemeMode` —— 这样在设置里改完，主界面当场变。
+  final String themeMode;
+
   /// 聊天页发起的底部弹层（DSH 工具）；null 表示不显示。
   final AppSheet? sheet;
+
+  /// 右侧「工作区」抽屉；null 表示抽屉不存在（未打开过）。
+  ///
+  /// 开合状态由 Web 侧决定（`open`），Dart 只跟着快照开/关，避免两边各开一次。
+  final WorkspaceSnapshot? workspace;
 
   /// 取某个角色能用的菜单项（工具条不给菜单）。
   List<ChatMenuItem> menusFor(String role) {
@@ -362,6 +374,7 @@ class ChatSnapshot {
     final Object? header = json['header'];
     final Object? picker = json['picker'];
     final Object? sheet = json['sheet'];
+    final Object? workspace = json['workspace'];
     return ChatSnapshot(
       sessionId: str(json['sessionId']),
       title: str(json['title']),
@@ -384,6 +397,8 @@ class ChatSnapshot {
       emptyTitle: json['emptyTitle'] is String ? json['emptyTitle'] as String : '',
       emptySubtitle: json['emptySubtitle'] is String ? json['emptySubtitle'] as String : '',
       sheet: sheet is Map<Object?, Object?> ? AppSheet.fromJson(mapOf(sheet)) : null,
+      workspace: workspace is Map<Object?, Object?> ? WorkspaceSnapshot.fromJson(mapOf(workspace)) : null,
+      themeMode: json['themeMode'] is String ? json['themeMode'] as String : 'system',
     );
   }
 }
