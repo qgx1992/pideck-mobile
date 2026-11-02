@@ -18,6 +18,7 @@ import { collectImageSources } from "../ui/image-attach-model.ts";
 import { actionsForRole } from "../ui/message-actions-model.ts";
 import type { PerfMetrics } from "../ui/perf-metrics.ts";
 import type { ChatHeaderView, ChatPickerView } from "./flutter-chat-header.ts";
+import type { SheetView } from "./flutter-sheet.ts";
 
 /** 一条已落盘的历史消息（Flutter 侧只认这个形状，不认 WireMessage）。 */
 export interface ChatHistoryItem {
@@ -77,6 +78,8 @@ export interface ChatSnapshot {
   picker: ChatPickerView | null;
   /** 空会话时的快捷提示词（点一下插到输入框，不直接发） */
   suggestions: string[];
+  /** 聊天页发起的弹层（DSH 工具）；null 表示不显示 */
+  sheet?: SheetView | null;
 }
 
 /** 长按菜单里的一项。 */
@@ -199,6 +202,7 @@ export interface ChatSnapshotInput {
   picker?: ChatPickerView | null;
   /** 空会话时的快捷提示词；Dart 只在「没历史、也没有正在跑的块」时显示 */
   suggestions?: readonly string[];
+  sheet?: SheetView | null;
 }
 
 /** 组装快照（纯函数，方便单测）。 */
@@ -225,6 +229,7 @@ export function buildChatSnapshot(input: ChatSnapshotInput): ChatSnapshot {
     header: input.header ?? emptyHeader(),
     picker: input.picker ?? null,
     suggestions: [...(input.suggestions ?? [])],
+    sheet: input.sheet ?? null,
   };
 }
 

@@ -291,3 +291,17 @@ test("没有端点时不炸（连接还没建立起来）", () => {
   assert.deepEqual(snapshot.sections, []);
   assert.deepEqual(snapshot.tabs, []);
 });
+
+test("弹层：sheet 原样带出，没传时为 null（Dart 据此不画面板）", () => {
+  const view = {
+    kind: "newSession",
+    title: "新建会话",
+    note: "后端：Pi",
+    items: [{ id: "project:p-a", label: "alpha", group: "工作区", actionable: true }],
+  };
+  const withSheet = buildSidebarSnapshot(base({ sheet: view }));
+  assert.deepEqual(withSheet.sheet, view);
+  assert.equal(buildSidebarSnapshot(base()).sheet, null);
+  // 搜索态也要带出：搜索时面板可能是开着的（比如刚点开就打字）
+  assert.deepEqual(buildSidebarSnapshot(base({ query: "alpha", sheet: view })).sheet, view);
+});

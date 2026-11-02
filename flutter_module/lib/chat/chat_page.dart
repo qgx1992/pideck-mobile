@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_theme.dart';
+import '../common/app_sheet.dart';
 import '../host_channel.dart';
 import '../sidebar/sidebar_drawer.dart';
 import '../sidebar/sidebar_models.dart';
@@ -82,6 +83,12 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, Object?> _batchAnswers = <String, Object?>{};
   bool _batchReview = false;
 
+  /// 聊天页发起的底部弹层（DSH 工具）：内容随快照原地更新。
+  late final AppSheetHost _sheetHost = AppSheetHost(
+    sendPick: (String id) => sendChatAction(<String, Object?>{'type': 'sheetPick', 'id': id}),
+    sendClose: () => sendChatAction(<String, Object?>{'type': 'sheetClose'}),
+  );
+
   @override
   void initState() {
     super.initState();
@@ -113,6 +120,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _sheetHost.dispose();
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _composer.dispose();
@@ -152,6 +160,11 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     setState(() => _snapshot = next);
     _afterLayout();
+    // 弹层要等这一帧画完再弹：setState 期间不能开路由
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _sheetHost.sync(context, next.sheet);
+    });
   }
 
   /// 新内容落地后，如果仍然贴底就跳到底部。

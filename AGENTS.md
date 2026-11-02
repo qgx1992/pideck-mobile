@@ -148,9 +148,12 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   **不许在 Dart 里判任何规则**（尤其「展开其余 N 个」的截断与「当前会话被截断时临时展开」）。
 - 侧栏动作里 `toggleSection` 必须按 key 前缀分派：`project:<id>` → `toggleSessionsExpanded()`，
   其余 → `toggleFlat()`。两个展开集合（`expandedSessions` / `flatExpanded`）互不相干。
-- WebView 的弹层被 Flutter 页盖着看不见。还留在 WebView 的只有：工作区选择器（`newSession`）、
-  会话菜单里的「后端切换」（`sessionMore`）、DSH 工具面板——这些动作一律走 `leaveFlutterThen()`：
-  先 `closeFlutterPage()` 再开弹层，不要指望在 Flutter 页上显示。
+- WebView 的弹层被 Flutter 页盖着看不见。**新加弹层先走通用弹层**（`app/src/platform/flutter-sheet.ts`
+  的 `SheetView` + Dart 的 `AppSheetHost`）：WebView 算行（`id` / `label` / `description` / `group` /
+  `selected` / `actionable`），Flutter 画并回传 `sheetPick { id }`，执行逻辑仍在 `main.ts`。
+  只有下面这几种才用 `leaveFlutterThen()`（先 `closeFlutterPage()` 再开会话/弹层）：
+  页面级导航（扫码配对 `webSheet("connection")`）、Web 顶栏独有的五张弹层（主题 / 连接 / 端点 / 用量）、
+  以及要滚动排版的长文本（DSH 子代理历史）。
 - 侧栏长按菜单**在 Flutter 里画**（0.1.34 起项目菜单也是；会话菜单 0.1.28 起就是本地的）：
   动作用侧栏通道同名发回去（`sessionRename` / `sessionCopy` / `sessionExport` / `sessionDelete` /
   `projectRemove` / `createSession` / `toggleProject`），执行逻辑只有 `main.ts` 一份。

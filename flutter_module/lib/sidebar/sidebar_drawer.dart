@@ -8,6 +8,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../app_theme.dart';
+import '../common/app_sheet.dart';
 import 'sidebar_models.dart';
 
 typedef SidebarActionSink = void Function(Map<String, Object?> action);
@@ -36,10 +37,22 @@ class _SidebarDrawerState extends State<SidebarDrawer> {
   final TextEditingController _search = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
 
+  /// 底部弹层（新建会话 / 切换后端）：内容随快照原地更新，只在有无之间开关。
+  late final AppSheetHost _sheetHost = AppSheetHost(
+    sendPick: (String id) => _send('sheetPick', <String, Object?>{'id': id}),
+    sendClose: () => _send('sheetClose'),
+  );
+
   @override
   void didUpdateWidget(covariant SidebarDrawer oldWidget) {
     super.didUpdateWidget(oldWidget);
     // 只在「内容真的不同」时同步：否则用户正在打字，快照一回流光标就跳走
+    // 弹层的开合要等这一帧画完：build/didUpdateWidget 期间不能弹路由
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _sheetHost.sync(context, widget.snapshot.sheet);
+    });
+
     final String next = widget.snapshot.query;
     if (next != _search.text && !_searchFocus.hasFocus) {
       _search.text = next;
@@ -49,6 +62,7 @@ class _SidebarDrawerState extends State<SidebarDrawer> {
 
   @override
   void dispose() {
+    _sheetHost.dispose();
     _search.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -546,8 +560,8 @@ class _SidebarDrawerState extends State<SidebarDrawer> {
               item('rename', '重命名'),
               item('copy', '复制会话'),
               item('export', '导出 HTML'),
+              item('backend', '切换后端'),
               item('delete', '删除会话', danger: true),
-              item('more', '更多操作（回网页版）'),
             ],
           ),
         );
@@ -565,9 +579,8 @@ class _SidebarDrawerState extends State<SidebarDrawer> {
       case 'delete':
         final bool ok = await _confirmDelete(row.title);
         if (ok) _send('sessionDelete', <String, Object?>{'id': row.id});
-      case 'more':
-        widget.onClose();
-        _send('sessionMore', <String, Object?>{'id': row.id});
+      case 'backend':
+        _send('sessionBackend', <String, Object?>{'id': row.id});
     }
   }
 

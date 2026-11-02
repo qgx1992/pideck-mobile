@@ -203,6 +203,8 @@ import {
   shortTokens,
 } from "./platform/flutter-chat-header.ts";
 import type { ChatHeaderView, ChatPickerItem, ChatPickerView } from "./platform/flutter-chat-header.ts";
+import { backendSheetItems } from "./platform/flutter-sheet.ts";
+import type { SheetItemView, SheetView } from "./platform/flutter-sheet.ts";
 import {
   modelChipLabel,
   modelChipTitle,
@@ -5298,6 +5300,7 @@ function syncFlutterSidebar(): void {
       collapsedProjects,
       expandedSessions,
       flatExpanded,
+      sheet: flutterSidebarSheet,
     }),
   );
   if (json === flutterSidebarJson) return;
@@ -5391,9 +5394,9 @@ function dispatchFlutterSidebarAction(action: Record<string, unknown>): void {
       if (id) void runSessionAction(id, "delete", "已删除会话", {}, id);
       return;
     }
-    case "sessionMore": {
+    case "sessionBackend": {
       const id = text("id");
-      if (id) leaveFlutterThen(() => openSessionMenu(id));
+      if (id) openFlutterBackendSheet(id);
       return;
     }
     case "projectRemove": {
@@ -5403,7 +5406,16 @@ function dispatchFlutterSidebarAction(action: Record<string, unknown>): void {
       return;
     }
     case "newSession":
-      leaveFlutterThen(() => openWorkspacePicker());
+      openFlutterNewSessionSheet();
+      return;
+    case "sheetPick": {
+      const id = text("id");
+      const pick = flutterSidebarSheetPick;
+      if (pick && id) pick(id);
+      return;
+    }
+    case "sheetClose":
+      closeSidebarSheet();
       return;
     case "openSettings":
       openSettings();
@@ -5432,6 +5444,7 @@ function syncFlutterChat(): void {
       header: chatHeaderView(),
       picker: flutterPicker,
       suggestions: emptySuggestions(),
+      sheet: flutterChatSheet,
     }),
   );
 }
@@ -5531,6 +5544,226 @@ function setFlutterPicker(view: ChatPickerView | null): void {
   flutterPicker = view;
   syncFlutterChat();
 }
+
+/**
+ * 侧栏发起的底部弹层（新建会话 / 切换后端）。
+ *
+ * 这几个界面原来只能 `leaveFlutterThen()` 闪回网页版——数据其实很简单，
+ * 所以改成「WebView 算行、Flutter 画行、选中回传 id」。选中态留在这一侧：
+ * 面板因此是无状态的，关掉再打开不用同步两处状态，代价是每次点选要重算整份视图。
+ */
+let flutterSidebarSheet: SheetView | null = null;
+let flutterSidebarSheetPick: ((id: string) => void) | null = null;
+
+function pushSidebarSheet(view: SheetView, onPick: (id: string) => void): void {
+  flutterSidebarSheet = view;
+  flutterSidebarSheetPick = onPick;
+  syncFlutterSidebar();
+}
+
+function closeSidebarSheet(): void {
+  flutterSidebarSheet = null;
+  flutterSidebarSheetPick = null;
+  syncFlutterSidebar();
+}
+
+/** 聊天页发起的底部弹层（DSH 工具）。与侧栏那份分开，避免两边各画一份。 */
+let flutterChatSheet: SheetView | null = null;
+let flutterChatSheetPick: ((id: string) => void) | null = null;
+
+function pushChatSheet(view: SheetView, onPick: (id: string) => void): void {
+  flutterChatSheet = view;
+  flutterChatSheetPick = onPick;
+  syncFlutterChat();
+}
+
+function closeChatSheet(): void {
+  flutterChatSheet = null;
+  flutterChatSheetPick = null;
+  syncFlutterChat();
+}
+
+/** 新建会话：先挑后端（只有一个后端时不占地方），再挑工作区。 */
+function openFlutterNewSessionSheet(): void {
+  if (!runtime) return;
+  const state = runtime.store.state;
+  const projects = sortProjectsForPicker(state.projects ?? [], state.sessions ?? []);
+  if (projects.length === 0) {
+    void pushFlutterNotice("没有可用项目：请先在桌面端添加项目目录");
+    return;
+  }
+  const counts = sessionCountByProject(state.sessions ?? []);
+  const options = backendOptions(state.acpTools);
+  let choice: BackendChoice = loadLastBackendChoice(options);
+
+  const render = (): void => {
+    const items: SheetItemView[] = [];
+    if (options.length > 1) {
+      items.push(...backendSheetItems(options, choiceKey(choice), { group: "后端" }));
+    }
+    for (const project of projects) {
+      const isChat = project.kind === "chat";
+      const label = projectLabel(project) ?? project.id;
+      items.push({
+        id: `project:${project.id}`,
+        label: isChat ? `${label}（内置）` : label,
+        description: `${isChat ? "内置聊天" : (project.path ?? project.id)} · ${counts.get(project.id) ?? 0} 个会话`,
+        group: "工作区",
+        actionable: true,
+      });
+    }
+    pushSidebarSheet(
+      {
+        kind: "newSession",
+        title: "新建会话",
+        ...(options.length > 1 ? { note: `后端：${describeChoice(choice, state.acpTools)}` } : {}),
+        items,
+      },
+      (id) => {
+        if (id.startsWith("backend:")) {
+          const next = options.find((option) => `backend:${option.key}` === id);
+          if (!next) return;
+          choice = next.choice;
+          render();
+          return;
+        }
+        if (id.startsWith("project:")) {
+          const projectId = id.slice("project:".length);
+          rememberBackendChoice(choice);
+          closeSidebarSheet();
+          void createSession(projectId, choice);
+        }
+      },
+    );
+  };
+  render();
+}
+
+/** 会话菜单里的「切换后端」：点一行即应用（Web 版是「选完再按应用」，两步在手机上多余）。 */
+function openFlutterBackendSheet(sessionId: string): void {
+  if (!runtime) return;
+  const session = runtime.store.session(sessionId);
+  if (!session) return;
+  const state = runtime.store.state;
+  const options = backendOptions(state.acpTools);
+  const current: BackendChoice = {
+    backend: normalizeBackend(session.backend),
+    acpToolId: typeof session.acpToolId === "string" ? session.acpToolId : null,
+  };
+  const switchable = backendSwitchAllowed(state.runtimes ?? [], sessionId);
+  if (!switchable) {
+    void pushFlutterNotice(backendLockedHint(current, state.acpTools));
+    return;
+  }
+
+  pushSidebarSheet(
+    {
+      kind: "backend",
+      title: "切换后端",
+      note: `当前：${describeChoice(current, state.acpTools)}。换后端会重开这个会话（旧内容不再适用）。`,
+      items: backendSheetItems(options, choiceKey(current), { actionable: true }),
+    },
+    (id) => {
+      if (!id.startsWith("backend:")) return;
+      const next = options.find((option) => `backend:${option.key}` === id);
+      if (!next) return;
+      if (choiceKey(next.choice) === choiceKey(current)) {
+        closeSidebarSheet();
+        return;
+      }
+      if (missingAcpTool(next.choice)) {
+        void pushFlutterNotice("选了 ACP 后端就得先指定一个 CLI 工具");
+        return;
+      }
+      closeSidebarSheet();
+      rememberBackendChoice(next.choice);
+      const target = describeChoice(next.choice, state.acpTools);
+      // 换后端后旧会话的内容不再适用：切完直接重开这个会话，让标题/能力重新拉
+      void runSessionAction(sessionId, "update", `已切到 ${target} 后端`, backendPatch(next.choice, current)).then(() => {
+        if (sessionId === activeSessionId) void openSession(sessionId);
+      });
+    },
+  );
+}
+
+/** DSH 工具面板（目标 / 子代理 / 技能）。内容只读，只有子代理能点进去看历史。 */
+async function openFlutterDshSheet(): Promise<void> {
+  if (!runtime || !activeSessionId) return;
+  const client = runtime.client;
+  const sessionId = activeSessionId;
+
+  pushChatSheet({ kind: "dsh", title: "DSH 工具", note: "加载中…", items: [] }, () => undefined);
+
+  const [goal, subs, skills] = await Promise.allSettled([
+    client.getDshGoal(sessionId),
+    client.getDshSubagents(sessionId),
+    client.getDshSkills(sessionId),
+  ]);
+  // 加载期间用户可能切了会话或关了面板，别把陈数据画到别的会话上
+  if (activeSessionId !== sessionId || flutterChatSheet?.kind !== "dsh") return;
+
+  const goalView = goal.status === "fulfilled" ? parseDshGoal(goal.value) : null;
+  const subagentRows = subs.status === "fulfilled" ? parseDshSubagents(subs.value) : [];
+  const skillRows = skills.status === "fulfilled" ? parseDshSkills(skills.value) : [];
+  const failure = [goal, subs, skills].find((result) => result.status === "rejected");
+  const items: SheetItemView[] = [];
+
+  if (!goalView) {
+    items.push({ id: "goal", label: DSH_EMPTY_GOAL, group: "目标" });
+  } else {
+    const meta = [goalPhaseLabel(goalView.phase), goalRoundsText(goalView)].filter(Boolean).join(" · ");
+    items.push({ id: "goal", label: goalView.objective, description: meta, group: "目标" });
+  }
+
+  if (subagentRows.length === 0) {
+    items.push({ id: "no-sub", label: DSH_EMPTY_SUBAGENTS, group: "子代理（0）" });
+  } else {
+    for (const subagent of subagentRows) {
+      items.push({
+        id: `sub:${subagent.id}`,
+        label: subagent.label,
+        description: [subagent.running ? "运行中" : "空闲", subagent.diagnostic ? "诊断" : "", subagent.modeLabel]
+          .filter(Boolean)
+          .join(" · "),
+        group: `子代理（${subagentRows.length}）`,
+        actionable: true,
+      });
+    }
+  }
+
+  if (skillRows.length === 0) {
+    items.push({ id: "no-skill", label: DSH_EMPTY_SKILLS, group: "技能（0）" });
+  } else {
+    for (const skill of skillRows) {
+      items.push({
+        id: `skill:${skill.name}`,
+        label: `/${skill.name}`,
+        description: [skill.description, skill.modelInvocable ? "" : "仅用户可调", skill.whenToUse]
+          .filter(Boolean)
+          .join(" · "),
+        group: `技能（${skillRows.length}）`,
+      });
+    }
+  }
+
+  pushChatSheet(
+    {
+      kind: "dsh",
+      title: "DSH 工具",
+      ...(failure && failure.status === "rejected" ? { note: `读取失败：${describeError(failure.reason)}` } : {}),
+      items,
+    },
+    (id) => {
+      if (!id.startsWith("sub:")) return;
+      const childId = id.slice("sub:".length);
+      const row = subagentRows.find((item) => item.id === childId);
+      closeChatSheet();
+      // 子代理历史是纯文本流，仍然在 WebView 里画（要滚动与角色前缀排版，收益不高）
+      leaveFlutterThen(() => void openDshSubagentHistory(sessionId, childId, row?.label ?? "子代理"));
+    },
+  );
+}
+
 
 /**
  * 在 Flutter 里打开一个选择面板。
@@ -5928,7 +6161,7 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
         return;
       }
       if (key === "dsh") {
-        leaveFlutterThen(() => void openDshToolsSheet());
+        void openFlutterDshSheet();
         return;
       }
       if (key === "model" || key === "thinking" || key === "security") void openFlutterPicker(key);
@@ -5940,6 +6173,15 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
       return;
     case "prompts":
       void openFlutterPicker("prompt");
+      return;
+    case "sheetPick": {
+      const id = text("id");
+      const pick = flutterChatSheetPick;
+      if (pick && id) pick(id);
+      return;
+    }
+    case "sheetClose":
+      closeChatSheet();
       return;
     case "slash":
       void openFlutterPicker("slash");

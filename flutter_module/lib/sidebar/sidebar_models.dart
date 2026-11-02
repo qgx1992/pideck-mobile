@@ -7,6 +7,8 @@ library;
 
 import 'dart:convert';
 
+import '../common/app_sheet.dart';
+
 String _str(Object? value, [String fallback = '']) =>
     value is String ? value : (value == null ? fallback : '$value');
 
@@ -162,6 +164,7 @@ class SidebarSnapshot {
     required this.sections,
     required this.deviceCount,
     this.empty,
+    this.sheet,
   });
 
   static const SidebarSnapshot none = SidebarSnapshot(
@@ -178,6 +181,9 @@ class SidebarSnapshot {
   final List<SidebarSection> sections;
   final int deviceCount;
   final String? empty;
+
+  /// 侧栏发起的底部弹层（新建会话 / 切换后端）；null 表示不显示
+  final AppSheet? sheet;
 
   bool get isEmpty => sections.isEmpty;
 
@@ -209,5 +215,6 @@ class SidebarSnapshot {
             .toList(growable: false),
         deviceCount: _int(json['deviceCount']),
         empty: json['empty'] is String ? json['empty'] as String : null,
+        sheet: json['sheet'] is Map<Object?, Object?> ? AppSheet.fromJson(_map(json['sheet'])) : null,
       );
 }

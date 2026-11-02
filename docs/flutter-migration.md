@@ -702,6 +702,41 @@ Dart 侧也无条件给「从列表移除」。搬迁移时先问一句「这条
 顺带把 `confirmRemoveProject` 拆成「确认框」+ `removeProject(projectId)`，
 让 Web 的弹层和 Flutter 的确认框走同一个函数 —— 各写一份一定会漏掉 `activeProjectId` 的清理。
 
+## 通用底部弹层（0.1.35）：把「弹层」也变成数据
+
+到 0.1.34 为止，从 Flutter 页能点到的最后三处 WebView 弹层是：新建会话（工作区选择器）、
+会话菜单里的「切换后端」、聊天页 DSH chip 的「DSH 工具」。它们都只能 `leaveFlutterThen()`
+——先关掉 Flutter 页、闪一下、再在网页版里弹出。
+
+现在统一成一份 `SheetView`（`app/src/platform/flutter-sheet.ts`）：
+
+```ts
+{ kind, title, note?, items: [{ id, label, description?, group?, danger?, disabled?, selected?, actionable? }] }
+```
+
+- WebView 侧算「有哪些行、每行点了发什么 id」；Flutter 侧（`flutter_module/lib/common/app_sheet.dart`）
+  只负责画分组列表并回传 `sheetPick { id }`；
+- 侧栏面板走 `SidebarSnapshot.sheet`，聊天页面板走 `ChatSnapshot.sheet`，两条通道分开，
+  避免抽屉和聊天页同时画一份；
+- **面板无状态**：选中哪一行不放在 Dart。点后端那一行时，`main.ts` 改自己的 `choice` 变量、
+  重算整份视图再推一次——`AppSheetHost` 用 `ValueNotifier` 原地换内容，所以不闪、不重开动画。
+  无状态的好处是面板关掉再打开不用同步两处状态；代价是每次点选重算一次（几十行，可忽略）。
+
+具体到三个界面：
+
+| 界面 | 行 | 点完发生什么 |
+|---|---|---|
+| 新建会话 | 后端组（仅当后端多于一个）+ 工作区组（项目名 / 路径 / 会话数） | `rememberBackendChoice()` + `createSession(projectId, choice)` |
+| 切换后端 | 后端列表，当前项打勾；会话已拉起 runtime 时直接提示锁定原因 | `runSessionAction(update, backendPatch())` 再重开会话 |
+| DSH 工具 | 目标 / 子代理 / 技能三组，纯信息行不给箭头 | 子代理 → `leaveFlutterThen(openDshSubagentHistory)` |
+
+两个刻意的取舍：
+
+1. **切换后端改成「点一行即应用」**，Web 版是「选完再按应用」。手机上两步选择只为了一次撤销，
+   换来的是一次多余点击；而锁定态本来就在点开面板时提示了。
+2. **DSH 子代理历史仍回网页版**：那是要滚动的长文本（角色前缀 + 多段），
+   搬过来的收益远小于再写一套排版。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
@@ -733,7 +768,10 @@ Dart 侧也无条件给「从列表移除」。搬迁移时先问一句「这条
 
 6. ~~**看图 / 斜杠 / @提及**~~ —— **0.1.32 已完成**。
 7. ~~**历史跳转 / 待办展开 / 空态建议**~~ —— **0.1.33 已完成**。
-8. ~~**项目长按菜单**~~ —— **0.1.34 已完成**（见上一节）。
+8. ~~**项目长按菜单**~~ —— **0.1.34 已完成**。
+9. ~~**通用底部弹层：新建会话 / 切换后端 / DSH 工具**~~ —— **0.1.35 已完成**（见上一节）。
+   至此 Flutter 页里点得到的东西**没有一处**需要闪回网页版，除了扫码配对与子代理历史这两条
+   「页面级 / 长文本」的例外。
 
 **剩下没迁的**：
 启动页 `splash.ts`、以及十来个 sheet（连接、端点、主题、安全、DSH 工具、用量、工作区选择器、

@@ -223,3 +223,13 @@ test("messageMenus：没传 backend 时按 pi 处理", () => {
   const snapshot = buildChatSnapshot({ sessionId: "s1", messages: [] });
   assert.equal(snapshot.messageMenus.user.length, 5);
 });
+
+test("弹层：sheet 原样带出，没传时为 null", () => {
+  const view = {
+    kind: "dsh",
+    title: "DSH 工具",
+    items: [{ id: "goal", label: "目标一句" }],
+  };
+  assert.deepEqual(buildChatSnapshot({ sessionId: "s1", messages: [], sheet: view }).sheet, view);
+  assert.equal(buildChatSnapshot({ sessionId: "s1", messages: [] }).sheet, null);
+});

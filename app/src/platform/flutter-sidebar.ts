@@ -8,6 +8,7 @@
  * 侧栏的分段、折叠、预览截断、多设备分块组合起来分支很多，抽成纯函数才测得动。
  */
 
+import type { SheetView } from "./flutter-sheet.ts";
 import type { SessionSummary } from "@core/types.ts";
 import { acpToolNameOf, backendBadge, normalizeBackend } from "../ui/backend-capabilities.ts";
 import type { ExpandOverride, ProjectGroupView } from "../ui/sidebar-model.ts";
@@ -81,6 +82,8 @@ export interface SidebarSnapshot {
   deviceCount: number;
   /** 整个侧栏一条都没有时的文案 */
   empty?: string;
+  /** 侧栏发起的弹层（新建会话 / 切换后端）；null 表示不显示 */
+  sheet?: SheetView | null;
 }
 
 export interface SidebarSnapshotInput {
@@ -97,6 +100,8 @@ export interface SidebarSnapshotInput {
   expandedSessions: ExpandOverride;
   /** 扁平段（活动 / 聊天）的「展开其余」状态 */
   flatExpanded: ReadonlySet<string>;
+  /** 侧栏发起的弹层（由侧栏动作算出，原样带出） */
+  sheet?: SheetView | null;
   now?: number;
 }
 
@@ -237,7 +242,14 @@ export function buildSidebarSnapshot(input: SidebarSnapshotInput): SidebarSnapsh
   const multi = input.endpoints.length > 1;
   const active = input.endpoints.find((item) => item.id === input.activeEndpointId) ?? input.endpoints[0];
   if (!active) {
-    return { tab: input.tab, tabs: [], query: input.query, sections: [], deviceCount: 0 };
+    return {
+      tab: input.tab,
+      tabs: [],
+      query: input.query,
+      sections: [],
+      deviceCount: 0,
+      sheet: input.sheet ?? null,
+    };
   }
 
   const multiActivity = multi ? buildActivityViewMulti(input.endpoints, ACTIVITY_RECENT_LIMIT, now) : null;
@@ -285,6 +297,7 @@ export function buildSidebarSnapshot(input: SidebarSnapshotInput): SidebarSnapsh
       tabs,
       query: input.query,
       deviceCount: input.endpoints.length,
+      sheet: input.sheet ?? null,
       sections: [
         flatSection("search", rows, {
           preview: rows.length,
@@ -336,6 +349,7 @@ export function buildSidebarSnapshot(input: SidebarSnapshotInput): SidebarSnapsh
       tabs,
       query: input.query,
       deviceCount: input.endpoints.length,
+      sheet: input.sheet ?? null,
       sections,
     };
   }
@@ -362,6 +376,7 @@ export function buildSidebarSnapshot(input: SidebarSnapshotInput): SidebarSnapsh
       tabs,
       query: input.query,
       deviceCount: input.endpoints.length,
+      sheet: input.sheet ?? null,
       sections: [
         flatSection("chats", rows, {
           preview: 12,
@@ -436,6 +451,7 @@ export function buildSidebarSnapshot(input: SidebarSnapshotInput): SidebarSnapsh
     tabs,
     query: input.query,
     deviceCount: input.endpoints.length,
+    sheet: input.sheet ?? null,
     sections,
     ...(sections.filter((section) => section.kind === "group").length === 0
       ? { empty: "还没有项目，请先在桌面端添加目录" }

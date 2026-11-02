@@ -9,6 +9,8 @@ library;
 
 import 'dart:convert';
 
+import '../common/app_sheet.dart';
+
 /// 一条已落盘的历史消息（工具条目也是这个形状，用 [toolName] 区分）。
 class ChatHistoryItem {
   const ChatHistoryItem({
@@ -295,6 +297,7 @@ class ChatSnapshot {
     this.header = const ChatHeaderView(),
     this.picker,
     this.suggestions = const <String>[],
+    this.sheet,
   });
 
   final String sessionId;
@@ -330,6 +333,9 @@ class ChatSnapshot {
   /// 当前要显示的选择面板；null 表示不显示。
   final ChatPickerView? picker;
 
+  /// 聊天页发起的底部弹层（DSH 工具）；null 表示不显示。
+  final AppSheet? sheet;
+
   /// 取某个角色能用的菜单项（工具条不给菜单）。
   List<ChatMenuItem> menusFor(String role) {
     if (role == 'tool') return const <ChatMenuItem>[];
@@ -349,6 +355,7 @@ class ChatSnapshot {
     final Object? empty = json['empty'];
     final Object? header = json['header'];
     final Object? picker = json['picker'];
+    final Object? sheet = json['sheet'];
     return ChatSnapshot(
       sessionId: str(json['sessionId']),
       title: str(json['title']),
@@ -368,6 +375,7 @@ class ChatSnapshot {
       header: header is Map<Object?, Object?> ? ChatHeaderView.fromJson(mapOf(header)) : const ChatHeaderView(),
       picker: picker is Map<Object?, Object?> ? ChatPickerView.fromJson(mapOf(picker)) : null,
       suggestions: listOf(json['suggestions']).whereType<String>().toList(growable: false),
+      sheet: sheet is Map<Object?, Object?> ? AppSheet.fromJson(mapOf(sheet)) : null,
     );
   }
 }
