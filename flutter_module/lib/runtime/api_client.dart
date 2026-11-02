@@ -15,6 +15,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'frames.dart';
+import 'prompt_payload.dart';
 import 'sse.dart';
 
 /// 错误分类，与 `src/api/errors.ts` 的 `PiDeckErrorKind` 一一对应。
@@ -183,17 +184,52 @@ class PendingUiOption {
       );
 }
 
-/// 「投递」结果（`SendPromptResult`）。只有 `ok` 与错误信息是稳定字段。
+/// 「投递」结果（`SendPromptResult`）。
+///
+/// 关键字段是 `accepted`：桌面端拒收时回 `accepted: false` + 结构化的
+/// `i18nKey` / `i18nParams` / `delivery`，以前手机端完全不看返回值，
+/// 表现就是「气泡上屏了、什么都没发生、也没有任何提示」。
 class SendPromptResult {
-  const SendPromptResult({this.ok = true, this.message = ''});
+  const SendPromptResult({
+    this.ok = true,
+    this.message = '',
+    this.accepted = true,
+    this.rejection,
+  });
 
   final bool ok;
   final String message;
 
+  /// 服务端是否收下了这条提问。
+  final bool accepted;
+
+  /// 拒收的结构化说明；`accepted` 为真时为 null。
+  final PromptRejection? rejection;
+
   static SendPromptResult fromJson(Object? raw) {
     if (raw is! Map) return const SendPromptResult();
+    // 只看 `accepted === false`：老桌面端 `/prompt` 的 result 可能是裸空对象，
+    // 那种不能当拒收（与 `app/src/ui/acp-notice.ts` 的 isPromptRejection 同口径）。
+    if (raw['accepted'] == false) {
+      final Object? params = raw['i18nParams'];
+      return SendPromptResult(
+        ok: false,
+        message: '${raw['message'] ?? raw['error'] ?? ''}',
+        accepted: false,
+        rejection: PromptRejection(
+          error: '${raw['error'] ?? ''}',
+          delivery: '${raw['delivery'] ?? ''}',
+          i18nKey: '${raw['i18nKey'] ?? ''}',
+          i18nParams: params is Map
+              ? params.map<String, Object?>(
+                  (Object? key, Object? value) => MapEntry<String, Object?>('$key', value),
+                )
+              : const <String, Object?>{},
+        ),
+      );
+    }
     return SendPromptResult(
-      ok: raw['ok'] != false,
+      ok: true,
       message: '${raw['message'] ?? raw['error'] ?? ''}',
     );
   }
@@ -477,6 +513,40 @@ class PiDeckClient {
     final Map<String, Object?>? body =
         await requestJson('/api/sessions/${Uri.encodeComponent(sessionId)}/messages');
     return MessageWindow.fromJson(body);
+  }
+
+  /// 全局状态流：`GET /api/events`，`event: state` 的 data 就是完整快照。
+  ///
+  /// 服务端是 400ms 去抖 + 5s 兜底 tick 的「变化驱动」推送，收到即**整份替换**
+  /// （不做增量合并 —— 协议里没有补丁帧）。
+  ///
+  /// 注意它**不包含**会话列表变化（新建/删除/改名不在 revision 判据里），
+  /// 所以调用方仍要保留低频 `/api/state` 对账（见 `state_store.dart`）。
+  Stream<Map<String, Object?>> stateEvents({void Function()? onOpen}) async* {
+    await for (final SseEvent event in streamSse('/api/events', onOpen: onOpen)) {
+      if (event.event != 'state') continue;
+      try {
+        final Object? parsed = jsonDecode(event.data);
+        if (parsed is Map) yield Map<String, Object?>.from(parsed);
+      } on FormatException {
+        // 单个坏帧不应断开整条流（与 `streamState` 的 try/catch 同口径）。
+      }
+    }
+  }
+
+  /// `POST /api/sessions`：在某个项目下新建会话。
+  Future<Map<String, Object?>> createSession(String projectId) async {
+    final Map<String, Object?>? body = await requestJson(
+      '/api/sessions',
+      method: 'POST',
+      body: <String, Object?>{'projectId': projectId},
+    );
+    if (body == null) {
+      throw PiDeckException(PiDeckErrorKind.protocol, '新建会话没有返回内容');
+    }
+    final Object session = body['session'] ?? body;
+    if (session is Map) return Map<String, Object?>.from(session);
+    throw PiDeckException(PiDeckErrorKind.protocol, '新建会话返回的不是对象');
   }
 
   Future<SendPromptResult> sendPrompt(

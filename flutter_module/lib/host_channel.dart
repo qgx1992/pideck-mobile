@@ -139,6 +139,37 @@ Future<void> closeHost() async {
   }
 }
 
+/// 拉起后台看护（原生前台服务）。
+///
+/// 什么时候必须调：Dart 自己把提问发出去之后。用户经常发完就上滑回桌面，
+/// 而 Android 12+ 不允许在后台启动前台服务 —— 等 WebView 的 SSE 把 running
+/// 推下来再启动，进程可能已经被冻结，那一轮跑完就不会有通知。
+Future<void> startRunWatch({
+  required String baseUrl,
+  required String token,
+  Map<String, String> titles = const <String, String>{},
+}) async {
+  if (baseUrl.isEmpty || token.isEmpty) return;
+  try {
+    await hostChannel.invokeMethod<void>('startRunWatch', <String, Object?>{
+      'baseUrl': baseUrl,
+      'token': token,
+      'titles': titles,
+    });
+  } catch (_) {
+    /* 起不来不该把一次成功的发送变成失败 */
+  }
+}
+
+/// 停止后台看护（幂等）。
+Future<void> stopRunWatch() async {
+  try {
+    await hostChannel.invokeMethod<void>('stopRunWatch');
+  } catch (_) {
+    /* 忽略 */
+  }
+}
+
 /// 聊天页的动作回传（同 [sendSettingsAction]，参数同样必须是 Map）。
 ///
 /// 动作里的 `type` 由 `app/src/main.ts` 的 `dispatchFlutterChatAction()` 分发，

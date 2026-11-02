@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -7,7 +6,9 @@ import 'package:flutter/foundation.dart';
 import 'api_client.dart';
 import 'frames.dart';
 import 'history_model.dart';
+import 'prompt_payload.dart';
 import 'sse.dart';
+import 'state_store.dart';
 
 /// 聊天页的数据面运行时（Dart 侧自己跑，不再依赖 WebView 推快照）。
 ///
@@ -34,13 +35,36 @@ class ChatRuntime extends ChangeNotifier {
     required this.client,
     required this.sessionId,
     this.onNotice,
-  });
+    this.onKickRunWatch,
+  }) {
+    store = StateStore(
+      client: client,
+      onStatus: (StoreStatus status) {
+        _storeStatus = status;
+        _notify();
+      },
+      onError: (Object error) => _reportStoreError(error),
+    );
+  }
 
   final PiDeckClient client;
   final String sessionId;
 
   /// 需要给用户看的提示（发送失败之类），由页面决定怎么显示。
   final void Function(String message)? onNotice;
+
+  /// 发送成功后拉起后台看护（原生前台服务）。
+  ///
+  /// 为什么由页面注入：启动前台服务是 Android 通道的事，运行时这一层不碰平台 API。
+  /// 时机很关键 —— 用户常常发完就上滑回桌面，等 SSE 把 running 推下来再起服务，
+  /// 进程可能已经被冻结（`main.ts` 的 `kickRunWatch` 注释里记着同一个坑）。
+  final void Function()? onKickRunWatch;
+
+  /// 全局状态仓（会话标题 / 运行目标 / 待答请求的唯一来源）。
+  ///
+  /// 与 WebView 的 `StateStore` 同语义：`/api/events` 推快照，`/api/state` 对账。
+  /// 页面里的侧栏快照也从它的 [StateStore.state] 算出来，不再等 WebView 推。
+  late final StateStore store;
 
   /// 协议唯一状态机（与 `src/api/frames.ts` 的 `ChatReducer` 一一对应）。
   final ChatReducer reducer = ChatReducer();
@@ -54,8 +78,21 @@ class ChatRuntime extends ChangeNotifier {
   static const Duration _promptEchoDelay = Duration(milliseconds: 650);
 
   List<Map<String, Object?>> _messages = <Map<String, Object?>>[];
-  Map<String, Object?> _state = <String, Object?>{};
+
+  /// 乐观回显：自己刚发出去、但服务端历史里还没有的用户消息。
+  ///
+  /// Web 侧对应 `chatView.appendLocalUser()`。等 `_loadHistory` 把它落进历史就撤掉，
+  /// 否则「刚发出去那一瞬间」屏幕上什么都不动，用户会以为没发出去。
+  final List<Map<String, Object?>> _optimistic = <Map<String, Object?>>[];
+
   PendingUiRequest? _pending;
+
+  /// 正在提交（用于把状态显示成 running，否则发送到第一帧之间按钮是灰的）。
+  bool _sending = false;
+
+  /// 已投递成功、但还没收到第一帧 `start` 的时刻（见 [submit]）。
+  DateTime? _awaitingTurn;
+  StoreStatus _storeStatus = StoreStatus.idle;
 
   bool _loading = true;
 
@@ -78,7 +115,6 @@ class ChatRuntime extends ChangeNotifier {
   int _settleStamp = 0;
 
   final _Backoff _frameBackoff = _Backoff();
-  final _Backoff _stateBackoff = _Backoff();
 
   /// 状态机可读字段（页面/测试用）。
   String get title => _title;
@@ -90,57 +126,123 @@ class ChatRuntime extends ChangeNotifier {
   RunStatus get status => reducer.status;
   String? get error => _errorDetail ?? _errorTitle;
 
-  /// 打开页面时调一次：拉状态底 + 起两条流。重复调用无副作用。
+  /// 打开页面时调一次：起状态仓 + 拉历史 + 起帧流。重复调用无副作用。
   Future<void> start() async {
     if (_started || _disposed) return;
     _started = true;
-    unawaited(_refreshState());
+    store.subscribe(_onStoreState);
+    store.start();
     unawaited(_loadHistory());
     unawaited(_frameLoop());
-    unawaited(_stateLoop());
   }
 
   /* ------------------------------- 写动作 ------------------------------- */
 
-  /// 发送一轮提问。
+  /// 发送一轮提问（`main.ts` 的 `send()` 逐条搬过来）。
   ///
-  /// 顺序照 `src/session.ts:167-207`：**先把 reducer 归零**再发（否则上一轮的
-  /// `finished` 状态会让新帧走「追加」分支，屏幕上会留下上轮残块）。
-  Future<SendPromptResult> send(
+  /// 一次发送要处理的事情，少一件就会出可见的 bug：
+  ///   1. **计划模式**：可见消息保原文，另塞带隐藏标记的 `agentMessage`，
+  ///      且发完立刻关掉（一次性语义，否则后续提问一直被限制成只读）；
+  ///   2. **排队 / 插话**：只在运行中带 `streamingBehavior`，不支持插话的后端降级成排队；
+  ///   3. **reducer 归零**：上一轮的 `finished` 会让新帧走「追加」分支，屏幕上留下残块；
+  ///   4. **乐观回显**：先把气泡上屏，不等服务端落盘；
+  ///   5. **拒收回滚**：桌面端会回 `accepted:false`，以前完全没看返回值，
+  ///      表现就是「气泡上屏了、什么都没发生、也没有任何提示」；
+  ///   6. **拉起后台看护**：发完用户可能立刻回桌面，前台服务必须现在就开始守。
+  ///
+  /// 返回值：是否被服务端接受（`false` 时页面不应该清空输入框里的图）。
+  Future<bool> submit(
     String text, {
     List<Map<String, Object?>> images = const <Map<String, Object?>>[],
-    String? streamingBehavior,
+    List<String> imageDataUrls = const <String>[],
+    bool planMode = false,
+    String sendMode = sendModeQueue,
+    bool canSteer = false,
   }) async {
     final String trimmed = text.trim();
-    if (trimmed.isEmpty) {
-      return const SendPromptResult(ok: false, message: '内容为空');
-    }
-    if (reducer.status != RunStatus.running) reducer.reset();
+    // 只发图不写字时给服务端一句自然的话：/prompt 的 message 不能为空（400 messageRequired）。
+    final String visible = trimmed.isEmpty && images.isNotEmpty ? '看下这张图' : trimmed;
+    if (visible.isEmpty) return false;
+
+    final PlanSubmission submission = buildPlanSubmission(visible, planMode);
+    final bool running = reducer.status == RunStatus.running;
+    // 运行中才带；不支持插话的后端一律降级成排队（与 `streamingBehaviorFor` 一致）。
+    final String? behavior = streamingBehaviorFor(running, canSteer ? sendMode : sendModeQueue);
+
+    // 新提问 = 上一轮结束。运行中（插话/排队）时不能归零，那会把正在流的内容清掉。
+    if (!running) reducer.reset();
     _errorTitle = null;
     _errorDetail = null;
-    _turnStart = DateTime.now();
-    _turnEnd = null;
+    if (!running) {
+      _turnStart = DateTime.now();
+      _turnEnd = null;
+    }
     _loading = false;
+    _sending = true;
+
+    final Map<String, Object?> echo = <String, Object?>{
+      'kind': 'message',
+      'id': null,
+      'role': 'user',
+      'text': visible,
+      'thinking': '',
+      'time': _clockOf(DateTime.now()),
+      'images': imageDataUrls,
+      'toolName': '',
+      'toolState': '',
+      'toolDetail': '',
+    };
+    _optimistic.add(echo);
+    // 服务端已经收下了，但第一帧 `start` 可能还要几十毫秒才到。这段空窗如果
+    // 按 idle 画，发送键会重新变亮、状态行闪回「空闲」—— 用户看到的是
+    // 「我点了发送，没反应」。先记一笔「等 start」，由 `_applyFrame` 收掉。
+    if (!running) _awaitingTurn = DateTime.now();
     _notify();
+
     try {
       final SendPromptResult result = await client.sendPrompt(
         sessionId,
         requestId: _newRequestId(),
-        message: trimmed,
+        message: submission.message,
         images: images,
-        streamingBehavior: streamingBehavior,
+        streamingBehavior: behavior,
+        extra: submission.agentMessage == null
+            ? const <String, Object?>{}
+            : <String, Object?>{'agentMessage': submission.agentMessage},
       );
-      if (!result.ok) {
-        _errorTitle = '发送失败';
-        _errorDetail = result.message.isEmpty ? '服务端拒绝了这次发送' : result.message;
+      if (!result.accepted) {
+        final PromptRejection rejection = result.rejection ?? const PromptRejection();
+        if (rejection.shouldRollback) _optimistic.remove(echo);
+        // 回滚了就不存在「等 start」这回事；投递未知时保留气泡，状态照旧由帧决定。
+        if (rejection.shouldRollback) _awaitingTurn = null;
+        final String message = rejectionMessage(rejection);
+        onNotice?.call(
+          rejection.shouldRollback ? message : '$message\n（这条可能已经发出去了，稍后以历史为准）',
+        );
         _notify();
+        return false;
       }
-      return result;
+      // 服务端收下了：立刻拉起后台看护（前台服务），再排一次历史对账。
+      if (onKickRunWatch != null) {
+        try {
+          onKickRunWatch!.call();
+        } on Object {
+          // 起服务失败不该把一次成功的发送变成失败。
+        }
+      }
+      _scheduleEchoCheck(visible);
+      return true;
     } on PiDeckException catch (error) {
+      _optimistic.remove(echo);
+      _awaitingTurn = null;
       _errorTitle = '发送失败';
       _errorDetail = error.describe();
       _notify();
-      rethrow;
+      onNotice?.call(error.describe());
+      return false;
+    } finally {
+      _sending = false;
+      _notify();
     }
   }
 
@@ -192,14 +294,40 @@ class ChatRuntime extends ChangeNotifier {
   /// 重拉历史（错误卡上的「重试」、以及 settle 时用）。
   Future<void> reloadHistory() => _loadHistory();
 
-  /// 用户刚在 WebView 侧把消息发出去（写路径还在 WebView）。
+  /// 用户刚在 WebView 侧把消息发出去（回退路径用）。
   ///
   /// 服务端落盘之后历史里才有这条用户消息，而「这一轮结束」还要等很久；
   /// 这里排一次短延迟重拉，让刚发出去的提问尽快出现在列表里。
-  void notifyPromptSent() {
+  void notifyPromptSent() => _scheduleEchoCheck('');
+
+  /// 排一次短延迟历史对账：服务端要先把这条提问落盘。
+  void _scheduleEchoCheck(String visible) {
     Timer(_promptEchoDelay, () {
-      if (!_disposed) unawaited(reloadHistory());
+      if (_disposed) return;
+      unawaited(_reloadAndDropEcho(visible));
     });
+  }
+
+  Future<void> _reloadAndDropEcho(String visible) async {
+    await _loadHistory();
+    if (_disposed) return;
+    // 历史里已经有这条（按文本比对最近几条用户消息），就可以把乐观气泡撤掉了；
+    // 还没落盘就继续挂着，等下一轮 reload（settle 时还会拉一次）。
+    if (_optimistic.isEmpty) return;
+    final bool persisted = _messages.reversed
+        .take(3)
+        .any((Map<String, Object?> item) => '${item['role'] ?? ''}' == 'user' && _textOf(item) == visible);
+    if (persisted || visible.isEmpty) {
+      _optimistic.clear();
+      _notify();
+    }
+  }
+
+  /// 历史条目里的正文（用户消息就是 `content`）。
+  String _textOf(Map<String, Object?> item) {
+    final Object? content = item['content'] ?? item['text'];
+    if (content is String) return content.trim();
+    return '';
   }
 
   /* ------------------------------- 快照 ------------------------------- */
@@ -210,13 +338,18 @@ class ChatRuntime extends ChangeNotifier {
   /// `sheet` / `workspace` / `themeMode` 由 WebView 那份快照合并进来（Dart 不猜）。
   Map<String, Object?> snapshotJson() {
     final String? messageId = reducer.messageId;
+    // 从「点了发送」到「服务端推第一个 start 帧」之间没有 running 状态，
+    // 按钮会一直是灰的；这里先按 running 画，帧到了自然接管。
+    // 「刚发出去、start 帧还没到」也算运行中：否则发送键会闪回可点状态。
+    final bool awaiting = _awaitingTurn != null && reducer.status == RunStatus.idle;
+    final bool sendingIdle = (_sending || awaiting) && reducer.status != RunStatus.running;
     return <String, Object?>{
       'sessionId': sessionId,
       // 标题来自 `/api/events`；还没到时**不要**写这个键，否则会把
       // WebView 那边正确的标题盖成 "PiDeck"。
       if (_title.isNotEmpty) 'title': _title,
-      'status': reducer.status.name,
-      'statusText': _statusText(),
+      'status': sendingIdle ? RunStatus.running.name : reducer.status.name,
+      'statusText': sendingIdle ? _statusText(at: RunStatus.running) : _statusText(),
       'error': _errorTitle == null
           ? null
           : <String, Object?>{
@@ -225,7 +358,8 @@ class ChatRuntime extends ChangeNotifier {
             },
       'empty': null,
       'loading': _loading,
-      'history': historyItems,
+      // 乐观回显接在历史尾部：刚发出去那句必须立刻出现，不能等服务端落盘。
+      'history': <Map<String, Object?>>[...historyItems, ..._optimistic],
       'live': <String, Object?>{
         'messageId': messageId == null || messageId.isEmpty ? null : messageId,
         'blocks': <Map<String, Object?>>[
@@ -260,8 +394,8 @@ class ChatRuntime extends ChangeNotifier {
     };
   }
 
-  String _statusText() {
-    final RunStatus status = reducer.status;
+  String _statusText({RunStatus? at}) {
+    final RunStatus status = at ?? reducer.status;
     if (status == RunStatus.running) {
       final DateTime start = _turnStart ?? DateTime.now();
       return _formatElapsed(DateTime.now().difference(start));
@@ -336,37 +470,6 @@ class ChatRuntime extends ChangeNotifier {
     }
   }
 
-  Future<void> _stateLoop() async {
-    while (!_disposed && !_authFailed) {
-      bool opened = false;
-      try {
-        final Stream<SseEvent> stream = client.streamSse(
-          '/api/events',
-          onOpen: () {
-            opened = true;
-            _stateBackoff.reset();
-          },
-        );
-        await for (final SseEvent event
-            in stream.timeout(stallTimeout, onTimeout: (EventSink<SseEvent> sink) => sink.close())) {
-          if (_disposed) return;
-          _handleStateEvent(event);
-        }
-      } on PiDeckException catch (error) {
-        if (_disposed) return;
-        if (error.isAuth) {
-          _authFailed = true;
-          return;
-        }
-      } catch (_) {
-        /* 主动 cancel */
-      }
-      if (_disposed || _authFailed) return;
-      if (!opened) await _refreshState();
-      await Future<void>.delayed(_stateBackoff.nextDelay());
-    }
-  }
-
   void _handleFrameEvent(SseEvent event) {
     if (event.data == sseDoneMarker) {
       // 走 api_client 里同一个 `doneFrame()`，别在这里再写一份字面量
@@ -389,6 +492,8 @@ class ChatRuntime extends ChangeNotifier {
       _errorDetail = null;
     }
     if (frame['type'] == 'error') _turnEnd = DateTime.now();
+    // 状态一旦离开 idle（start / error / finish），「等 start」就不成立了。
+    if (reducer.status != RunStatus.idle) _awaitingTurn = null;
     if (result.changed || reducer.status != before) _notify();
     if (result.finished) {
       _turnEnd ??= DateTime.now();
@@ -406,59 +511,27 @@ class ChatRuntime extends ChangeNotifier {
     await _loadHistory();
     if (_disposed || stamp != _settleStamp) return;
     reducer.clearLive();
+    _awaitingTurn = null;
     _notify();
   }
 
-  void _handleStateEvent(SseEvent event) {
-    if (event.data == sseDoneMarker) return;
-    final Object? decoded = _tryDecode(event.data);
-    if (decoded is! Map) return;
-    _applyState(Map<String, Object?>.from(decoded));
-  }
-
-  Future<void> _refreshState() async {
-    try {
-      final StateSnapshot snapshot = await client.getState();
-      final Map<String, Object?>? body = snapshot.json;
-      if (snapshot.notModified || body == null) return;
-      _applyState(body);
-    } on PiDeckException catch (error) {
-      if (!error.isAuth) return;
-      _authFailed = true;
-      _errorTitle = '登录已失效';
-      _errorDetail = error.describe();
-      _notify();
-    }
-  }
-
-  void _applyState(Map<String, Object?> state) {
-    _state = state;
+  /// 状态仓每次替换快照后回调：只挑这个会话关心的三样（标题 / 待答请求 / 运行目标）。
+  void _onStoreState(Map<String, Object?> state) {
     bool changed = false;
 
-    final Object? sessions = state['sessions'];
-    if (sessions is List) {
-      for (final Object? item in sessions) {
-        if (item is! Map) continue;
-        if ('${item['id']}' != sessionId) continue;
-        final String next = '${item['title'] ?? ''}';
-        if (next.isNotEmpty && next != _title) {
-          _title = next;
-          changed = true;
-        }
-        break;
-      }
+    final Map<String, Object?>? session = store.session(sessionId);
+    final String next = '${session?['title'] ?? ''}';
+    if (next.isNotEmpty && next != _title) {
+      _title = next;
+      changed = true;
     }
 
     PendingUiRequest? nextPending;
-    final Object? pendingList = state['pendingUiRequests'];
-    if (pendingList is List) {
-      for (final Object? item in pendingList) {
-        if (item is! Map) continue;
-        final PendingUiRequest? parsed = PendingUiRequest.fromJson(Map<String, Object?>.from(item));
-        if (parsed == null || parsed.sessionId != sessionId) continue;
-        nextPending = parsed;
-        break;
-      }
+    for (final Map<String, Object?> item in store.pendingFor(sessionId)) {
+      final PendingUiRequest? parsed = PendingUiRequest.fromJson(item);
+      if (parsed == null) continue;
+      nextPending = parsed;
+      break;
     }
     if (!_samePending(_pending, nextPending)) {
       _pending = nextPending;
@@ -466,6 +539,31 @@ class ChatRuntime extends ChangeNotifier {
     }
 
     if (changed) _notify();
+  }
+
+  void _reportStoreError(Object error) {
+    if (_disposed) return;
+    if (error is PiDeckException && error.isAuth) {
+      _authFailed = true;
+      _errorTitle = '登录已失效';
+      _errorDetail = error.describe();
+      _notify();
+    }
+  }
+
+  /// 状态仓的连接状态（页面可以据此提示「正在重连」）。
+  StoreStatus get storeStatus => _storeStatus;
+
+  Future<void> _refreshState() async {
+    try {
+      await store.refresh();
+    } on PiDeckException catch (error) {
+      if (!error.isAuth) return;
+      _authFailed = true;
+      _errorTitle = '登录已失效';
+      _errorDetail = error.describe();
+      _notify();
+    }
   }
 
   Future<void> _loadHistory() async {
@@ -497,22 +595,12 @@ class ChatRuntime extends ChangeNotifier {
 
   /* ------------------------------- 工具 ------------------------------- */
 
+  /// 运行目标（`src/runtime/target.ts` 的 `findTarget`）：只在 `runtimes` 里。
   Map<String, Object?>? _target() {
-    final Object? runtimes = _state['runtimes'];
-    if (runtimes is! List) return null;
-    for (final Object? item in runtimes) {
-      if (item is! Map) continue;
-      if ('${item['sessionId']}' != sessionId) continue;
-      final Object? agentId = item['agentId'];
-      final Object? generation = item['runtimeGeneration'];
-      if (agentId == null || generation == null) return null;
-      return <String, Object?>{
-        'sessionId': sessionId,
-        'agentId': agentId,
-        'runtimeGeneration': generation,
-      };
-    }
-    return null;
+    final Map<String, Object?>? target = store.targetOf(sessionId);
+    if (target == null) return null;
+    if (target['agentId'] == null || target['runtimeGeneration'] == null) return null;
+    return target;
   }
 
   Map<String, Object?> _mapResponseValue(
@@ -557,6 +645,7 @@ class ChatRuntime extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    store.stop();
     // 两条流的取消靠「关掉客户端」：`streamSse` 的 async* 生成器在
     // HttpClient 关闭时抛 SocketException 并走 finally，循环随即退出。
     // 这个运行时独占自己的 client（页面不要复用给别的用途）。
@@ -565,13 +654,9 @@ class ChatRuntime extends ChangeNotifier {
   }
 }
 
-Object? _tryDecode(String raw) {
-  try {
-    return jsonDecode(raw);
-  } catch (_) {
-    return null;
-  }
-}
+/// 「时:分」时钟（本地时区、24 小时制），与 `dom.ts` 的 `clockOf()` 同口径。
+String _clockOf(DateTime time) =>
+    '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
 
 String _formatElapsed(Duration elapsed) {
   final int ms = elapsed.isNegative ? 0 : elapsed.inMilliseconds;

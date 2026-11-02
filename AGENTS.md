@@ -312,6 +312,26 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 移植协议核心时**先写测试再移植**：`runtime_sse_test.dart` / `runtime_frames_test.dart` /
   `runtime_history_test.dart` 的用例是从 `tests/sse.test.ts` / `tests/frames.test.ts` 与 TS 对拍来的，
   新增帧类型要在这三处同时补。
+- **发送 0.2.12 起也归 Dart**（`ChatRuntime.submit()`，逐条对应 Web 的 `send()`）：只发图时 message 用
+  `看下这张图`、计划模式走 `buildPlanSubmission()`、运行中才带 `streamingBehavior`、失败按
+  `shouldRollbackRejection` 收不收气泡。三个坑：① `/prompt` 的透传字段是**平铺**的
+  （`agentMessage` 在顶层，套一层 `{extra: ...}` 服务端读不到，计划模式会静默失效）；
+  ② 发出去到第一帧 `start` 到达之间要按「运行中」画（`_awaitingTurn`），否则发送键会闪回可点；
+  ③ 乐观回显只能靠 650ms 后的历史对账清掉，别在发送成功时就删。
+- **状态流也归 Dart 了**（`runtime/state_store.dart`，对齐 `src/state/store.ts`）：`/api/events`
+  只处理 `event === "state"`，先 `refresh()` 对账再进流，auth 错误停、协议不支持或连续失败 3 次降轮询，
+  轮询/重连退避 1s→15s。`store.ready` 为假（还没拿到过完整状态）时**不许**拿它算任何界面数据。
+- **侧栏快照在 Dart 里算**（`sidebar/sidebar_native.dart`，`buildSidebarSnapshot()` 的逐字节移植）：
+  规则源头仍是 `app/src/platform/flutter-sidebar.ts` + `sidebar-model.ts` + `sidebar-tabs-model.ts`，
+  改规则要三处一起改并重跑 `test/sidebar_native_test.dart` 的 23 组 TS 真值对拍。用户意图
+  （页签 / 搜索 / 折叠 / 展开）存 `sidebar/drawer_state.dart`，点一下先本地改再发 WebView。
+  只在 `runtime.store.ready && _webSidebar.deviceCount <= 1` 时接管：多设备聚合同样要每条端点的 state，
+  Dart 只连着自己那台，硬算会漏设备。弹层（新建会话 / 切后端）仍由 WebView 开，本地只负责列表。
+- **`header.running` 以 Dart 状态为准**：顶栏 chips 是 WebView 算的，但它被挂起时 `running` 会停在旧值，
+  合并后要按运行时状态覆盖，否则该显示「停止」的时候显示「发送」。
+- **Dart 发完消息要自己拉起后台看护**：`host_channel.startRunWatch()` → 宿主 `RunWatchService.start()`。
+  用户发完常常直接上滑回桌面，等 WebView 的 SSE 推到 running 再启动前台服务，进程可能已被冻结，
+  那一轮跑完就没有通知（Android 12+ 也不允许后台启动前台服务）。
 
 ## 改动完成后必须跑的验证
 

@@ -28,8 +28,10 @@ import '../common/app_sheet.dart';
 import '../host_channel.dart';
 import '../runtime/api_client.dart';
 import '../runtime/chat_runtime.dart';
+import '../sidebar/drawer_state.dart';
 import '../sidebar/sidebar_drawer.dart';
 import '../sidebar/sidebar_models.dart';
+import '../sidebar/sidebar_native.dart';
 import '../workspace/workspace_drawer.dart';
 import '../workspace/workspace_models.dart';
 import '../theme_mode.dart';
@@ -74,6 +76,14 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   ChatSnapshot _snapshot = const ChatSnapshot();
   SidebarSnapshot _sidebar = SidebarSnapshot.none;
+
+  /// WebView 推来的那份侧栏快照（回退用，也用来 seed 本地意图）。
+  SidebarSnapshot _webSidebar = SidebarSnapshot.none;
+
+  /// 抽屉自己的用户意图（页签 / 搜索词 / 折叠 / 展开）。
+  final DrawerState _drawer = DrawerState();
+
+  bool _drawerSeeded = false;
 
   /// WebView 推来的那份完整快照（控制面 + 数据面）。
   ///
@@ -179,6 +189,71 @@ class _ChatScreenState extends State<ChatScreen> {
     if (json.isEmpty) return;
     final SidebarSnapshot next = SidebarSnapshot.parse(json);
     if (!mounted) return;
+    _webSidebar = next;
+    if (!_drawerSeeded) {
+      _drawerSeeded = true;
+      // 页签与折叠是**持久**偏好（WebView 存在 localStorage 里），本地一上来是空的：
+      // 不捞过来的话「重启后折叠全丢」「页签跳回活动」。
+      _drawer.seedFrom(
+        tab: next.tab,
+        query: next.query,
+        collapsed: <String, bool>{
+          for (final SidebarSection section in next.sections)
+            if (section.kind == 'group' && section.projectId != null)
+              section.projectId!: section.collapsed,
+        },
+        expandedSessions: const <String, bool>{},
+        flatExpanded: <String>{
+          for (final SidebarSection section in next.sections)
+            if (section.kind == 'flat' && section.expanded) section.key,
+        },
+      );
+    }
+    _refreshSidebar();
+  }
+
+  /// 重算侧栏快照：能本地算就本地算，算不了退回 WebView 那份。
+  ///
+  /// 本地算的前提是**状态仓已经拿到过一份完整状态**（否则算出来是「一条会话都没有」，
+  /// 抽屉整个空掉）且**只有一台设备**（多设备聚合要每条端点的 state，Dart 只连着
+  /// 自己那台，硬算会漏掉别的设备）。
+  void _refreshSidebar() {
+    final ChatRuntime? runtime = _runtime;
+    final bool canNative = runtime != null && runtime.store.ready && _webSidebar.deviceCount <= 1;
+    if (!canNative) {
+      if (!identical(_sidebar, _webSidebar) && mounted) {
+        setState(() => _sidebar = _webSidebar);
+      }
+      return;
+    }
+    final String sessionId = _snapshot.sessionId;
+    final Map<String, Object?>? session =
+        sessionId.isEmpty ? null : runtime.store.session(sessionId);
+    final Map<String, Object?> computed = buildSidebarSnapshot(
+      _drawer.toInput(
+        state: runtime.store.state,
+        endpointId: 'native',
+        endpointLabel: '',
+        activeSessionId: sessionId.isEmpty ? null : sessionId,
+        activeProjectId: session == null ? null : '${session['projectId'] ?? ''}',
+        sheet: null,
+      ),
+    );
+    SidebarSnapshot next = SidebarSnapshot.fromJson(computed);
+    // 弹层状态归 WebView 管（新建会话 / 切换后端都是它开的），本地这份只负责列表。
+    final AppSheet? sheet = _webSidebar.sheet;
+    if (sheet != null) {
+      next = SidebarSnapshot(
+        tab: next.tab,
+        tabs: next.tabs,
+        query: next.query,
+        sections: next.sections,
+        deviceCount: next.deviceCount,
+        empty: next.empty,
+        sheet: sheet,
+      );
+    }
+    if (!mounted) return;
     setState(() => _sidebar = next);
   }
 
@@ -243,8 +318,25 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       sessionId: sessionId,
       onNotice: _notice,
+      // 自己发提问后立刻拉起后台看护：用户发完就走是常态，等 WebView 推 running
+      // 再启动前台服务，进程可能已经被冻结了（Android 12+ 也不允许后台启动）。
+      onKickRunWatch: () {
+        final String title = _snapshot.title;
+        unawaited(
+          startRunWatch(
+            baseUrl: widget.baseUrl,
+            token: widget.token,
+            titles: title.isEmpty ? const <String, String>{} : <String, String>{sessionId: title},
+          ),
+        );
+      },
     );
     runtime.addListener(_onRuntimeChanged);
+    // 侧栏要的是**整份状态**（会话列表 / 运行态 / 别的会话改名），而运行时的
+    // listener 只在「本会话」关心的字段变了才响。所以这里直接盯状态仓。
+    runtime.store.subscribe((Map<String, Object?> _) {
+      if (mounted) _onRuntimeChanged();
+    });
     _runtime = runtime;
     unawaited(runtime.start());
   }
@@ -257,6 +349,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     _applySnapshot();
+    _refreshSidebar();
     _runtimeFlush = Timer(const Duration(milliseconds: 40), () {
       _runtimeFlush = null;
       if (!mounted || !_runtimeDirty) return;
@@ -272,7 +365,22 @@ class _ChatScreenState extends State<ChatScreen> {
   Map<String, Object?> _mergedJson() {
     final ChatRuntime? runtime = _runtime;
     if (runtime == null || !runtime.historyLoaded) return _webJson;
-    return <String, Object?>{..._webJson, ...runtime.snapshotJson()};
+    final Map<String, Object?> merged = <String, Object?>{
+      ..._webJson,
+      ...runtime.snapshotJson(),
+    };
+    // 顶栏是 WebView 算的（chips / 能否插话 / 队列模式），但 `running` 得听运行时的：
+    // WebView 被挂起时它的状态会停在旧值上，按钮就会在该显示「停止」的时候显示「发送」。
+    final Object? header = merged['header'];
+    if (header is Map) {
+      final Map<String, Object?> patched = <String, Object?>{
+        for (final MapEntry<Object?, Object?> entry in header.entries)
+          str(entry.key): entry.value,
+      };
+      patched['running'] = merged['status'] == 'running';
+      merged['header'] = patched;
+    }
+    return merged;
   }
 
   void _applySnapshot() {
@@ -332,8 +440,24 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 只拦截「换会话」这一条：其余动作（页签、搜索、菜单）本来就是 Web 侧的事，
   /// 多插一手只会让两个真相源打架。
   void _onSidebarAction(Map<String, Object?> action) {
+    // 先本地落一次意图，抽屉立刻重算 —— 不必等 WebView 算完再推回来。
+    // 动作照旧转发：WebView 那边是回退路径，两边状态不能漂。
+    final String type = '${action['type'] ?? ''}';
+    switch (type) {
+      case 'toggleTab':
+        _drawer.toggleTab('${action['tab'] ?? ''}');
+      case 'search':
+        _drawer.setQuery('${action['query'] ?? ''}');
+      case 'toggleProject':
+        _drawer.toggleProject('${action['projectId'] ?? ''}');
+      case 'toggleSection':
+        _drawer.toggleSection('${action['key'] ?? ''}');
+    }
+    if (type == 'toggleTab' || type == 'search' || type == 'toggleProject' || type == 'toggleSection') {
+      _refreshSidebar();
+    }
     sendSidebarAction(action);
-    if ('${action['type']}' != 'openSession') return;
+    if (type != 'openSession') return;
     final String id = '${action['id'] ?? ''}';
     if (id.isEmpty || id == _snapshot.sessionId) return;
     setState(() {
@@ -344,6 +468,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _highlightId = '';
       _historyKeys.clear();
     });
+    _refreshSidebar();
   }
 
   void _setWorkspaceOpen(bool open) {
@@ -483,7 +608,9 @@ class _ChatScreenState extends State<ChatScreen> {
     // 只发图不写字时给服务端一句自然的话：/prompt 的 message 不能为空（与 WebView 版同口径）
     final String text = typed.isEmpty && _images.isNotEmpty ? '看下这张图' : typed;
     if (text.isEmpty) return;
-    final List<Map<String, Object?>> images = _images
+
+    final List<PickedImage> picked = List<PickedImage>.of(_images);
+    final List<Map<String, Object?>> images = picked
         .map(
           (PickedImage image) => <String, Object?>{
             'data': image.data,
@@ -491,22 +618,48 @@ class _ChatScreenState extends State<ChatScreen> {
           },
         )
         .toList(growable: false);
+    final List<String> dataUrls = picked.map((PickedImage image) => image.dataUrl).toList(growable: false);
+
     _composer.clear();
     _composerText = '';
     _composerHoldsTrigger = false;
     _composerFocus.unfocus();
-    setState(() {
-      _stick = true;
-      _images.clear();
-    });
-    await sendChatAction(<String, Object?>{
-      'type': 'send',
-      'text': text,
-      if (images.isNotEmpty) 'images': images,
-    });
-    // 写路径还在 WebView（那边有排队 / 计划模式等分支），历史由 Dart 这边重拉：
-    // 服务端落盘后才会有这条用户消息，不重拉就一直看不到自己刚发的那句。
-    _runtime?.notifyPromptSent();
+    setState(() => _stick = true);
+
+    final ChatRuntime? runtime = _runtime;
+    if (runtime == null || !runtime.historyLoaded) {
+      // 运行时还没起来（连不上 / 刚换会话）：退回 WebView 那条路，至少不会丢消息。
+      setState(() => _images.clear());
+      await sendChatAction(<String, Object?>{
+        'type': 'send',
+        'text': text,
+        if (images.isNotEmpty) 'images': images,
+      });
+      return;
+    }
+
+    // 计划模式与排队/插话都来自 WebView 那份顶栏快照 —— 那是唯一真相源，
+    // 这里只读。计划模式是**一次性**的：发完由下面那条 chip 动作把它关掉。
+    final ChatHeaderView header = _snapshot.header;
+    final bool planOn = header.chips.any((ChatChip chip) => chip.key == 'plan' && chip.active);
+    final bool accepted = await runtime.submit(
+      text,
+      images: images,
+      imageDataUrls: dataUrls,
+      planMode: planOn,
+      sendMode: header.sendMode,
+      canSteer: header.canSteer,
+    );
+    if (!mounted) return;
+    if (!accepted) {
+      // 被拒收 / 网络失败：图片留在输入框里，用户不用重新选一遍。
+      setState(() => _images
+        ..clear()
+        ..addAll(picked));
+      return;
+    }
+    setState(() => _images.clear());
+    if (planOn) await sendChatAction(<String, Object?>{'type': 'chip', 'key': 'plan'});
   }
 
   /// 选图：解码与压缩都在原生侧做，这里只收结果。

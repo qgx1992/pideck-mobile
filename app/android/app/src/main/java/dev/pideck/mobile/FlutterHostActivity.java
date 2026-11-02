@@ -208,6 +208,33 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
                 case "saveFile":
                     saveFileAsync(call, result);
                     break;
+                case "startRunWatch": {
+                    // Dart 侧自己发提问时，必须由它把后台看护拉起来：
+                    // 用户常常发完就上滑回桌面，等 WebView 的 SSE 推到 running 再启动
+                    // 前台服务时，进程可能已经被冻结（Android 12+ 也不允许后台启动）。
+                    Object args = call.arguments();
+                    String baseUrl = "";
+                    String token = "";
+                    String titles = "{}";
+                    if (args instanceof Map) {
+                        Map<?, ?> map = (Map<?, ?>) args;
+                        baseUrl = stringOf(map.get("baseUrl"));
+                        token = stringOf(map.get("token"));
+                        Object rawTitles = map.get("titles");
+                        if (rawTitles instanceof Map) {
+                            titles = new JSONObject((Map<?, ?>) rawTitles).toString();
+                        }
+                    }
+                    if (!baseUrl.isEmpty() && !token.isEmpty()) {
+                        RunWatchService.start(getApplicationContext(), baseUrl, token, titles);
+                    }
+                    result.success(null);
+                    break;
+                }
+                case "stopRunWatch":
+                    RunWatchService.stop(getApplicationContext());
+                    result.success(null);
+                    break;
                 case "openWebSheet": {
                     Object args = call.arguments();
                     Object raw = args instanceof Map ? ((Map<?, ?>) args).get("name") : null;

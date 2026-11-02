@@ -1391,3 +1391,73 @@ JS 被唤醒（`MainActivity` 已被 Flutter 页 pause）。
 `sendChatAction({'type': 'stop'|'respond'})`，WebView 那边照旧能处理。
 
 `send` 没动：计划模式注入、排队/插话、todo 归档、无会话自动建会话都在 `main.ts` 的 `send()` 里。
+
+### 0.2.12：`send` 与状态流 / 侧栏快照也交给 Dart
+
+0.2.11 之后聊天页上还剩三件事要绕回 WebView：发消息、整份环境状态（`/api/events`）、侧栏列表。
+它们的共同点是「WebView 被盖住时就没有人算」——用户从抽屉点会话、从项目里新建会话、或者只是
+切回来看到侧栏还停在十分钟前的样子，都是从这条路上冒出来的。这一版把三条一起搬进 Dart。
+
+**迁移的边界没有变**：Dart 只产数据面字段，控制面（`messageMenus` / `header` / `picker` /
+`suggestions` / `sheet` / `workspace` / `themeMode`）仍由 WebView 那份快照提供。合并照旧
+`{..._webJson, ...runtime.snapshotJson()}`，唯一的例外是 `header.running`：顶栏是 WebView 算的，
+它被挂起时那一格会停在旧值，所以合并后按运行时的 `status` 覆盖（否则该显示「停止」的时候显示「发送」）。
+
+#### 1. 发送：`ChatRuntime.submit()`
+
+逐条对应 `main.ts` 的 `send()`，顺序也照抄：只发图时 message 用 `看下这张图`（`/prompt` 的 message
+不能为空）→ `buildPlanSubmission()` 注入计划模式（一次性，发完要通知 WebView 把 chip 关掉）→
+`streamingBehaviorFor()`（只在运行中带，ACP 不支持插话时降级 `queue`）→ 乐观回显入 `_optimistic`
+→ `POST /prompt` → 失败按 `shouldRollbackRejection()` 决定收不收气泡。
+
+三个必须照抄的细节：
+
+- **`agentMessage` 是平铺的**。`client.sendPrompt` 把 `extra` 展开进 body 顶层
+  （`src/api/client.ts:559-572`），所以 Dart 侧写成 `{...extra}` 而不是 `{extra: {...}}`。
+  套一层服务端读不到，症状是计划模式静默失效——消息照发，但没有那条隐藏指令。
+- **发出到第一帧 `start` 之间要按「运行中」画**（`_awaitingTurn`）。这一段通常是 100–300ms，
+  按 `idle` 画会让发送键闪回可点、状态行闪一下「空闲」。
+- **乐观回显靠历史对账清，不是发送成功就删**。650ms 后重拉一次 `/messages`，最近三条里有同文本的
+  user 消息才把 `_optimistic` 摘掉；服务端回放慢的时候提前删会看到气泡消失再出现。
+
+#### 2. 状态流：`runtime/state_store.dart`
+
+`src/state/store.ts` 的逐条移植，接口一致：先 `refresh()` 对账（`/api/state` + ETag）再进
+`/api/events`，只吃 `event === "state"`；auth 错误停（`authRequired`）；协议不支持或连续失败 3 次
+降轮询（`pollMs`），另外 `onOpen` 时挂一条 `fallbackPollMs` 兜底轮询；重连退避 1s→15s。
+
+新增一个门禁 `store.ready`（拿到过至少一份完整状态）。它比「state 非空」严格：`normalizeStateJson()`
+对坏数据会造一份空状态，空不等于没数据。侧栏和标题都要过这道门，否则第一次启动会先画一帧空列表。
+
+#### 3. 侧栏快照：`sidebar/sidebar_native.dart`
+
+`buildSidebarSnapshot()` 是 `app/src/platform/flutter-sidebar.ts` 的逐字节移植（1050 行、零 import），
+33 个用例里有 23 组是 node 直接跑 TS 版生成 `JSON.stringify` 真值、Dart 逐字节对拍。移植时踩到的
+「JS 与 Dart 不一样」全部写在文件头注释里，其中最容易复发的三条：
+
+- `||` 与 `??` 不同：`title || "未命名会话"` 空串也要替换，`projectLabel ?? ""` 空串要保留；
+- **键序就是字节契约**：可选项 falsy 时整个键要消失，不能留 `null`；
+- JS 的 `sort` 自 ES2019 起稳定，Dart 的 `List.sort` 不稳定 —— 用下标兜底。
+
+用户意图（页签 / 搜索 / 折叠 / 展开）落在 `sidebar/drawer_state.dart`：点一下先本地改再发 WebView，
+不等回传。只在 `runtime.store.ready && _webSidebar.deviceCount <= 1` 时接管：多设备聚合要每台设备的
+`state`，Dart 只连着自己那台，硬算会漏设备 —— 这种情况直接回退 WebView 那份。弹层（新建会话 / 切后端）
+仍由 WebView 开，本地只负责列表。
+
+#### 4. 后台看护：Dart 自己拉起来
+
+`ChatRuntime.submit()` 成功后会经 `host_channel.startRunWatch()` 调宿主的 `RunWatchService.start()`。
+以前是 WebView 收到 `running` 帧才起前台服务，而用户发完常常直接上滑回桌面——进程被冻结之后
+那一轮跑完就没有通知了，Android 12+ 也不允许后台再启动前台服务。
+
+#### 测试
+
+- `flutter_module/test/runtime_prompt_test.dart`（11 项：计划模式隐藏消息逐字符、`streamingBehavior`、
+  拒收模板与回滚判定）
+- `flutter_module/test/runtime_submit_test.dart`（5 项，真开 `HttpServer`：发送体、乐观回显、
+  `agentMessage` 平铺、运行中 `followUp`、两种拒收）
+- `flutter_module/test/sidebar_native_test.dart`（33 项，含 23 组 TS 真值字节对拍）
+- `flutter_module/test/drawer_state_test.dart`（7 项：意图层 + 喂 `buildSidebarSnapshot()` 端到端）
+
+回退开关没变：`localStorage["pideck-native-chat"] = "off"` 之后聊天页只画 WebView 快照，
+发送 / 状态流 / 侧栏全部回到老路径。
