@@ -184,9 +184,18 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   带来，源头是 `src/ui/message-actions-model.ts` 的 `actionsForRole(role, backend)`
   （ACP 会话只剩「复制」）。Dart 只决定怎么画（danger 标红）与哪两步本地确认
   （删除二次确认、编辑输入框）—— 这两步的确认框原本在 WebView 里，被盖着看不见。
-- 用户点了聊天页的「返回网页版」就置 `chatUseWebView = true`，之后点侧栏会话直接 `openSession()`，
-  **不写 localStorage**（重启回默认的 Flutter 版）。改 `renderSidebarInner` 的 `onOpenSession` 时
+- **主界面是 Flutter 页，WebView 只当协议引擎**（0.2.1 起）：`bootstrap()` 连上后 `enterFlutterShell()`
+  直接把聊天页盖到整屏（`localStorage` 键 `pideck-flutter-shell`，值 `"flutter"` / `"web"`）。
+  壳可以换，`src/api/frames.ts` 的 reducer / SSE 解析**只能有一份**；Flutter 侧的动作必须落回
+  `dispatchFlutterChatAction` / `dispatchFlutterSidebarAction` 里的同一条 Web 路径，别在 Dart 里另写发送逻辑。
+- 用户点了聊天页的「返回网页版」就置 `chatUseWebView = true` 并 `setShellMode(false)`（写进 localStorage，
+  下次启动直接进网页版），之后点侧栏会话直接 `openSession()`。改 `renderSidebarInner` 的 `onOpenSession` 时
   必须保留 `onEndpoint(run, …)` 那层包装，否则多设备下会连错端点。
+- **盖住整屏的 Flutter 页必须处理返回键**（`PopScope`）：先收抽屉、再收面板，都收不掉才发 `exitApp`
+  （Web 侧 `CapacitorApp.exitApp()`）。Android 上没有任何兜底——不拦就直接 finish 掉整个 App。
+- 系统栏只在一处定义：`piSystemUiOverlayStyle(dark)`（`flutter_module/lib/app_theme.dart`），
+  由 `MaterialApp.builder` 的 `AnnotatedRegion` 下发；`SystemUiMode.edgeToEdge` + 透明栏 +
+  `ContrastEnforced: false`，否则系统补的遮罩色会让状态栏/手势条和主题对不上。
 - 文件落盘只允许走 `SavedFiles.save()`（`app/android/app/src/main/java/dev/pideck/mobile/SavedFiles.java`）：
   WebView 的 `FileSaverPlugin` 与 Flutter 通道的 `saveFile` 共用它。**不要**在任一入口另写一份
   MediaStore 代码 —— 两边规则一旦不同，就会出现「网页版能存、Flutter 版报错」。

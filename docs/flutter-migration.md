@@ -841,6 +841,56 @@ Dart 侧也无条件给「从列表移除」。搬迁移时先问一句「这条
 3. 需要角色色（`primaryContainer` 之类）时直接取 `colorScheme`，不要往 `PiColors` 里加字段。
 4. 迁移一个页面的顺序：先让它只用 `PiColors`（保证颜色跟随 M3），再把自绘控件换成 M3 控件，最后删掉自绘样式。
 
+## 0.2.1：把 Flutter 页变成主界面（shell 模式）
+
+0.1.x 的形态是「WebView 是 App，Flutter 是从网页版点进去的二级页」，所以无论迁了多少页，
+一启动看到的第一屏永远是网页版那个侧栏 + 顶栏 —— 这也正是 0.2.0 之后用户的第一句反馈。
+0.2.1 把关系倒过来：**Flutter 页盖住整屏当主界面，WebView 退到后台继续当协议引擎。**
+
+### 启动流程
+
+```
+MainActivity(WebView 起来，加载 pideck)
+  → bootstrap()：读配对 → connectAll() → 连上后 hideSplash()
+  → enterFlutterShell()：shellModeEnabled() 且没开着页 ? openFlutterChatPage(当前会话) : 什么都不做
+  → openFlutterPage("chat", id) 把 Flutter Activity 盖到最上面
+```
+
+于是：
+
+- 用户看到的第一屏是原生的会话列表抽屉 + 聊天页；
+- SSE、`ChatReducer`、发送链路、图床上传都还留在 WebView 里，Flutter 只画它推过来的快照，
+  **协议没有第二份实现**；
+- 点侧栏会话时 `openSession()` 照旧执行，`syncFlutterChat()` 把新快照推上去，Flutter 页不重建。
+
+### 退出与兜底
+
+| 用户动作 | 结果 |
+|---|---|
+| Flutter 页返回键 | `PopScope` 先收抽屉，再收选择面板，都收不掉就发 `exitApp` → Web 侧 `CapacitorApp.exitApp()` |
+| 点 AppBar 的「返回网页版」 | 发 `close` → `setShellMode(false)` 写进 `localStorage`，回到网页版，**以后启动也不再弹 Flutter** |
+| 某机型后台 WebView 被冻结（收不到流式帧） | 同上，退回网页版即可确认「是引擎被冻」而不是「Flutter 画错了」 |
+
+存储键 `pideck-flutter-shell`（`"flutter"` / `"web"`），只在用户主动选网页版时才写 `web`；
+`enterFlutterShell()` 打不开就自己 `setShellMode(false)`，不会卡在「两个界面都没起来」。
+
+### 系统栏 / 手势条
+
+`MaterialApp.builder` 包一层 `AnnotatedRegion<SystemUiOverlayStyle>`（值为 `piSystemUiOverlayStyle(dark)`），
+`main()` 里 `SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)`：
+
+- 状态栏与底部手势条都**透明**，内容延伸到系统栏后面（不再出现一条和主题不搭的灰条）；
+- 图标明暗跟着 `Theme.of(context).brightness` 走，跟随系统切换时会自动重算；
+- `ContrastEnforced: false` —— 否则系统会给透明栏补一层遮罩色，又变回「不是我的主题色」。
+
+### 判断准则
+
+1. **壳可以换，引擎不搬**：`src/api/frames.ts` 的 reducer / SSE 解析只留一份。
+2. 主界面由 Flutter 画，但**每个动作都要落回 Web 侧同一条路径**（`openFlutterChatPage`、`dispatchFlutterChatAction`，
+   而不是在 Dart 里自己造发送逻辑）。
+3. 任何「盖住整屏」的页面都必须处理返回键（`PopScope`），否则 Android 会直接 finish 掉整个 App。
+4. 系统栏样式一处定义（`piSystemUiOverlayStyle`），不要在每个页面里各写一份 `SystemChrome.setSystemUIOverlayStyle`。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：

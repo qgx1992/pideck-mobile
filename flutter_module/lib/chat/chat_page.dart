@@ -62,6 +62,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 历史条目的 key：`/history` 面板跳转要按消息 id 找到它再滚过去
   final Map<int, GlobalKey> _historyKeys = <int, GlobalKey>{};
   final TextEditingController _pickerSearch = TextEditingController();
+
   /// 当前面板的种类，用来判断要不要清空搜索框（换面板时清）
   String _pickerKind = '';
   final FocusNode _composerFocus = FocusNode();
@@ -75,9 +76,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _stick = true;
   String _lastRequestId = '';
   String _pendingDraft = '';
+
   /// 提问卡的输入框必须用常驻 controller：流式时每 40ms 会来一份新快照，
   /// 每次 build 新建一个 controller 会把光标和输入法状态一起冲掉。
   final TextEditingController _pendingController = TextEditingController();
+
   /// 多选中的临时选择：同样不能放在 build 里，否则每次重建都清空。
   final Set<String> _multiSelection = <String>{};
   final Map<String, Object?> _batchAnswers = <String, Object?>{};
@@ -85,7 +88,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// 聊天页发起的底部弹层（DSH 工具）：内容随快照原地更新。
   late final AppSheetHost _sheetHost = AppSheetHost(
-    sendPick: (String id) => sendChatAction(<String, Object?>{'type': 'sheetPick', 'id': id}),
+    sendPick: (String id) =>
+        sendChatAction(<String, Object?>{'type': 'sheetPick', 'id': id}),
     sendClose: () => sendChatAction(<String, Object?>{'type': 'sheetClose'}),
   );
 
@@ -142,7 +146,10 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final Object? raw = jsonDecode(json);
       if (raw is! Map) return;
-      decoded = raw.map((Object? key, Object? value) => MapEntry<String, Object?>(str(key), value));
+      decoded = raw.map(
+        (Object? key, Object? value) =>
+            MapEntry<String, Object?>(str(key), value),
+      );
     } catch (_) {
       return;
     }
@@ -208,10 +215,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final String text = typed.isEmpty && _images.isNotEmpty ? '看下这张图' : typed;
     if (text.isEmpty) return;
     final List<Map<String, Object?>> images = _images
-        .map((PickedImage image) => <String, Object?>{
-              'data': image.data,
-              'mimeType': image.mimeType,
-            })
+        .map(
+          (PickedImage image) => <String, Object?>{
+            'data': image.data,
+            'mimeType': image.mimeType,
+          },
+        )
         .toList(growable: false);
     _composer.clear();
     _composerText = '';
@@ -285,7 +294,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   dense: true,
                   title: Text(
                     action.label,
-                    style: TextStyle(color: action.danger ? c.danger : c.text, fontSize: 14),
+                    style: TextStyle(
+                      color: action.danger ? c.danger : c.text,
+                      fontSize: 14,
+                    ),
                   ),
                   onTap: () => Navigator.of(sheetContext).pop(action),
                 ),
@@ -344,14 +356,19 @@ class _ChatScreenState extends State<ChatScreen> {
         return AlertDialog(
           backgroundColor: c.surface,
           title: Text(title, style: TextStyle(color: c.text, fontSize: 15)),
-          content: Text(body, style: TextStyle(color: c.textSecondary, fontSize: 13)),
+          content: Text(
+            body,
+            style: TextStyle(color: c.textSecondary, fontSize: 13),
+          ),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
               child: Text('取消', style: TextStyle(color: c.textMuted)),
             ),
             FilledButton(
-              style: danger ? FilledButton.styleFrom(backgroundColor: c.danger) : null,
+              style: danger
+                  ? FilledButton.styleFrom(backgroundColor: c.danger)
+                  : null,
               onPressed: () => Navigator.of(dialogContext).pop(true),
               child: Text(confirmLabel),
             ),
@@ -363,7 +380,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<String?> _editText(String current) async {
-    final TextEditingController controller = TextEditingController(text: current);
+    final TextEditingController controller = TextEditingController(
+      text: current,
+    );
     final String? next = await showDialog<String>(
       context: context,
       builder: (BuildContext dialogContext) {
@@ -377,7 +396,10 @@ class _ChatScreenState extends State<ChatScreen> {
             maxLines: 8,
             minLines: 3,
             style: TextStyle(color: c.text, fontSize: 14),
-            decoration: InputDecoration(hintText: '内容不能为空', hintStyle: TextStyle(color: c.textMuted)),
+            decoration: InputDecoration(
+              hintText: '内容不能为空',
+              hintStyle: TextStyle(color: c.textMuted),
+            ),
           ),
           actions: <Widget>[
             TextButton(
@@ -441,9 +463,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 snapshot.statusText.isEmpty ? '运行中…' : snapshot.statusText,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context)
-                    .textTheme
-                    .labelSmall
+                style: Theme.of(context).textTheme.labelSmall
                     ?.copyWith(color: Theme.of(context).colorScheme.primary),
               ),
           ],
@@ -452,7 +472,8 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             tooltip: '刷新',
             icon: Icon(Icons.refresh_rounded, color: c.textMuted),
-            onPressed: () => sendChatAction(<String, Object?>{'type': 'refresh'}),
+            onPressed: () =>
+                sendChatAction(<String, Object?>{'type': 'refresh'}),
           ),
           IconButton(
             tooltip: '返回网页版',
@@ -461,55 +482,84 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: <Widget>[
-          _headerBar(c, snapshot.header),
-          Expanded(
-            child: bare && snapshot.suggestions.isNotEmpty
-                ? _emptyState(c, snapshot)
-                : Stack(
-              children: <Widget>[
-                ListView.builder(
-                  controller: _scroll,
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                  itemCount: historyCount + liveCount + 1,
-                  itemBuilder: (BuildContext context, int index) {
-                    if (index < historyCount) {
-                      return _HistoryTile(
-                        key: _historyKeys.putIfAbsent(index, () => GlobalKey()),
-                        item: snapshot.history[index],
-                        highlighted: _highlightId.isNotEmpty && snapshot.history[index].id == _highlightId,
-                        onLongPress: () => _showMessageMenu(snapshot.history[index]),
-                      );
-                    }
-                    final int blockIndex = index - historyCount;
-                    if (live != null && blockIndex < live.blocks.length) {
-                      final ChatBlockView block = live.blocks[blockIndex];
-                      return _BlockTile(key: ValueKey<String>('b:${block.key}'), block: block);
-                    }
-                    return _footer(context, c, snapshot);
-                  },
-                ),
-                if (!_stick)
-                  Positioned(
-                    right: 12,
-                    bottom: 12,
-                    child: FloatingActionButton.small(
-                      heroTag: 'chat-jump-bottom',
-                      backgroundColor: c.surface,
-                      foregroundColor: c.text,
-                      onPressed: _jumpToBottom,
-                      child: const Icon(Icons.arrow_downward_rounded),
+      body: PopScope(
+        canPop: false,
+        // 返回键：先收最上面一层（抽屉 / 选择面板），什么都收不掉才算「要退出」。
+        // shell 模式下这一页盖着整屏，退回去只会看到空白的网页版，所以交给 Web 侧退 App。
+        onPopInvokedWithResult: (bool didPop, Object? result) {
+          if (didPop) return;
+          final ScaffoldState? scaffold = _scaffoldKey.currentState;
+          if (scaffold != null && scaffold.isDrawerOpen) {
+            scaffold.closeDrawer();
+            return;
+          }
+          if (_snapshot.picker != null) {
+            sendChatAction(<String, Object?>{'type': 'closePicker'});
+            return;
+          }
+          sendChatAction(<String, Object?>{'type': 'exitApp'});
+        },
+        child: Column(
+          children: <Widget>[
+            _headerBar(c, snapshot.header),
+            Expanded(
+              child: bare && snapshot.suggestions.isNotEmpty
+                  ? _emptyState(c, snapshot)
+                  : Stack(
+                      children: <Widget>[
+                        ListView.builder(
+                          controller: _scroll,
+                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                          itemCount: historyCount + liveCount + 1,
+                          itemBuilder: (BuildContext context, int index) {
+                            if (index < historyCount) {
+                              return _HistoryTile(
+                                key: _historyKeys.putIfAbsent(
+                                  index,
+                                  () => GlobalKey(),
+                                ),
+                                item: snapshot.history[index],
+                                highlighted:
+                                    _highlightId.isNotEmpty &&
+                                    snapshot.history[index].id == _highlightId,
+                                onLongPress: () =>
+                                    _showMessageMenu(snapshot.history[index]),
+                              );
+                            }
+                            final int blockIndex = index - historyCount;
+                            if (live != null &&
+                                blockIndex < live.blocks.length) {
+                              final ChatBlockView block =
+                                  live.blocks[blockIndex];
+                              return _BlockTile(
+                                key: ValueKey<String>('b:${block.key}'),
+                                block: block,
+                              );
+                            }
+                            return _footer(context, c, snapshot);
+                          },
+                        ),
+                        if (!_stick)
+                          Positioned(
+                            right: 12,
+                            bottom: 12,
+                            child: FloatingActionButton.small(
+                              heroTag: 'chat-jump-bottom',
+                              backgroundColor: c.surface,
+                              foregroundColor: c.text,
+                              onPressed: _jumpToBottom,
+                              child: const Icon(Icons.arrow_downward_rounded),
+                            ),
+                          ),
+                      ],
                     ),
-                  ),
-              ],
             ),
-          ),
-          if (snapshot.picker != null)
-            _pickerPanel(c, snapshot.picker!)
-          else
-            _composerBar(c, snapshot),
-        ],
+            if (snapshot.picker != null)
+              _pickerPanel(c, snapshot.picker!)
+            else
+              _composerBar(c, snapshot),
+          ],
+        ),
       ),
     );
   }
@@ -530,7 +580,9 @@ class _ChatScreenState extends State<ChatScreen> {
               children: <Widget>[
                 CircleAvatar(
                   radius: 44,
-                  backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                  backgroundColor: Theme.of(context)
+                      .colorScheme
+                      .primaryContainer,
                   child: Icon(
                     Icons.chat_bubble_outline_rounded,
                     size: 36,
@@ -539,9 +591,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 const SizedBox(height: 20),
                 Text(
-                  snapshot.emptyTitle.isEmpty ? '开始使用你的 PiDeck' : snapshot.emptyTitle,
+                  snapshot.emptyTitle.isEmpty
+                      ? '开始使用你的 PiDeck'
+                      : snapshot.emptyTitle,
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: c.text),
+                  style: Theme.of(context).textTheme.headlineSmall
+                      ?.copyWith(color: c.text),
                 ),
                 if (snapshot.emptySubtitle.isNotEmpty)
                   Padding(
@@ -549,7 +604,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Text(
                       snapshot.emptySubtitle,
                       textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: c.textMuted),
+                      style: Theme.of(context).textTheme.bodyMedium
+                          ?.copyWith(color: c.textMuted),
                     ),
                   ),
                 const SizedBox(height: 20),
@@ -558,7 +614,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   runSpacing: 8,
                   alignment: WrapAlignment.center,
                   children: <Widget>[
-                    for (final String prompt in snapshot.suggestions) _suggestionChip(c, prompt),
+                    for (final String prompt in snapshot.suggestions)
+                      _suggestionChip(c, prompt),
                   ],
                 ),
               ],
@@ -572,36 +629,43 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _footer(BuildContext context, PiColors c, ChatSnapshot snapshot) {
     final List<Widget> children = <Widget>[];
     if (snapshot.loading && !snapshot.hasContent) {
-      children.add(Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(strokeWidth: 2, color: c.accent),
-            ),
-            const SizedBox(width: 8),
-            Text('加载中…', style: TextStyle(color: c.textMuted, fontSize: 13)),
-          ],
+      children.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: c.accent,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text('加载中…', style: TextStyle(color: c.textMuted, fontSize: 13)),
+            ],
+          ),
         ),
-      ));
+      );
     }
     if (snapshot.error != null) {
       children.add(_errorCard(c, snapshot.error!));
     }
     if (snapshot.empty != null && !snapshot.hasContent) {
-      children.add(Padding(
-        padding: const EdgeInsets.symmetric(vertical: 32),
-        child: Center(
-          child: Text(
-            snapshot.empty!,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: c.textMuted, fontSize: 13, height: 1.5),
+      children.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 32),
+          child: Center(
+            child: Text(
+              snapshot.empty!,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: c.textMuted, fontSize: 13, height: 1.5),
+            ),
           ),
         ),
-      ));
+      );
     }
     if (snapshot.pending != null) {
       children.add(_pendingCard(context, c, snapshot.pending!));
@@ -610,25 +674,37 @@ class _ChatScreenState extends State<ChatScreen> {
     if (perf != null) {
       final List<String> chips = <String>[
         if (perf.ttftMs != null) '首字 ${_fmtDuration(perf.ttftMs!)}',
-        if (perf.streamingTps != null) '${perf.streamingTps!.toStringAsFixed(1)} tok/s',
-        if (perf.averageTps != null) '均 ${perf.averageTps!.toStringAsFixed(1)} tok/s',
+        if (perf.streamingTps != null)
+          '${perf.streamingTps!.toStringAsFixed(1)} tok/s',
+        if (perf.averageTps != null)
+          '均 ${perf.averageTps!.toStringAsFixed(1)} tok/s',
         if (perf.outputTokens != null) '${perf.outputTokens} tokens',
       ];
       if (chips.isNotEmpty) {
-        children.add(Padding(
-          padding: const EdgeInsets.only(top: 4, bottom: 4),
-          child: Wrap(
-            spacing: 6,
-            runSpacing: 4,
-            children: chips
-                .map((String text) => Text(text, style: TextStyle(fontSize: 11, color: c.textMuted)))
-                .toList(growable: false),
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 4),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: chips
+                  .map(
+                    (String text) => Text(
+                      text,
+                      style: TextStyle(fontSize: 11, color: c.textMuted),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
           ),
-        ));
+        );
       }
     }
     if (children.isEmpty) return const SizedBox(height: 4);
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
+    );
   }
 
   Widget _errorCard(PiColors c, ChatErrorInfo error) {
@@ -645,21 +721,36 @@ class _ChatScreenState extends State<ChatScreen> {
         children: <Widget>[
           Text(
             error.title.isEmpty ? '出错了' : error.title,
-            style: TextStyle(color: c.danger, fontWeight: FontWeight.w600, fontSize: 13.5),
+            style: TextStyle(
+              color: c.danger,
+              fontWeight: FontWeight.w600,
+              fontSize: 13.5,
+            ),
           ),
           if (error.detail.isNotEmpty) ...<Widget>[
             const SizedBox(height: 4),
-            SelectableText(error.detail, style: TextStyle(color: c.textMuted, fontSize: 11.5)),
+            SelectableText(
+              error.detail,
+              style: TextStyle(color: c.textMuted, fontSize: 11.5),
+            ),
           ],
           if (error.hint.isNotEmpty) ...<Widget>[
             const SizedBox(height: 6),
-            Text(error.hint, style: TextStyle(color: c.textSecondary, fontSize: 12, height: 1.45)),
+            Text(
+              error.hint,
+              style: TextStyle(
+                color: c.textSecondary,
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
           ],
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerRight,
             child: TextButton(
-              onPressed: () => sendChatAction(<String, Object?>{'type': 'refresh'}),
+              onPressed: () =>
+                  sendChatAction(<String, Object?>{'type': 'refresh'}),
               child: const Text('重试'),
             ),
           ),
@@ -675,7 +766,9 @@ class _ChatScreenState extends State<ChatScreen> {
         .map((String value) => ChatBatchOption(label: value, value: value))
         .toList(growable: false);
     // PiDeck 在 select 没有选项时会降级成 input（`chat-view.ts:665` 同口径）
-    final String method = pending.method == 'select' && options.isEmpty ? 'input' : pending.method;
+    final String method = pending.method == 'select' && options.isEmpty
+        ? 'input'
+        : pending.method;
 
     final Widget body;
     if (method == 'batch_ask' && pending.batchQuestions.isNotEmpty) {
@@ -728,7 +821,8 @@ class _ChatScreenState extends State<ChatScreen> {
           Align(
             alignment: Alignment.centerRight,
             child: FilledButton(
-              onPressed: () => _respond(<String, Object?>{'value': _pendingDraft.trim()}),
+              onPressed: () =>
+                  _respond(<String, Object?>{'value': _pendingDraft.trim()}),
               child: Text(_pendingDraft.trim().isEmpty ? '留空提交' : '提交'),
             ),
           ),
@@ -752,11 +846,22 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Text('AI 提问', style: TextStyle(fontSize: 10.5, letterSpacing: 0.6, color: c.accent)),
+          Text(
+            'AI 提问',
+            style: TextStyle(
+              fontSize: 10.5,
+              letterSpacing: 0.6,
+              color: c.accent,
+            ),
+          ),
           const SizedBox(height: 4),
           Text(
             pending.title.isEmpty ? '需要你的确认' : pending.title,
-            style: TextStyle(color: c.text, fontSize: 14, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              color: c.text,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const SizedBox(height: 10),
           body,
@@ -765,7 +870,10 @@ class _ChatScreenState extends State<ChatScreen> {
             alignment: Alignment.centerLeft,
             child: TextButton(
               onPressed: () => _respond(<String, Object?>{'cancelled': true}),
-              child: Text('取消', style: TextStyle(color: c.textMuted, fontSize: 12.5)),
+              child: Text(
+                '取消',
+                style: TextStyle(color: c.textMuted, fontSize: 12.5),
+              ),
             ),
           ),
         ],
@@ -773,7 +881,12 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _selectBody(BuildContext context, PiColors c, ChatPending pending, List<ChatBatchOption> options) {
+  Widget _selectBody(
+    BuildContext context,
+    PiColors c,
+    ChatPending pending,
+    List<ChatBatchOption> options,
+  ) {
     final Set<String> selected = _multiSelection;
 
     if (!pending.multiple) {
@@ -788,14 +901,21 @@ class _ChatScreenState extends State<ChatScreen> {
                   alignment: Alignment.centerLeft,
                   side: BorderSide(color: c.divider),
                   foregroundColor: c.text,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                 ),
-                onPressed: () => _respond(<String, Object?>{'value': option.value}),
+                onPressed: () =>
+                    _respond(<String, Object?>{'value': option.value}),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    Text(option.label, style: TextStyle(color: c.text, fontSize: 13.5)),
+                    Text(
+                      option.label,
+                      style: TextStyle(color: c.text, fontSize: 13.5),
+                    ),
                     if (option.description.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
@@ -825,10 +945,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   style: OutlinedButton.styleFrom(
                     alignment: Alignment.centerLeft,
                     side: BorderSide(
-                      color: selected.contains(option.value) ? c.accent : c.divider,
+                      color: selected.contains(option.value)
+                          ? c.accent
+                          : c.divider,
                     ),
                     foregroundColor: c.text,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                   ),
                   onPressed: () => setState(() {
                     if (selected.contains(option.value)) {
@@ -844,10 +969,17 @@ class _ChatScreenState extends State<ChatScreen> {
                             ? Icons.check_box_rounded
                             : Icons.check_box_outline_blank_rounded,
                         size: 16,
-                        color: selected.contains(option.value) ? c.accent : c.textMuted,
+                        color: selected.contains(option.value)
+                            ? c.accent
+                            : c.textMuted,
                       ),
                       const SizedBox(width: 8),
-                      Expanded(child: Text(option.label, style: TextStyle(color: c.text, fontSize: 13.5))),
+                      Expanded(
+                        child: Text(
+                          option.label,
+                          style: TextStyle(color: c.text, fontSize: 13.5),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -857,7 +989,9 @@ class _ChatScreenState extends State<ChatScreen> {
               child: FilledButton(
                 onPressed: selected.isEmpty
                     ? null
-                    : () => _respond(<String, Object?>{'value': selected.join('、')}),
+                    : () => _respond(<String, Object?>{
+                        'value': selected.join('、'),
+                      }),
                 child: const Text('提交'),
               ),
             ),
@@ -900,7 +1034,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 提交格式与 Web 侧一致（`batchAnswerPayload`），不在这里另发明一种。
   Widget _batchBody(BuildContext context, PiColors c, ChatPending pending) {
     final List<ChatBatchQuestion> questions = pending.batchQuestions;
-    final int answered = questions.where((ChatBatchQuestion q) => _batchAnswers.containsKey(q.id)).length;
+    final int answered = questions
+        .where((ChatBatchQuestion q) => _batchAnswers.containsKey(q.id))
+        .length;
 
     return StatefulBuilder(
       builder: (BuildContext context, void Function(void Function()) setLocal) {
@@ -919,12 +1055,21 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(question.question, style: TextStyle(fontSize: 12.5, color: c.textSecondary)),
+                      Text(
+                        question.question,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: c.textSecondary,
+                        ),
+                      ),
                       Text(
                         _batchAnswers.containsKey(question.id)
-                            ? (batchAnswerLabel(_batchAnswers[question.id]).isEmpty
-                                ? '（留空）'
-                                : batchAnswerLabel(_batchAnswers[question.id]))
+                            ? (batchAnswerLabel(_batchAnswers[question.id])
+                                      .isEmpty
+                                  ? '（留空）'
+                                  : batchAnswerLabel(
+                                      _batchAnswers[question.id],
+                                    ))
                             : '未回答',
                         style: TextStyle(fontSize: 13, color: c.text),
                       ),
@@ -942,7 +1087,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     onPressed: answered < questions.length
                         ? null
                         : () {
-                            final String payload = batchAnswerPayload(questions, _batchAnswers);
+                            final String payload = batchAnswerPayload(
+                              questions,
+                              _batchAnswers,
+                            );
                             _respond(<String, Object?>{'value': payload});
                           },
                     child: Text(answered < questions.length ? '还有未回答' : '提交'),
@@ -970,11 +1118,19 @@ class _ChatScreenState extends State<ChatScreen> {
                     if (question.header.isNotEmpty)
                       Text(
                         question.header,
-                        style: TextStyle(fontSize: 10.5, color: c.accent, letterSpacing: 0.5),
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: c.accent,
+                          letterSpacing: 0.5,
+                        ),
                       ),
                     Text(
                       question.question,
-                      style: TextStyle(fontSize: 13, color: c.text, fontWeight: FontWeight.w500),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: c.text,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                     const SizedBox(height: 6),
                     if (question.kind == 'confirm')
@@ -984,7 +1140,9 @@ class _ChatScreenState extends State<ChatScreen> {
                             Padding(
                               padding: const EdgeInsets.only(right: 8),
                               child: OutlinedButton(
-                                onPressed: () => setLocal(() => _batchAnswers[question.id] = answer),
+                                onPressed: () => setLocal(
+                                  () => _batchAnswers[question.id] = answer,
+                                ),
                                 child: Text(answer ? '是' : '否'),
                               ),
                             ),
@@ -994,8 +1152,13 @@ class _ChatScreenState extends State<ChatScreen> {
                       TextField(
                         style: TextStyle(color: c.text, fontSize: 13),
                         decoration: InputDecoration(
-                          hintText: question.placeholder.isEmpty ? '输入回答…' : question.placeholder,
-                          hintStyle: TextStyle(color: c.textMuted, fontSize: 12.5),
+                          hintText: question.placeholder.isEmpty
+                              ? '输入回答…'
+                              : question.placeholder,
+                          hintStyle: TextStyle(
+                            color: c.textMuted,
+                            fontSize: 12.5,
+                          ),
                           filled: true,
                           fillColor: c.surfaceAlt,
                           isDense: true,
@@ -1004,37 +1167,45 @@ class _ChatScreenState extends State<ChatScreen> {
                             borderSide: BorderSide.none,
                           ),
                         ),
-                        onChanged: (String value) => _batchAnswers[question.id] = value,
+                        onChanged: (String value) =>
+                            _batchAnswers[question.id] = value,
                       )
                     else
                       Wrap(
                         spacing: 6,
                         runSpacing: 6,
-                        children: question.options.map((ChatBatchOption option) {
-                          final Object? current = _batchAnswers[question.id];
-                          final bool picked = question.multiple
-                              ? (current is List && current.contains(option.value))
-                              : current == option.value;
-                          return ChoiceChip(
-                            label: Text(option.label, style: const TextStyle(fontSize: 12.5)),
-                            selected: picked,
-                            onSelected: (bool on) => setLocal(() {
-                              if (!question.multiple) {
-                                _batchAnswers[question.id] = option.value;
-                                return;
-                              }
-                              final List<String> list = current is List
-                                  ? current.map(str).toList()
-                                  : <String>[];
-                              if (on) {
-                                list.add(option.value);
-                              } else {
-                                list.remove(option.value);
-                              }
-                              _batchAnswers[question.id] = list;
-                            }),
-                          );
-                        }).toList(growable: false),
+                        children: question.options
+                            .map((ChatBatchOption option) {
+                              final Object? current =
+                                  _batchAnswers[question.id];
+                              final bool picked = question.multiple
+                                  ? (current is List &&
+                                        current.contains(option.value))
+                                  : current == option.value;
+                              return ChoiceChip(
+                                label: Text(
+                                  option.label,
+                                  style: const TextStyle(fontSize: 12.5),
+                                ),
+                                selected: picked,
+                                onSelected: (bool on) => setLocal(() {
+                                  if (!question.multiple) {
+                                    _batchAnswers[question.id] = option.value;
+                                    return;
+                                  }
+                                  final List<String> list = current is List
+                                      ? current.map(str).toList()
+                                      : <String>[];
+                                  if (on) {
+                                    list.add(option.value);
+                                  } else {
+                                    list.remove(option.value);
+                                  }
+                                  _batchAnswers[question.id] = list;
+                                }),
+                              );
+                            })
+                            .toList(growable: false),
                       ),
                   ],
                 ),
@@ -1042,7 +1213,9 @@ class _ChatScreenState extends State<ChatScreen> {
             Align(
               alignment: Alignment.centerRight,
               child: OutlinedButton(
-                onPressed: answered == 0 ? null : () => setLocal(() => _batchReview = true),
+                onPressed: answered == 0
+                    ? null
+                    : () => setLocal(() => _batchReview = true),
                 child: const Text('审阅并提交'),
               ),
             ),
@@ -1061,32 +1234,44 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _headerBar(PiColors c, ChatHeaderView header) {
     final List<Widget> chips = <Widget>[];
     for (final ChatChip chip in header.chips) {
-      chips.add(_headerChip(
-        c,
-        label: chip.label,
-        muted: chip.muted,
-        active: chip.active,
-        onTap: () => sendChatAction(<String, Object?>{'type': 'chip', 'key': chip.key}),
-      ));
+      chips.add(
+        _headerChip(
+          c,
+          label: chip.label,
+          muted: chip.muted,
+          active: chip.active,
+          onTap: () => sendChatAction(<String, Object?>{
+            'type': 'chip',
+            'key': chip.key,
+          }),
+        ),
+      );
     }
     final ChatContextChip? context = header.context;
     if (context != null) {
-      chips.add(_headerChip(
-        c,
-        label: context.compacting ? '压缩中…' : '${context.percent}%',
-        muted: !context.overflow && context.percent < 60,
-        active: context.overflow,
-        onTap: () => sendChatAction(<String, Object?>{'type': 'context'}),
-      ));
+      chips.add(
+        _headerChip(
+          c,
+          label: context.compacting ? '压缩中…' : '${context.percent}%',
+          muted: !context.overflow && context.percent < 60,
+          active: context.overflow,
+          onTap: () => sendChatAction(<String, Object?>{'type': 'context'}),
+        ),
+      );
     }
     if (header.showSendMode) {
-      chips.add(_headerChip(
-        c,
-        label: header.sendMode == 'steer' ? '插话' : '排队',
-        onTap: () => sendChatAction(<String, Object?>{'type': 'sendMode'}),
-      ));
+      chips.add(
+        _headerChip(
+          c,
+          label: header.sendMode == 'steer' ? '插话' : '排队',
+          onTap: () => sendChatAction(<String, Object?>{'type': 'sendMode'}),
+        ),
+      );
     }
-    if (chips.isEmpty && header.meta.isEmpty && header.todo == null && header.subagents == null) {
+    if (chips.isEmpty &&
+        header.meta.isEmpty &&
+        header.todo == null &&
+        header.subagents == null) {
       return const SizedBox.shrink();
     }
     final ChatTodoSummary? todo = header.todo;
@@ -1107,7 +1292,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 style: TextStyle(fontSize: 11.5, color: c.textMuted),
               ),
             ),
-          if (chips.isNotEmpty) Wrap(spacing: 6, runSpacing: 6, children: chips),
+          if (chips.isNotEmpty)
+            Wrap(spacing: 6, runSpacing: 6, children: chips),
           if (todo != null) _todoRow(c, todo),
           if (subagents != null)
             Padding(
@@ -1165,7 +1351,9 @@ class _ChatScreenState extends State<ChatScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           InkWell(
-            onTap: expandable ? () => setState(() => _todoExpanded = !_todoExpanded) : null,
+            onTap: expandable
+                ? () => setState(() => _todoExpanded = !_todoExpanded)
+                : null,
             borderRadius: BorderRadius.circular(6),
             child: Row(
               children: <Widget>[
@@ -1179,7 +1367,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 if (expandable)
                   Icon(
-                    _todoExpanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                    _todoExpanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
                     size: 14,
                     color: c.textMuted,
                   ),
@@ -1206,8 +1396,12 @@ class _ChatScreenState extends State<ChatScreen> {
                               style: TextStyle(
                                 fontSize: 11.5,
                                 height: 1.35,
-                                color: item.status == 'completed' ? c.textMuted : c.textSecondary,
-                                decoration: item.status == 'completed' ? TextDecoration.lineThrough : null,
+                                color: item.status == 'completed'
+                                    ? c.textMuted
+                                    : c.textSecondary,
+                                decoration: item.status == 'completed'
+                                    ? TextDecoration.lineThrough
+                                    : null,
                                 decorationColor: c.textMuted,
                               ),
                             ),
@@ -1259,17 +1453,28 @@ class _ChatScreenState extends State<ChatScreen> {
     bool active = false,
   }) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    final Color color = active ? scheme.onSecondaryContainer : (muted ? c.textMuted : c.textSecondary);
+    final Color color = active
+        ? scheme.onSecondaryContainer
+        : (muted ? c.textMuted : c.textSecondary);
     // 用真的 M3 组件，不要继续手画胶囊：ActionChip 自带涟漪、无障碍语义、
     // 跟随 chipTheme 的尺寸与形状，也才有"原生控件"的手感。
     return ActionChip(
       onPressed: onTap,
       visualDensity: VisualDensity.compact,
       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      backgroundColor: active ? scheme.secondaryContainer : scheme.surfaceContainerHigh,
+      backgroundColor: active
+          ? scheme.secondaryContainer
+          : scheme.surfaceContainerHigh,
       side: BorderSide.none,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      label: Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: active ? FontWeight.w600 : FontWeight.w500)),
+      label: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          color: color,
+          fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+        ),
+      ),
     );
   }
 
@@ -1292,7 +1497,11 @@ class _ChatScreenState extends State<ChatScreen> {
       sendChatAction(<String, Object?>{'type': 'closePicker'});
       return;
     }
-    sendChatAction(<String, Object?>{'type': 'pickerSelect', 'kind': picker.kind, 'id': tap.itemId});
+    sendChatAction(<String, Object?>{
+      'type': 'pickerSelect',
+      'kind': picker.kind,
+      'id': tap.itemId,
+    });
   }
 
   /// 滚到某条历史消息，并高亮 1.4 秒。
@@ -1302,7 +1511,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 若包含目标就收敛，否则按目标在中点之上/之下砍半。单调性严格成立（下标随偏移单调），
   /// 一般 3~5 跳就能落到目标附近，比按「平均高度 × 下标」估算稳得多。
   Future<void> _jumpToHistoryMessage(String id) async {
-    final int target = _snapshot.history.indexWhere((ChatHistoryItem item) => item.id == id);
+    final int target = _snapshot.history.indexWhere(
+      (ChatHistoryItem item) => item.id == id,
+    );
     if (target < 0) {
       _notice('这条消息不在已加载范围内，先向上滚动加载更早的历史');
       return;
@@ -1364,7 +1575,11 @@ class _ChatScreenState extends State<ChatScreen> {
   void _insertComposerText(String text) {
     final bool replaceAll = _composerHoldsTrigger;
     _composerHoldsTrigger = false;
-    _composer.value = insertIntoComposer(_composer.value, text, replaceAll: replaceAll);
+    _composer.value = insertIntoComposer(
+      _composer.value,
+      text,
+      replaceAll: replaceAll,
+    );
     _composerText = _composer.value.text;
     _composerFocus.requestFocus();
     setState(() {});
@@ -1387,7 +1602,9 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     if (trigger == null) return;
     _composerHoldsTrigger = true;
-    sendChatAction(<String, Object?>{'type': trigger == '/' ? 'slash' : 'mention'});
+    sendChatAction(<String, Object?>{
+      'type': trigger == '/' ? 'slash' : 'mention',
+    });
   }
 
   /// 选择面板（模型 / 思考 / 安全 / 提示词 / 上下文）。
@@ -1410,58 +1627,73 @@ class _ChatScreenState extends State<ChatScreen> {
     final List<ChatPickerItem> items = query.isEmpty
         ? picker.items
         : picker.items
-            .where((ChatPickerItem item) =>
-                item.label.toLowerCase().contains(query) ||
-                item.description.toLowerCase().contains(query))
-            .toList(growable: false);
+              .where(
+                (ChatPickerItem item) =>
+                    item.label.toLowerCase().contains(query) ||
+                    item.description.toLowerCase().contains(query),
+              )
+              .toList(growable: false);
 
     final List<Widget> rows = <Widget>[];
     String section = '';
     for (final ChatPickerItem item in items) {
       if (item.section.isNotEmpty && item.section != section) {
         section = item.section;
-        rows.add(Padding(
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
-          child: Text(section, style: TextStyle(fontSize: 11, color: c.textMuted)),
-        ));
+        rows.add(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+            child: Text(
+              section,
+              style: TextStyle(fontSize: 11, color: c.textMuted),
+            ),
+          ),
+        );
       }
-      rows.add(InkWell(
-        key: ValueKey<String>('picker:${picker.kind}:${item.id}'),
-        onTap: () => _onPickerTap(picker, item),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
-            children: <Widget>[
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      item.label,
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        color: item.danger ? c.danger : c.text,
-                        fontWeight: item.selected ? FontWeight.w600 : FontWeight.w400,
-                      ),
-                    ),
-                    if (item.description.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Text(
-                          item.description,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 11.5, color: c.textMuted),
+      rows.add(
+        InkWell(
+          key: ValueKey<String>('picker:${picker.kind}:${item.id}'),
+          onTap: () => _onPickerTap(picker, item),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        item.label,
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          color: item.danger ? c.danger : c.text,
+                          fontWeight: item.selected
+                              ? FontWeight.w600
+                              : FontWeight.w400,
                         ),
                       ),
-                  ],
+                      if (item.description.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            item.description,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: c.textMuted,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-              if (item.selected) Icon(Icons.check_rounded, size: 16, color: c.accent),
-            ],
+                if (item.selected)
+                  Icon(Icons.check_rounded, size: 16, color: c.accent),
+              ],
+            ),
           ),
         ),
-      ));
+      );
     }
 
     return Container(
@@ -1481,13 +1713,23 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: Text(
                       picker.title,
-                      style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: c.text),
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: c.text,
+                      ),
                     ),
                   ),
                   IconButton(
                     tooltip: '关闭',
-                    icon: Icon(Icons.close_rounded, size: 18, color: c.textMuted),
-                    onPressed: () => sendChatAction(<String, Object?>{'type': 'closePicker'}),
+                    icon: Icon(
+                      Icons.close_rounded,
+                      size: 18,
+                      color: c.textMuted,
+                    ),
+                    onPressed: () => sendChatAction(<String, Object?>{
+                      'type': 'closePicker',
+                    }),
                   ),
                 ],
               ),
@@ -1519,17 +1761,19 @@ class _ChatScreenState extends State<ChatScreen> {
                       borderRadius: BorderRadius.circular(10),
                       borderSide: BorderSide.none,
                     ),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
                   ),
-                  onSubmitted: (String value) => sendChatAction(
-                    <String, Object?>{
-                      'type': 'pickerQuery',
-                      'kind': picker.kind,
-                      'query': value,
-                      // 原样带回：@ 提及要靠它留在当前目录
-                      'context': picker.context,
-                    },
-                  ),
+                  onSubmitted: (String value) =>
+                      sendChatAction(<String, Object?>{
+                        'type': 'pickerQuery',
+                        'kind': picker.kind,
+                        'query': value,
+                        // 原样带回：@ 提及要靠它留在当前目录
+                        'context': picker.context,
+                      }),
                 ),
               ),
             if (rows.isEmpty)
@@ -1576,7 +1820,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   IconButton.filledTonal(
                     tooltip: '添加图片',
                     visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.add_photo_alternate_outlined, size: 20),
+                    icon: const Icon(
+                      Icons.add_photo_alternate_outlined,
+                      size: 20,
+                    ),
                     onPressed: _images.length >= _maxImages ? null : _pickImage,
                   ),
                   if (snapshot.header.promptCount > 0) ...<Widget>[
@@ -1585,7 +1832,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       tooltip: '提示词模板',
                       visualDensity: VisualDensity.compact,
                       icon: const Icon(Icons.bolt_outlined, size: 20),
-                      onPressed: () => sendChatAction(<String, Object?>{'type': 'prompts'}),
+                      onPressed: () =>
+                          sendChatAction(<String, Object?>{'type': 'prompts'}),
                     ),
                   ],
                   const SizedBox(width: 8),
@@ -1603,7 +1851,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         filled: true,
                         fillColor: scheme.surfaceContainerHighest,
                         isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 12,
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(24),
                           borderSide: BorderSide.none,
@@ -1614,7 +1865,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(24),
-                          borderSide: BorderSide(color: scheme.primary, width: 1.4),
+                          borderSide: BorderSide(
+                            color: scheme.primary,
+                            width: 1.4,
+                          ),
                         ),
                       ),
                       onChanged: _onComposerChanged,
@@ -1626,7 +1880,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       tooltip: '停止',
                       style: IconButton.styleFrom(foregroundColor: c.danger),
                       icon: const Icon(Icons.stop_rounded),
-                      onPressed: () => sendChatAction(<String, Object?>{'type': 'stop'}),
+                      onPressed: () =>
+                          sendChatAction(<String, Object?>{'type': 'stop'}),
                     )
                   else
                     IconButton.filled(
@@ -1678,7 +1933,11 @@ class _ChatScreenState extends State<ChatScreen> {
                         border: Border.all(color: c.divider),
                       ),
                       padding: const EdgeInsets.all(2),
-                      child: Icon(Icons.close_rounded, size: 14, color: c.textSecondary),
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 14,
+                        color: c.textSecondary,
+                      ),
                     ),
                   ),
                 ),
@@ -1746,9 +2005,14 @@ class _HistoryTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: <Widget>[
               ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.82),
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width * 0.82,
+                ),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                   decoration: BoxDecoration(
                     color: scheme.primaryContainer,
                     borderRadius: const BorderRadius.only(
@@ -1766,7 +2030,10 @@ class _HistoryTile extends StatelessWidget {
                         MarkdownView(
                           source: item.text,
                           compact: true,
-                          baseStyle: TextStyle(color: scheme.onPrimaryContainer, fontSize: 15),
+                          baseStyle: TextStyle(
+                            color: scheme.onPrimaryContainer,
+                            fontSize: 15,
+                          ),
                         ),
                     ],
                   ),
@@ -1795,14 +2062,19 @@ class _HistoryTile extends StatelessWidget {
   }
 
   /// 时间行：气泡外的一行小字（M3 的 `labelSmall`，比正文低两级的层级）。
-  Widget _timeLabel(BuildContext context, PiColors c, String time,
-      {CrossAxisAlignment align = CrossAxisAlignment.start}) {
+  Widget _timeLabel(
+    BuildContext context,
+    PiColors c,
+    String time, {
+    CrossAxisAlignment align = CrossAxisAlignment.start,
+  }) {
     if (time.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(left: 6, right: 6, top: 6, bottom: 12),
       child: Text(
         time,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: c.textMuted),
+        style: Theme.of(context).textTheme.labelSmall
+            ?.copyWith(color: c.textMuted),
       ),
     );
   }
@@ -1844,7 +2116,9 @@ Uint8List? _decodeDataUrl(String source) {
   if (comma < 0) return null;
   try {
     final Uint8List bytes = base64Decode(source.substring(comma + 1));
-    if (_imageBytesCache.length >= 24) _imageBytesCache.remove(_imageBytesCache.keys.first);
+    if (_imageBytesCache.length >= 24) {
+      _imageBytesCache.remove(_imageBytesCache.keys.first);
+    }
     _imageBytesCache[source] = bytes;
     return bytes;
   } on FormatException {
@@ -1882,11 +2156,14 @@ class _ChatImage extends StatelessWidget {
         height: _thumb,
         fit: BoxFit.cover,
         cacheWidth: (_thumb * 3).round(),
-        errorBuilder: (BuildContext context, Object error, StackTrace? stack) => SizedBox(
-          width: _thumb,
-          height: _thumb,
-          child: Center(child: Icon(Icons.broken_image_outlined, color: c.textMuted)),
-        ),
+        errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
+            SizedBox(
+              width: _thumb,
+              height: _thumb,
+              child: Center(
+                child: Icon(Icons.broken_image_outlined, color: c.textMuted),
+              ),
+            ),
       );
     } else {
       child = SizedBox(width: _thumb, height: _thumb);
@@ -1900,7 +2177,11 @@ class _ChatImage extends StatelessWidget {
       child: ClipRRect(borderRadius: BorderRadius.circular(9), child: child),
     );
     if (onTap == null) return clipped;
-    return GestureDetector(behavior: HitTestBehavior.opaque, onTap: onTap, child: clipped);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: clipped,
+    );
   }
 }
 
@@ -1935,7 +2216,10 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
                   color: c.textMuted,
                 ),
                 const SizedBox(width: 2),
-                Text('思考过程', style: TextStyle(fontSize: 11, color: c.textMuted)),
+                Text(
+                  '思考过程',
+                  style: TextStyle(fontSize: 11, color: c.textMuted),
+                ),
                 if (!_open)
                   Expanded(
                     child: Padding(
@@ -1944,7 +2228,10 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
                         firstLine,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11, color: c.textMuted.withValues(alpha: 0.7)),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: c.textMuted.withValues(alpha: 0.7),
+                        ),
                       ),
                     ),
                   ),
@@ -1960,7 +2247,11 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
               ),
               child: MarkdownView(
                 source: widget.text,
-                baseStyle: TextStyle(color: c.textSecondary, fontSize: 12.5, fontStyle: FontStyle.italic),
+                baseStyle: TextStyle(
+                  color: c.textSecondary,
+                  fontSize: 12.5,
+                  fontStyle: FontStyle.italic,
+                ),
               ),
             ),
         ],
@@ -1983,7 +2274,9 @@ class _BlockTile extends StatelessWidget {
       return _ToolCard(
         name: block.toolName,
         state: block.state,
-        detail: block.errorText.isNotEmpty ? block.errorText : previewOf(block.output ?? block.input),
+        detail: block.errorText.isNotEmpty
+            ? block.errorText
+            : previewOf(block.output ?? block.input),
       );
     }
     if (block.isReasoning) {
@@ -2003,7 +2296,11 @@ class _BlockTile extends StatelessWidget {
               ),
               MarkdownView(
                 source: block.text,
-                baseStyle: TextStyle(color: c.textSecondary, fontSize: 12.5, fontStyle: FontStyle.italic),
+                baseStyle: TextStyle(
+                  color: c.textSecondary,
+                  fontSize: 12.5,
+                  fontStyle: FontStyle.italic,
+                ),
               ),
             ],
           ),
@@ -2020,7 +2317,11 @@ class _BlockTile extends StatelessWidget {
           if (!block.done)
             Padding(
               padding: const EdgeInsets.only(top: 2),
-              child: Container(width: 7, height: 14, color: c.accent.withValues(alpha: 0.7)),
+              child: Container(
+                width: 7,
+                height: 14,
+                color: c.accent.withValues(alpha: 0.7),
+              ),
             ),
         ],
       ),
@@ -2029,7 +2330,12 @@ class _BlockTile extends StatelessWidget {
 }
 
 class _ToolCard extends StatefulWidget {
-  const _ToolCard({required this.name, required this.state, required this.detail, this.header = ''});
+  const _ToolCard({
+    required this.name,
+    required this.state,
+    required this.detail,
+    this.header = '',
+  });
 
   final String name;
   final String state;
@@ -2062,7 +2368,9 @@ class _ToolCardState extends State<_ToolCard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           InkWell(
-            onTap: widget.detail.isEmpty ? null : () => setState(() => _open = !_open),
+            onTap: widget.detail.isEmpty
+                ? null
+                : () => setState(() => _open = !_open),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               child: Row(
@@ -2071,7 +2379,11 @@ class _ToolCardState extends State<_ToolCard> {
                   const SizedBox(width: 8),
                   Text(
                     widget.name,
-                    style: TextStyle(fontSize: 12.5, color: c.text, fontFamily: 'monospace'),
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: c.text,
+                      fontFamily: 'monospace',
+                    ),
                   ),
                   if (!_open && firstLine.isNotEmpty)
                     Expanded(
@@ -2087,7 +2399,9 @@ class _ToolCardState extends State<_ToolCard> {
                     ),
                   if (widget.detail.isNotEmpty)
                     Icon(
-                      _open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                      _open
+                          ? Icons.expand_less_rounded
+                          : Icons.expand_more_rounded,
                       size: 16,
                       color: c.textMuted,
                     ),
@@ -2147,8 +2461,14 @@ class _ToolCardState extends State<_ToolCard> {
     String two(int value) => value.toString().padLeft(2, '0');
     final String stamp =
         '${now.year}${two(now.month)}${two(now.day)}-${two(now.hour)}${two(now.minute)}${two(now.second)}';
-    final String safeName = widget.name.replaceAll(RegExp(r'[^A-Za-z0-9_.-]'), '_');
-    final String? location = await saveTextFile(name: 'tool-$safeName-$stamp.txt', text: widget.detail);
+    final String safeName = widget.name.replaceAll(
+      RegExp(r'[^A-Za-z0-9_.-]'),
+      '_',
+    );
+    final String? location = await saveTextFile(
+      name: 'tool-$safeName-$stamp.txt',
+      text: widget.detail,
+    );
     messenger.showSnackBar(
       SnackBar(
         content: Text(location == null ? '保存失败' : '已保存到 $location'),
@@ -2159,14 +2479,21 @@ class _ToolCardState extends State<_ToolCard> {
 
   void _notice(BuildContext context, String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(milliseconds: 900)),
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(milliseconds: 900),
+      ),
     );
   }
 }
 
 /// 工具卡右下角那种 22px 的小图标按钮。
 class _MiniIconButton extends StatelessWidget {
-  const _MiniIconButton({required this.icon, required this.tooltip, required this.onTap});
+  const _MiniIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
 
   final IconData icon;
   final String tooltip;

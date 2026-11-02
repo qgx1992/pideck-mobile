@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_theme.dart';
 import 'chat/chat_page.dart';
@@ -11,6 +12,8 @@ import 'settings/settings_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 边到边：系统栏透明，页面内容铺到底下，由 AnnotatedRegion 决定图标明暗
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
   final args = await loadHostArgs();
   // 首帧就要是对的主题，否则浅色用户会先看到一下深色再跳过去。
@@ -91,6 +94,14 @@ class _PiDeckFlutterAppState extends State<PiDeckFlutterApp> {
           theme: buildPiTheme(Brightness.light),
           darkTheme: buildPiTheme(Brightness.dark),
           themeMode: mode,
+          // 每一页（含弹层路由）都自动带上系统栏样式，页面自己不用管
+          builder: (BuildContext context, Widget? child) {
+            final bool dark = Theme.of(context).brightness == Brightness.dark;
+            return AnnotatedRegion<SystemUiOverlayStyle>(
+              value: piSystemUiOverlayStyle(dark),
+              child: child ?? const SizedBox.shrink(),
+            );
+          },
           // 路由是宿主的 EXTRA_ROUTE，加新页面时在这里挂分支。
           home: switch (widget.route) {
             'settings' => SettingsScreen(

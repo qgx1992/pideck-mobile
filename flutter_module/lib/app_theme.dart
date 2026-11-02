@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// PiDeck 的调色板。
 ///
@@ -128,6 +129,28 @@ ThemeMode themeModeFrom(String mode) {
 /// 主题种子色：Material 3 会从这一个颜色推出一整套 tonal palette。
 const Color _seedColor = Color(0xFF4C6FE0);
 
+
+/// 状态栏 / 底部手势条的配色。
+///
+/// 为什么不用 `@capacitor/status-bar` 或 `NavigationBar` 插件：那两条是给 **WebView** 页用的，
+/// Flutter 页有自己的窗口，系统栏属于这一层。这里统一走透明背景 + 图标明暗跟随主题，
+/// 页面底色（`Scaffold` 的 surface）自然透到栏下面，明暗切换时才不会出现"黑条白字"。
+SystemUiOverlayStyle piSystemUiOverlayStyle(bool dark, {Color? navigationBarColor}) {
+  return SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    // Android：图标偏亮还是偏暗
+    statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+    // iOS：状态栏自身的明暗（语义与 Android 相反）
+    statusBarBrightness: dark ? Brightness.dark : Brightness.light,
+    systemNavigationBarColor: navigationBarColor ?? Colors.transparent,
+    systemNavigationBarDividerColor: Colors.transparent,
+    systemNavigationBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+    // API 29+ 系统会给栏叠一层半透明遮罩，会把"透明"冲成灰的；关掉才跟页面同色
+    systemStatusBarContrastEnforced: false,
+    systemNavigationBarContrastEnforced: false,
+  );
+}
+
 /// 构建 Material 3 主题。
 ///
 /// 设计思路（0.2.0 起的重构）：不再"对齐网页版的 CSS 变量"，而是一台安卓原生应用该有的样子 ——
@@ -176,6 +199,7 @@ ThemeData buildPiTheme(Brightness brightness) {
     textTheme: text,
     extensions: <ThemeExtension<dynamic>>[colors],
     appBarTheme: AppBarTheme(
+      systemOverlayStyle: piSystemUiOverlayStyle(dark),
       backgroundColor: scheme.surface,
       surfaceTintColor: Colors.transparent,
       foregroundColor: scheme.onSurface,

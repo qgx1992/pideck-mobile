@@ -167,6 +167,7 @@ import type { SendMode } from "./ui/send-mode.ts";
 import { attachPressable } from "./ui/press.ts";
 import { attachDrawerGestures } from "./ui/drawer-gestures.ts";
 import { attachBackButton } from "./platform/back-button.ts";
+import { App as CapacitorApp } from "@capacitor/app";
 import { armSplashWatchdog, hideSplash, setSplashHint } from "./ui/splash.ts";
 import {
   collectRunWatchTitles,
@@ -395,6 +396,42 @@ let flutterSidebarJson = "";
  * 不回写 localStorage：重启 App 就回到 Flutter 版（默认形态）。
  */
 let chatUseWebView = false;
+
+/**
+ * 「Flutter 当主界面」开关（0.2.1 起默认开）。
+ *
+ * 启动流程是：WebView 先把协议连上、把当前会话开好，然后**立刻**用 Flutter 页盖住整屏，
+ * 用户看到的第一个界面就是原生的会话列表 + 聊天。WebView 退到后台继续当协议引擎
+ * （SSE、reducer、发送链路都在它身上），两边靠既有的快照/动作通道说话 —— 不搬协议就不会分叉。
+ *
+ * 为什么要有开关：万一某台机型上后台 WebView 被系统冻住（松手后收不到流式帧），
+ * 用户点侧栏的「返回网页版」就能退回纯 Web 形态，不至于被困在一个不刷新的界面里。
+ */
+const SHELL_PREF_KEY = "pideck-flutter-shell";
+
+function shellModeEnabled(): boolean {
+  try {
+    return localStorage.getItem(SHELL_PREF_KEY) !== "web";
+  } catch {
+    return true;
+  }
+}
+
+function setShellMode(enabled: boolean): void {
+  try {
+    localStorage.setItem(SHELL_PREF_KEY, enabled ? "flutter" : "web");
+  } catch {
+    // 隐私模式 / 存储满：降级成「本次会话有效」，不影响本次启动
+  }
+}
+
+/** 启动收尾时调用：能进 Flutter 就进，进不去就安静地留在网页版。 */
+async function enterFlutterShell(): Promise<void> {
+  if (!shellModeEnabled() || flutterChatOpen) return;
+  const sessionId = activeSessionId ?? runtime?.store.state.sessions[0]?.id ?? "";
+  const opened = await openFlutterChatPage(sessionId);
+  if (!opened) setShellMode(false);
+}
 
 /** 历史加载失败的提示；快照里的 error 取自这里。 */
 let chatError: { title: string; detail?: string; hint?: string } | null = null;
@@ -6017,7 +6054,9 @@ async function applyFlutterPickerChoice(kind: string, id: string): Promise<void>
  * 再推快照、再 startActivity。否则 Flutter 拿到的是一份不属于它的空会话。
  */
 async function openFlutterChatPage(sessionId: string): Promise<boolean> {
-  if (activeSessionId !== sessionId) await openSession(sessionId);
+  // 冷启动可能一个会话都没有（或还没恢复出 activeSessionId）：
+  // 这时也照样把 Flutter 页打开，让它自己画空态，不要拿空串去 openSession。
+  if (sessionId !== "" && activeSessionId !== sessionId) await openSession(sessionId);
   flutterChatMirror = new FlutterChatMirror({ push: (json) => pushFlutterChat(json) });
   flutterChatOpen = true;
   flutterSidebarJson = "";
@@ -6091,8 +6130,18 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
       flutterChatMirror = null;
       // 用户按「返回网页版」：接下来的会话点击都走 WebView，别把人又弹回去
       chatUseWebView = true;
+      // 记住这个选择：下次启动直接进网页版（否则每次重启又被 Flutter 盖住）
+      setShellMode(false);
       void closeFlutterPage();
       return;
+    case "exitApp": {
+      // Flutter 页上的返回键。shell 模式下它盖着整屏，退回去就是"什么都没有"的网页版，
+      // 所以直接退出 App；用户之前明确选了网页版，就按「返回网页版」处理。
+      if (!shellModeEnabled()) return;
+      void closeFlutterPage();
+      void CapacitorApp.exitApp();
+      return;
+    }
     case "send": {
       const body = text("text").trim();
       if (!refs) return;
@@ -6817,7 +6866,11 @@ function bootstrap(): void {
   }
   setSplashHint(list.length > 1 ? `正在连接 ${list.length} 台设备…` : "正在连接 PiDeck…");
   void connectAll(list, { activeBaseUrl: saved?.baseUrl }).then(
-    () => hideSplash(),
+    () => {
+      hideSplash();
+      // 连上就交给 Flutter 页（它一上来就盖住整屏，用户不会看到网页版）
+      void enterFlutterShell();
+    },
     (error: unknown) => {
       renderPairing({
         link: saved?.baseUrl ? `${saved.baseUrl}/?token=${encodeURIComponent(saved.token)}` : "",
