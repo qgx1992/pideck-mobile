@@ -2,8 +2,8 @@
 ///
 /// 与 Web 侧 `app/src/ui/markdown.ts` 的差别：
 ///   - 不做语法高亮（那边有 451 行的 `highlight.ts`，这里只给等宽字体 + 背景）；
-///   - 不做每帧整块重解析的优化 —— Flutter 侧靠 `ListView` 的 item 复用 + `const`
-///     构造来省，流式时只有最后一行的文本在变。
+///   - 解析结果走 `parseMarkdownCached()` 的缓存 —— 组件是无状态的，
+///     快照一推就重建，不缓存的话每条可见消息都会重解析一遍。
 library;
 
 import 'package:flutter/material.dart';
@@ -48,7 +48,7 @@ class MarkdownView extends StatelessWidget {
       link: base.copyWith(color: c.accent, decoration: TextDecoration.underline),
     );
 
-    final List<MdBlock> blocks = parseMarkdown(source);
+    final List<MdBlock> blocks = parseMarkdownCached(source);
     if (blocks.isEmpty) {
       return Text(source, style: base);
     }

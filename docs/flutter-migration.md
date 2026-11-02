@@ -774,6 +774,26 @@ Dart 侧也无条件给「从列表移除」。搬迁移时先问一句「这条
 2. **半透明色要 `alphaBlend` 到它真正的底色上**，不要直接 `withValues(alpha:)` 叠页面底色 ——
    前者得到与 Web `color-mix(in oklab, …)` 接近的效果，后者在深色下会明显更艳。
 
+## 「按哪个键都慢半拍」（0.1.38）：四笔白工
+
+用户反馈「有些按键组件特别卡」。查下来没有任何一处是「按钮动画慢」，而是**每一次界面刷新都在做无用功**，
+而 Flutter 页的刷新频率是跟着 WebView 的快照推送走的。
+
+| 位置 | 之前 | 为什么卡 | 现在 |
+|---|---|---|---|
+| `app/src/platform/flutter-chat.ts` `PUSH_INTERVAL_MS` | 40ms（≈25 次/秒） | 每次推送都带**整份历史** JSON，过桥后 Dart 侧再 `jsonDecode` 一遍 | 80ms（≈12 次/秒） |
+| `flutter_module/lib/chat/markdown_view.dart` | `MarkdownView` 是 `StatelessWidget`，build 里直接 `parseMarkdown(source)` | 快照一来整页重建 → **每条可见消息重解析一遍**；长回复 + 流式时一帧几十次分词 | 走 `parseMarkdownCached()`（FIFO 48 条，见 `lib/chat/markdown.dart`） |
+| `flutter_module/lib/chat/chat_page.dart` `_ChatImage` | `data:` 图每次 build 都 `base64Decode` | 一张 1600px 的图几百 KB base64，滚动/流式时每帧解一次 | `_imageBytesCache`（FIFO 24 条）+ `cacheWidth: 384`（缩略图只要 128 逻辑像素） |
+| `chat_page.dart` `_onComposerChanged` | 每敲一个字 `setState(() {})` | `_composerText` 只用于判断「刚打的是 / 还是 @」，**不驱动任何 UI** —— 整页重建纯白工 | 删掉 setState |
+| `chat_page.dart` 面板搜索框 | `onChanged: (v) => setState(() {})` | 同上，整页重建 | `_pickerPanel` 外层套 `ValueListenableBuilder<TextEditingValue>`，只重建面板；搜索词归零挪到 `_applyJson`（build 期间清 controller 会触发「build 中 setState」断言） |
+
+**判断准则（写进 AGENTS.md）**：
+1. 快照驱动的页面里，任何 `setState` 都要能说出「哪个可见元素依赖它」。说不出就是在拿整页重建换一个没人看的变量。
+2. 纯函数式转换（markdown 解析、base64 解码、格式化）只要输入稳定就该缓存；缓存用 FIFO + 上限，别用无界 map
+   （流式时每帧都是新 key，无界就是内存泄漏）。
+3. 图片永远给 `cacheWidth`：解码成本跟原始像素成正比，而缩略图只有 128 逻辑像素。
+4. 推送频率是产品参数，不是越快越好 —— 40ms 与 80ms 在流式文本上看不出差别，但解码与重建成本差一倍。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：

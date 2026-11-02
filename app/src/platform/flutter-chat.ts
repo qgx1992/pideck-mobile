@@ -273,7 +273,13 @@ function menuItemsFor(role: "user" | "assistant", backend: unknown): ChatMenuIte
  * 跨线程投递、再在 Dart 侧 parse。25fps 对「读字」这个场景完全够，而 16ms 会让
  * 主线程在长回答时明显发热（原生 SsePlugin 自己已经在 16ms 合并过一轮）。
  */
-const PUSH_INTERVAL_MS = 40;
+/**
+ * 推送节流：40ms（≈25 次/秒）时，一条长会话每帧都要把整份历史 JSON 过一遍桥，
+ * Dart 侧再 `jsonDecode` 整份快照 —— 用户感受就是「按哪个键都慢半拍」。
+ * 80ms（≈12 次/秒）肉眼还看不出流式变粗（文本每帧不过几行），但解码与重建少一半。
+ * 真要做到严格按需刷新，得把「历史只发增量」做出来；在那之前先把频率降下来。
+ */
+const PUSH_INTERVAL_MS = 80;
 
 export interface ChatPushTransport {
   push: (json: string) => void | Promise<void>;

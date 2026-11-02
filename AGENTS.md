@@ -166,6 +166,9 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   动作用侧栏通道同名发回去（`sessionRename` / `sessionCopy` / `sessionExport` / `sessionDelete` /
   `projectRemove` / `createSession` / `toggleProject`），执行逻辑只有 `main.ts` 一份。
   二次确认（删会话、移除项目）在 Dart 侧做——Web 的 `openSheet` 确认框被抽屉挡着，用户看不见。
+- **快照驱动的页面里，`setState` 必须能说出「哪个可见元素依赖它」**。说不出就是在用整页重建换一个没人看的
+  变量（0.1.38 的输入框 `onChanged` 就是这样：每敲一个字重建整页）。纯函数式转换（markdown 解析、base64 解码）
+  输入稳定就缓存，缓存必须有上限（FIFO），否则流式时每帧一个新 key 就是内存泄漏；图片永远给 `cacheWidth`。
 - **视觉参数照 `app/src/styles.css` 抄，别凭手感**：`--radius` = 12、气泡内边距 10/12、角色行 11px、
   时间行 10px 且在气泡外、消息图 128×128、输入框圆角 10、空态是「徽标 + 标题 + 副标题 + 提示词」整块。
   0.1.37 之前的偏差清单见 `docs/flutter-migration.md`。半透明色一律 `Color.alphaBlend(色.withValues(alpha: x), 真正的底色)`，

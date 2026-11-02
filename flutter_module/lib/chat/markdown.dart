@@ -273,3 +273,35 @@ List<InlineSpan> parseInline(String source, MdInlineStyle style) {
   flushPlain();
   return spans;
 }
+
+/* ---------------------------- 解析缓存 ---------------------------- */
+
+/// 解析结果缓存（FIFO，满 48 条丢最早的一条）。
+///
+/// 为什么需要它：`MarkdownView` 是无状态组件，快照每推一次就重建一次面板，
+/// 每次重建都会把**每一条可见消息**重解析一遍 —— 长回复 + 流式刷新时，
+/// 一帧里几十次分词就是「点了按钮像没反应」的来源。解析结果对同一段文本是稳定的，
+/// 文本没变就不该再算一次。
+///
+/// 用 FIFO 而不是 LRU：流式时每帧都会写入新文本（都是不同的 key），
+/// 命中率本来就不高；这里要的是「已经定稿的历史消息不再重解析」。
+final Map<String, List<MdBlock>> _parseCache = <String, List<MdBlock>>{};
+
+const int _parseCacheLimit = 48;
+
+List<MdBlock> parseMarkdownCached(String source) {
+  final List<MdBlock>? hit = _parseCache[source];
+  if (hit != null) return hit;
+  final List<MdBlock> blocks = parseMarkdown(source);
+  if (_parseCache.length >= _parseCacheLimit) {
+    _parseCache.remove(_parseCache.keys.first);
+  }
+  _parseCache[source] = blocks;
+  return blocks;
+}
+
+/// 只给测试用：清掉缓存，避免用例之间互相影响。
+void debugClearParseCache() => _parseCache.clear();
+
+/// 只给测试用：当前缓存条数（验证上限真的生效）。
+int debugParseCacheSize() => _parseCache.length;

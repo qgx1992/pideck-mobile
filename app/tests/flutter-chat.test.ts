@@ -158,15 +158,16 @@ test("buildChatSnapshot：空态提示词原样带过去（拷贝，不是引用
   assert.notEqual(snapshot.suggestions, suggestions, "要拷贝：调用方之后改数组不该影响已推的快照");
 });
 
-test("FlutterChatMirror：40ms 内的多次更新只推最后一次", async () => {
+test("FlutterChatMirror：节流窗口内的多次更新只推最后一次", async () => {
   const pushed: string[] = [];
   const mirror = new FlutterChatMirror({ push: (json) => void pushed.push(json) });
   const snapshot = buildChatSnapshot({ sessionId: "s1", messages: [], status: "running" });
   mirror.update({ ...snapshot, statusText: "第一" });
   mirror.update({ ...snapshot, statusText: "第二" });
   mirror.update({ ...snapshot, statusText: "第三" });
-  assert.equal(pushed.length, 0, "还没到 40ms 就不该推");
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(pushed.length, 0, "还没到节流窗口就不该推");
+  // 窗口是 80ms（0.1.38 从 40 提上来：整份历史 JSON 每帧过桥太重）
+  await new Promise((resolve) => setTimeout(resolve, 120));
   assert.equal(pushed.length, 1);
   assert.equal(JSON.parse(pushed[0]).statusText, "第三");
   mirror.dispose();

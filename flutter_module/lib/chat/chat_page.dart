@@ -148,6 +148,13 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     final ChatSnapshot next = ChatSnapshot.fromJson(decoded);
     if (next.sessionId.isEmpty) return;
+    // 换了面板类型就清掉搜索词。放在这里而不是 build 里：build 期间清 controller
+    // 会通知 ValueListenableBuilder，在构建中 setState 直接抛断言。
+    final String nextKind = next.picker?.kind ?? '';
+    if (nextKind.isNotEmpty && nextKind != _pickerKind) {
+      _pickerKind = nextKind;
+      _pickerSearch.clear();
+    }
     // 换了提问卡就清掉草稿，否则上一张卡的内容会漏到下一张
     final String requestId = next.pending?.requestId ?? '';
     if (requestId != _lastRequestId) {
@@ -1379,7 +1386,9 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onComposerChanged(String text) {
     final String previous = _composerText;
     _composerText = text;
-    setState(() {});
+    // 这里**不能** setState：`_composerText` 只用来判断「刚打出来的是 / 还是 @」，
+    // 不驱动任何界面元素。整页重建一次就是几十条消息的 build + 布局，
+    // 打字时每敲一个字卡一下，就是这一行造成的。
     final String? trigger = composerTrigger(
       previous: previous,
       next: text,
@@ -1396,11 +1405,17 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 弹层的开合状态跟着快照走很容易出现「关了又弹」。内联面板是纯函数式的 ——
   /// `picker == null` 就收起，没有中间状态。
   Widget _pickerPanel(PiColors c, ChatPickerView picker) {
-    if (_pickerKind != picker.kind) {
-      _pickerKind = picker.kind;
-      _pickerSearch.clear();
-    }
-    final String query = _pickerSearch.text.trim().toLowerCase();
+    // 搜索框的内容只影响面板本身：用 ValueListenableBuilder 把重建范围锁在面板里，
+    // 不要在 onChanged 里 setState（那会把整页聊天记录重建一遍）。
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: _pickerSearch,
+      builder: (BuildContext context, TextEditingValue value, Widget? _) =>
+          _pickerPanelBody(c, picker, value.text),
+    );
+  }
+
+  Widget _pickerPanelBody(PiColors c, ChatPickerView picker, String rawQuery) {
+    final String query = rawQuery.trim().toLowerCase();
     final List<ChatPickerItem> items = query.isEmpty
         ? picker.items
         : picker.items
@@ -1515,7 +1530,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   ),
-                  onChanged: (String value) => setState(() {}),
                   onSubmitted: (String value) => sendChatAction(
                     <String, Object?>{
                       'type': 'pickerQuery',
@@ -1835,6 +1849,28 @@ class _HistoryTile extends StatelessWidget {
 /// 缩略图边长：照抄 Web 的 `.msg-image`（128×128，object-fit: cover）。
 const double _thumb = 128;
 
+/// `data:` 图片的解码缓存（FIFO 24 条）。
+///
+/// base64 解码 + 解码成位图都不便宜（一张 1600px 的图有几百 KB 的 base64）。
+/// `_ChatImage` 每次重建都会重新走一遍代码路径，而快照是流式刷新的 ——
+/// 一条带图的消息会让整段流式输出都在卡。字节缓存在这里、位图缓存交给 Flutter 自己。
+final Map<String, Uint8List> _imageBytesCache = <String, Uint8List>{};
+
+Uint8List? _decodeDataUrl(String source) {
+  final Uint8List? hit = _imageBytesCache[source];
+  if (hit != null) return hit;
+  final int comma = source.indexOf(',');
+  if (comma < 0) return null;
+  try {
+    final Uint8List bytes = base64Decode(source.substring(comma + 1));
+    if (_imageBytesCache.length >= 24) _imageBytesCache.remove(_imageBytesCache.keys.first);
+    _imageBytesCache[source] = bytes;
+    return bytes;
+  } on FormatException {
+    return null;
+  }
+}
+
 class _ChatImage extends StatelessWidget {
   const _ChatImage({required this.source, this.onTap});
 
@@ -1846,19 +1882,25 @@ class _ChatImage extends StatelessWidget {
     final PiColors c = PiColors.of(context);
     Widget child;
     if (source.startsWith('data:')) {
-      final int comma = source.indexOf(',');
-      try {
-        final Uint8List bytes = base64Decode(source.substring(comma + 1));
-        child = Image.memory(bytes, width: _thumb, height: _thumb, fit: BoxFit.cover);
-      } catch (_) {
-        child = SizedBox(width: _thumb, height: _thumb);
-      }
+      final Uint8List? bytes = _decodeDataUrl(source);
+      child = bytes == null
+          ? SizedBox(width: _thumb, height: _thumb)
+          // cacheWidth：原图可能 1600px，缩略图只要 128 逻辑像素 —— 按 3 倍解码足够，
+          // 不传的话每次重建都要从整张位图缩一遍
+          : Image.memory(
+              bytes,
+              width: _thumb,
+              height: _thumb,
+              fit: BoxFit.cover,
+              cacheWidth: (_thumb * 3).round(),
+            );
     } else if (source.startsWith('http')) {
       child = Image.network(
         source,
         width: _thumb,
         height: _thumb,
         fit: BoxFit.cover,
+        cacheWidth: (_thumb * 3).round(),
         errorBuilder: (BuildContext context, Object error, StackTrace? stack) => SizedBox(
           width: _thumb,
           height: _thumb,
