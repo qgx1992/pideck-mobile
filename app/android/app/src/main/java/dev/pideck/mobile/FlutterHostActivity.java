@@ -72,6 +72,23 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // 孤儿页处理：进程被系统回收后，恢复任务栈时会先重建**栈顶**的 Activity，
+        // 而栈顶通常是这个 Flutter 页 —— 可这时 WebView 宿主（MainActivity）根本没起，
+        // 没有任何人给它喂快照：用户看到的是一个空壳页面（没有会话、没有标题、侧栏全空），
+        // 按返回键还会走 `exitApp` 把 App 直接退掉，等于再也回不到主界面。
+        //
+        // 判据用插件实例是否存在（由 MainActivity 建桥时 load）：null = 冷启动重建。
+        // 这时把主界面拉起来再 finish 自己，让启动流程照常从头走一遍。
+        if (!FlutterLauncherPlugin.webViewAlive()) {
+            Log.i(TAG, "冷启动恢复到 Flutter 页，但 WebView 宿主不在：拉回主界面");
+            Intent main = new Intent(this, MainActivity.class);
+            main.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(main);
+            finish();
+            return;
+        }
+
         // 系统相册选择器（GetContent 不需要任何权限；API 33+ 系统会自动换成照片选择器）
         imagePicker = registerForActivityResult(
                 new ActivityResultContracts.GetContent(), this::handlePickedImage);

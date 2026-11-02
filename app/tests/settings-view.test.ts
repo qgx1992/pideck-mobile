@@ -26,6 +26,7 @@ function baseData(overrides: Record<string, unknown> = {}) {
       { value: "dark", label: "深色" },
     ] },
     notify: { enabled: true },
+    shell: { native: true },
     connection: { serviceUrl: "http://10.0.0.2:8765", token: "abcdefgh12345678", status: "live", version: "0.1.6" },
     devices: [
       { id: "http://a", label: "家里", url: "http://10.0.0.2:8765", active: true, running: 1, pending: 0, enabled: true },
@@ -68,6 +69,7 @@ function makePage() {
     onClose: () => calls.push("close"),
     onTheme: (mode) => calls.push(`theme:${mode}`),
     onToggleNotify: (next) => calls.push(`notify:${next}`),
+    onToggleShell: (next) => calls.push(`shell:${next}`),
     onDeviceActivate: (id) => calls.push(`device:${id}`),
     onDeviceMenu: (id) => calls.push(`deviceMenu:${id}`),
     onAddDevice: () => calls.push("addDevice"),
@@ -86,7 +88,7 @@ test("五个分区都在", () => {
   const { page } = makePage();
   page.update(baseData() as never);
   const titles = [...page.el.querySelectorAll(".settings-section-title")].map((el) => el.textContent);
-  assert.deepEqual(titles, ["外观", "通知", "连接与设备（2）", "pi 概况", "技能", "扩展", "DSH 插件", "关于"]);
+  assert.deepEqual(titles, ["外观", "通知", "界面", "连接与设备（2）", "pi 概况", "技能", "扩展", "DSH 插件", "关于"]);
   page.destroy();
 });
 
@@ -108,6 +110,17 @@ test("通知开关可点，状态渲染正确", () => {
   assert.equal(knob?.classList.contains("is-on"), true);
   (page.el.querySelector(".settings-row--switch") as unknown as HTMLElement).click();
   assert.deepEqual(calls, ["notify:false"]);
+  page.destroy();
+});
+
+test("界面开关：关掉原生主界面会回传 shell:false", () => {
+  const { page, calls } = makePage();
+  page.update(baseData() as never);
+  const rows = [...page.el.querySelectorAll(".settings-row--switch")];
+  const shellRow = rows.find((row) => /原生界面/.test(row.textContent ?? ""));
+  assert.ok(shellRow, "没渲染出「用原生界面做主界面」这一行");
+  (shellRow as unknown as HTMLElement).click();
+  assert.deepEqual(calls, ["shell:false"]);
   page.destroy();
 });
 

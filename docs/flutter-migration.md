@@ -1017,6 +1017,55 @@ Flutter 页上的按钮不直接干活，只发一个动作名给 WebView。动�
 - **`pumpAndSettle()` 在有输入框的页面上永远超时**（光标闪烁是无限动画），用固定时长的
   `pump(Duration(...))`。
 
+## 0.2.6：重启后那页「空壳」——任务栈恢复出来的孤儿 Activity
+
+症状：**从后台被系统回收后重新打开，看到的是一页什么都没有的原生界面**（没有会话、
+标题空、侧栏全空），按返回键直接把 App 退掉，怎么都回不到主界面。
+
+不是 shell 开关的问题，是 Android 恢复任务栈的顺序：
+
+1. 用户停在 Flutter 聊天页（`FlutterHostActivity` 在栈顶）；
+2. 进程被回收。栈的内容记在系统里，Activity 本身已经没了；
+3. 重新打开 App，系统按「恢复到上次的前台页面」重建 —— **先重建栈顶那个 Flutter 页**，
+   `MainActivity`（WebView，负责连设备、拿快照）反而后起。
+
+于是 Flutter 页的宿主缓存（`lastChatJson` 这类 `static volatile`）随进程一起没了，
+Dart 拿到的是 `"{}"`：空快照、空侧栏。更糟的是 `PopScope` 的返回键会发 `exitApp`，
+用户按一下就整退出——没有任何出路。
+
+修法在原生侧（`FlutterHostActivity.onCreate` 开头）：
+
+```java
+if (!FlutterLauncherPlugin.webViewAlive()) {
+    // 冷启动重建：WebView 宿主不在，拉回主界面再 finish 自己
+    Intent main = new Intent(this, MainActivity.class);
+    main.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+    startActivity(main);
+    finish();
+    return;
+}
+```
+
+`webViewAlive()` 就是 `FlutterLauncherPlugin.instance != null` —— 插件由 Capacitor 在
+`MainActivity` 建桥时 `load()`，主界面活着它就在。别用 `getApplication() == null` 之类绕远路。
+
+顺带两条清单属性（`AndroidManifest.xml` 的 `FlutterHostActivity`）：
+`android:launchMode="singleTop"`（连点两次不要再叠一层）、
+`android:excludeFromRecents="true"`（它不该单独出现在最近任务里）。
+
+### 同一个症状还有第二个原因：一次失败就把开关永久关掉
+
+`enterFlutterShell()` 早先写的是 `if (!opened) setShellMode(false)` —— 意思是
+「打不开原生页就退回网页版」，但 `setShellMode` 是**写 localStorage 的持久开关**。
+一旦某次启动偶发失败（Activity 还没就绪、启动瞬间被切后台），之后每次启动都不再进原生界面，
+用户看到的就是「重启 App 不显示主界面」，而且没有任何入口能改回来。
+
+现在：失败只 `console.warn` 留在网页版，**不写存储**。同时设置页多了「界面 → 用原生界面做主界面」
+开关（`SettingsData.shell.native`、动作 `shell`），两边都能改 —— 被卡住时用户有自救入口。
+
+配套一处细节：`openSessionFromSidebar()` 的条件要把 `!shellModeEnabled()` 也算进去，
+否则用户刚关掉原生主界面，点侧栏会话又被弹进 Flutter 页。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：

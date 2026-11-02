@@ -205,6 +205,16 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   `@capacitor/status-bar` 能控制网页版状态栏，`windowOptOutEdgeToEdgeEnforcement=true`，谁能用它画 Flutter 页，
   谁的顶上就永远有一条固定深灰色带（跟主题无关）。`AppTheme.FlutterHost` 反过来：不退出强制 edge-to-edge、
   两条系统栏透明、`windowBackground` 兜底深色。改 `AndroidManifest.xml` 里任何新增的 Flutter Activity 时照抄这个主题。
+- **`FlutterHostActivity` 可能是任务栈恢复出来的「孤儿页」**（0.2.6）：进程被回收后重启，系统先重建
+  栈顶那个 Activity，而栈顶通常是 Flutter 页 —— 这时 WebView 宿主（`MainActivity`）还没起，
+  没有任何人给它喂快照（宿主缓存是 `static volatile`，随进程一起没），用户看到的是空壳页面、
+  返回键还会 `exitApp` 直接退出。`onCreate` 里用 `FlutterLauncherPlugin.webViewAlive()`
+  （= 插件实例存在）判断冷启动，是就拉起 `MainActivity` 再 `finish()` 自己。
+  清单属性：`launchMode="singleTop"` + `excludeFromRecents="true"`。
+- **`setShellMode(false)` 是持久开关，不要在「打开失败」时写**：一次偶发失败会让用户之后每次启动
+  都进网页版，且没有入口改回来。失败只 warn（留本次在网页版）；用户主动点「返回网页版」才写。
+  对应的自救入口是设置页「界面 → 用原生界面做主界面」（`SettingsData.shell.native` / 动作 `shell`）。
+  `openSessionFromSidebar()` 里也要加 `!shellModeEnabled()`，否则关掉之后点会话又被弹进 Flutter 页。
 - 系统栏只在一处定义：`piSystemUiOverlayStyle(dark)`（`flutter_module/lib/app_theme.dart`），
   由 `MaterialApp.builder` 的 `AnnotatedRegion` 下发；`SystemUiMode.edgeToEdge` + 透明栏 +
   `ContrastEnforced: false`，否则系统补的遮罩色会让状态栏/手势条和主题对不上。

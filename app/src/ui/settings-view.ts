@@ -27,6 +27,9 @@ export interface SettingsDeviceRow {
 export interface SettingsData {
   theme: { mode: string; options: ReadonlyArray<{ value: string; label: string }> };
   notify: { enabled: boolean };
+  /** 主界面形态：true = 原生（Flutter）界面，false = 网页版。
+   *  两边都能改，因为被卡在网页版时用户唯一能进的设置入口就是这里。 */
+  shell: { native: boolean };
   connection: { serviceUrl: string; token: string; status: string; version: string; sseNative?: boolean };
   devices: SettingsDeviceRow[];
   models: ModelRow[];
@@ -48,6 +51,7 @@ export interface SettingsHandlers {
   onClose: () => void;
   onTheme: (mode: string) => void;
   onToggleNotify: (enabled: boolean) => void;
+  onToggleShell: (native: boolean) => void;
   onDeviceActivate: (id: string) => void;
   onDeviceMenu: (id: string) => void;
   onAddDevice: () => void;
@@ -289,6 +293,15 @@ export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {  
       section("通知", [
         switchRow("任务完成 / AI 提问提醒", data.notify.enabled, (next) => handlers.onToggleNotify(next), {
           sub: "锁屏后由原生前台服务负责；多设备时只覆盖一台",
+        }),
+      ]),
+    );
+
+    // ── 界面 ──
+    body.append(
+      section("界面", [
+        switchRow("用原生界面做主界面", data.shell.native, (next) => handlers.onToggleShell(next), {
+          sub: "关掉就回到网页版界面（协议仍由网页版跑，两者行为一致）",
         }),
       ]),
     );

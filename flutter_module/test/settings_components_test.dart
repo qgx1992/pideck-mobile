@@ -64,6 +64,7 @@ Map<String, Object?> _data() => <String, Object?>{
         ],
       },
       'notifyEnabled': true,
+      'shell': <String, Object?>{'native': true},
       'connection': <String, Object?>{'serviceUrl': 'http://10.0.0.2:8787', 'token': 'abc'},
       'devices': <Object?>[],
       'models': <Object?>[],
@@ -85,9 +86,18 @@ void main() {
   testWidgets('通知开关发 notify(enabled)', (WidgetTester tester) async {
     final _Recorder recorder = await _mount(tester, _data());
 
-    await tester.tap(find.byType(Switch));
+    // 页面上有两个开关（通知、界面），通知那个先出现
+    await tester.tap(find.byType(Switch).first);
     await tester.pump(const Duration(milliseconds: 200));
     expect(recorder.last('notify')?['enabled'], isFalse, reason: '通知开关没发出 notify');
+  });
+
+  testWidgets('界面开关发 shell(native)', (WidgetTester tester) async {
+    final _Recorder recorder = await _mount(tester, _data());
+
+    await tester.tap(find.byType(Switch).last);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(recorder.last('shell')?['native'], isFalse, reason: '「用原生界面做主界面」开关没发出 shell');
   });
 
   testWidgets('刷新按钮发 refresh', (WidgetTester tester) async {

@@ -433,12 +433,23 @@ function setShellMode(enabled: boolean): void {
   }
 }
 
-/** 启动收尾时调用：能进 Flutter 就进，进不去就安静地留在网页版。 */
+/**
+ * 启动收尾时调用：能进 Flutter 就进，进不去就安静地留在网页版。
+ *
+ * 失败**不写 localStorage**：只有「当前这台机器压根没有 Flutter 模块」
+ * （插件调不通）才算永久性不支持，那是 `openFlutterPage` 里 isFlutterHostAvailable 的分支。
+ * 偶发失败（Activity 还没就绪、启动过程中被切后台）不该让用户之后每次启动都进网页版 ——
+ * 踩过：早先这里是 `if (!opened) setShellMode(false)`，一次启动失败就把开关永久关掉了，
+ * 用户看到的就是「重启 App 不显示主界面」。
+ */
 async function enterFlutterShell(): Promise<void> {
   if (!shellModeEnabled() || flutterChatOpen) return;
-  const sessionId = activeSessionId ?? runtime?.store.state.sessions[0]?.id ?? "";
-  const opened = await openFlutterChatPage(sessionId);
-  if (!opened) setShellMode(false);
+  try {
+    const sessionId = activeSessionId ?? runtime?.store.state.sessions[0]?.id ?? "";
+    await openFlutterChatPage(sessionId);
+  } catch (error) {
+    console.warn("[shell] 打开原生主界面失败，本次留在网页版", error);
+  }
 }
 
 /** 历史加载失败的提示；快照里的 error 取自这里。 */
@@ -1586,7 +1597,9 @@ function toggleProject(projectId: string): void {
  *     （想看 Flutter 版，从设置页「关于 → 聊天页预览」重新进。）
  */
 async function openSessionFromSidebar(sessionId: string): Promise<void> {
-  if (flutterChatOpen || chatUseWebView) {
+  // `!shellModeEnabled()` 也要算进来：用户在设置里关掉「用原生界面做主界面」之后，
+  // 点会话不该又被弹进 Flutter 页（那条开关是持久化的，这里也得跟着它）。
+  if (flutterChatOpen || chatUseWebView || !shellModeEnabled()) {
     await openSession(sessionId);
     return;
   }
@@ -5219,6 +5232,7 @@ function settingsData(): SettingsData {
       options: THEME_MODES.map((mode) => ({ value: mode, label: themeLabel(mode) })),
     },
     notify: { enabled: isTaskNotifyEnabled() },
+    shell: { native: shellModeEnabled() },
     connection: {
       serviceUrl: runtime?.pairing.baseUrl ?? "",
       token: runtime?.pairing.token ?? "",
@@ -6568,6 +6582,9 @@ function dispatchFlutterSettingsAction(action: Record<string, unknown>): void {
     case "notify":
       handlers.onToggleNotify(action.enabled === true);
       return;
+    case "shell":
+      handlers.onToggleShell(action.native === true);
+      return;
     case "deviceActivate": {
       const id = text("id");
       if (id) handlers.onDeviceActivate(id);
@@ -6649,6 +6666,24 @@ function createSettingsHandlers(): SettingsHandlers {
     onClose: () => closeSettings(),    onTheme: (mode) => {
       setThemeMode(mode as ThemeMode);
       renderSettings();
+    },
+    onToggleShell: (native) => {
+      setShellMode(native);
+      renderSettings();
+      if (native) {
+        // 打开开关就立刻切过去：用户点这个开关就是为了看到原生界面。
+        void enterFlutterShell();
+      } else {
+        // 关掉时如果正停在 Flutter 页上，先把页关掉再画网页版，
+        // 否则页还盖在上面，用户会以为开关没生效。
+        if (flutterChatOpen) {
+          flutterChatOpen = false;
+          chatUseWebView = true;
+          flutterChatMirror?.dispose();
+          flutterChatMirror = null;
+          void closeFlutterPage();
+        }
+      }
     },
     onToggleNotify: (enabled) => {
       setTaskNotifyEnabled(enabled);

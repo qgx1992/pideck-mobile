@@ -286,9 +286,17 @@ class DshPluginRow {
 
 /// 整页数据。缺字段一律按「空」处理，不要让一个旧宿主把整页打崩。
 class SettingsData {
+  /// 主界面形态开关：缺字段 / 老版本推送时按「原生界面」处理（默认形态）。
+  static bool _shellNative(Map<String, dynamic> json) {
+    final Object? shell = json['shell'];
+    if (shell is! Map) return true;
+    return mapOf(shell)['native'] != false;
+  }
+
   const SettingsData({
     this.theme = ThemeSettings.empty,
     this.notifyEnabled = true,
+    this.shellNative = true,
     this.connection = const ConnectionInfo(),
     this.devices = const [],
     this.models = const [],
@@ -303,6 +311,9 @@ class SettingsData {
 
   final ThemeSettings theme;
   final bool notifyEnabled;
+
+  /// 主界面形态：true = 原生界面，false = 网页版（两种都能改，被卡住时要能自救）。
+  final bool shellNative;
   final ConnectionInfo connection;
   final List<DeviceRow> devices;
   final List<ModelRow> models;
@@ -318,6 +329,7 @@ class SettingsData {
 
   factory SettingsData.fromJson(Map<String, dynamic> json) => SettingsData(
     theme: ThemeSettings.fromJson(mapOf(json['theme'])),
+    shellNative: _shellNative(json),
     notifyEnabled: boolOr(mapOf(json['notify'])['enabled'], true),
     connection: ConnectionInfo.fromJson(mapOf(json['connection'])),
     devices: [

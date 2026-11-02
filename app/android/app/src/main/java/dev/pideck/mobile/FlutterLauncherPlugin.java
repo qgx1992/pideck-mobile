@@ -90,6 +90,19 @@ public class FlutterLauncherPlugin extends Plugin {
         if (instance == this) instance = null;
     }
 
+    /**
+     * WebView 宿主（{@link MainActivity}）是否还活着。
+     *
+     * 判据就是这个插件实例：它由 Capacitor 在 MainActivity 建桥时 `load()`，
+     * MainActivity 销毁时清空。进程被系统回收后重建的场景里，实例一定是 null。
+     *
+     * 用途见 {@code FlutterHostActivity.onCreate}：那种情况下任务栈顶还是 Flutter 页，
+     * 但没有 WebView 给它喂快照，页面上什么都没有、返回键还会直接把 App 退掉。
+     */
+    static boolean webViewAlive() {
+        return instance != null;
+    }
+
     static String currentSettings() {
         return lastSettingsJson;
     }

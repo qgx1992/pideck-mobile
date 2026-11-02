@@ -121,6 +121,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           if (!_gotData) const _Hint('正在读取设置…'),
           _appearanceSection(),
           _notifySection(),
+      _shellSection(),
           _devicesSection(),
           _overviewSection(),
           _skillsSection(),
@@ -169,6 +170,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           sub: '锁屏后由原生前台服务负责；多设备时只覆盖一台',
           value: _data.notifyEnabled,
           onChanged: (next) => _act('notify', {'enabled': next}),
+        ),
+      ],
+    );
+  }
+
+  // ── 界面 ──
+
+  Widget _shellSection() {
+    return _Section(
+      title: '界面',
+      children: [
+        _SwitchRow(
+          label: '用原生界面做主界面',
+          sub: '关掉就用网页版界面；协议两边是同一份，行为一致',
+          value: _data.shellNative,
+          onChanged: (next) => _act('shell', {'native': next}),
         ),
       ],
     );

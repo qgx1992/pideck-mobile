@@ -34,7 +34,8 @@
             android:name=".FlutterHostActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.FlutterHost"
-            android:launchMode="standard"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
