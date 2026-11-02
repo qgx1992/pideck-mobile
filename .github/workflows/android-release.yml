@@ -70,6 +70,35 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # 现在是 add-to-app 结构：`app/android/settings.gradle` 会 include `flutter_module`，
+      # 而 Flutter 的 gradle 插件要求模块里有 `.android/local.properties`（含 flutter.sdk），
+      # 这个文件是 `flutter pub get` 顺带生成的、也不会进 git。没有它 gradle 直接
+      # 「The Flutter module doesn't have a .../local.properties file」把整个构建掐掉。
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 拉 Flutter 模块依赖
+        run: |
+          set -euo pipefail
+          FLUTTER_ROOT="$(dirname "$(dirname "$(command -v flutter)")")"
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          cd flutter_module
+          flutter pub get
+          if [ ! -f .android/local.properties ]; then
+            mkdir -p .android
+            printf 'sdk.dir=%s\nflutter.sdk=%s\n' "$SDK" "$FLUTTER_ROOT" > .android/local.properties
+          fi
+          cat .android/local.properties
+
+      - name: Flutter 静态检查与测试
+        run: |
+          set -euo pipefail
+          cd flutter_module
+          flutter analyze
+          flutter test
+
       # 不用 android-actions/setup-android：它在当前 runner 镜像上会去装
       # 已被移除的 'tools' 包而直接失败（Failed to find package 'tools'）。
       # ubuntu-latest 自带 Android SDK，这里只补齐本项目需要的 platform/build-tools。
