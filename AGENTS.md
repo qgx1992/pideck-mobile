@@ -148,8 +148,16 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   **不许在 Dart 里判任何规则**（尤其「展开其余 N 个」的截断与「当前会话被截断时临时展开」）。
 - 侧栏动作里 `toggleSection` 必须按 key 前缀分派：`project:<id>` → `toggleSessionsExpanded()`，
   其余 → `toggleFlat()`。两个展开集合（`expandedSessions` / `flatExpanded`）互不相干。
-- WebView 的弹层（工作区选择器、会话/项目长按菜单）被 Flutter 页盖着看不见，需要它们的动作
-  一律走 `leaveFlutterThen()`：先 `closeFlutterPage()` 再开弹层，不要指望在 Flutter 页上显示。
+- WebView 的弹层被 Flutter 页盖着看不见。还留在 WebView 的只有：工作区选择器（`newSession`）、
+  会话菜单里的「后端切换」（`sessionMore`）、DSH 工具面板——这些动作一律走 `leaveFlutterThen()`：
+  先 `closeFlutterPage()` 再开弹层，不要指望在 Flutter 页上显示。
+- 侧栏长按菜单**在 Flutter 里画**（0.1.34 起项目菜单也是；会话菜单 0.1.28 起就是本地的）：
+  动作用侧栏通道同名发回去（`sessionRename` / `sessionCopy` / `sessionExport` / `sessionDelete` /
+  `projectRemove` / `createSession` / `toggleProject`），执行逻辑只有 `main.ts` 一份。
+  二次确认（删会话、移除项目）在 Dart 侧做——Web 的 `openSheet` 确认框被抽屉挡着，用户看不见。
+- 往 Dart 搬菜单时**不要照搬到不了的分支**：`openProjectMenu` 里「内置 Chat 项目不能移除」
+  永远走不到（Chat 项目在「聊天」段平铺，进不了项目分组），所以 Dart 侧没有这个判断，
+  快照里也就没有对应的 `chatProject` 字段。搬之前先验证前端能不能触发那条分支。
 - 消息长按菜单（0.1.29 起）**不许在 Dart 里维护动作表**：菜单项由 `ChatSnapshot.messageMenus`
   带来，源头是 `src/ui/message-actions-model.ts` 的 `actionsForRole(role, backend)`
   （ACP 会话只剩「复制」）。Dart 只决定怎么画（danger 标红）与哪两步本地确认

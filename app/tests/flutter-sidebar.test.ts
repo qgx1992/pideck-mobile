@@ -107,6 +107,13 @@ test("项目分段：分组按项目顺序，组内按 updatedAt 倒序", () => 
   assert.equal(beta?.count, 3);
 });
 
+test("项目分段里没有内置 Chat 项目（它在「聊天」段平铺，因此长按菜单永远是「可移除」的那种）", () => {
+  const snapshot = buildSidebarSnapshot(base({ tab: "projects" }));
+  const groups = snapshot.sections.filter((section) => section.kind === "group");
+  assert.equal(groups.some((group) => group.projectId === "p-chat"), false);
+  assert.equal(groups.every((group) => group.projectId !== "p-chat"), true);
+});
+
 test("项目分段：超过 6 条时截断，并报出隐藏条数（收起时有入口）", () => {
   const snapshot = buildSidebarSnapshot(base({ tab: "projects" }));
   const alpha = snapshot.sections.find((section) => section.projectId === "p-a");

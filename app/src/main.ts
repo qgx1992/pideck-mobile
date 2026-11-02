@@ -5396,9 +5396,10 @@ function dispatchFlutterSidebarAction(action: Record<string, unknown>): void {
       if (id) leaveFlutterThen(() => openSessionMenu(id));
       return;
     }
-    case "projectMenu": {
+    case "projectRemove": {
+      // 二次确认已经在 Flutter 那边做过（那条路径原来会 leaveFlutterThen 回网页版弹层）
       const projectId = text("projectId");
-      if (projectId) leaveFlutterThen(() => openProjectMenu(projectId));
+      if (projectId) void removeProject(projectId);
       return;
     }
     case "newSession":
@@ -6524,23 +6525,31 @@ function confirmRemoveProject(projectId: string): void {
         text: "确认移除",
         onclick: () => {
           closeSheet();
-          void (async () => {
-            if (!runtime) return;
-            try {
-              await runtime.client.deleteProject(projectId);
-              if (activeProjectId === projectId) activeProjectId = null;
-              await runtime.store.refresh();
-              renderSidebar(runtime.store.state);
-              renderHeader(runtime.store.state);
-              toast("已移除项目");
-            } catch (error) {
-              toast(describeError(error));
-            }
-          })();
+          void removeProject(projectId);
         },
       }),
     );
   });
+}
+
+/**
+ * 真的移除项目（二次确认由调用方负责）。
+ *
+ * Web 的确认弹层与 Flutter 的确认框都走这一个函数 —— 两边各写一份的结果
+ * 一定是「网页版删干净了、Flutter 版漏了清 activeProjectId」。
+ */
+async function removeProject(projectId: string): Promise<void> {
+  if (!runtime) return;
+  try {
+    await runtime.client.deleteProject(projectId);
+    if (activeProjectId === projectId) activeProjectId = null;
+    await runtime.store.refresh();
+    renderSidebar(runtime.store.state);
+    renderHeader(runtime.store.state);
+    toast("已移除项目");
+  } catch (error) {
+    toast(describeError(error));
+  }
 }
 
 /* ------------------------------------------------------------------ */

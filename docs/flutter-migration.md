@@ -683,6 +683,25 @@ Web 版是 `chatView.scrollToMessage(id)`，操作的是 DOM。Dart 侧的历史
 Dart 只在「没历史、也没有正在跑的块」时画（`bare`），点一下把文字填进输入框并聚焦 —— 和 Web 版
 `onSuggestion` 一致。**不直接发送**：用户几乎总要先改两个字。
 
+## 项目长按菜单（0.1.34）：把「到不了的分支」留下
+
+项目分组头的长按菜单原来 `leaveFlutterThen(() => openProjectMenu(id))`：抽屉开着，网页弹层在背后，
+用户看到的是抽屉先关掉、闪一下、然后菜单才出来。现在菜单在 Flutter 底部弹层里画：
+
+- 三项：在此项目新建会话 / 展开或收起该项目 / 从列表移除项目（danger）；
+- 动作照旧发回侧栏通道（`createSession` / `toggleProject` / 新增的 `projectRemove`），
+  执行逻辑只有 `main.ts` 一份；
+- 二次确认在 Dart：`AlertDialog` 明说「只从列表移除，不会删除磁盘上的项目文件」。
+
+**为什么没有「内置 Chat 项目不能移除」这条**：Web 版 `openProjectMenu` 里有这个分支，但它到不了 ——
+Chat 项目在侧栏是「聊天」段的平铺行，`buildSidebarGroups()` 产出的分组里根本没有它
+（`app/tests/flutter-sidebar.test.ts` 有一条测试钉住这点）。所以快照里没有 `chatProject` 字段，
+Dart 侧也无条件给「从列表移除」。搬迁移时先问一句「这条分支前端能不能触发」，
+搬过去到不了的分支只会多一处需要维护的假逻辑。
+
+顺带把 `confirmRemoveProject` 拆成「确认框」+ `removeProject(projectId)`，
+让 Web 的弹层和 Flutter 的确认框走同一个函数 —— 各写一份一定会漏掉 `activeProjectId` 的清理。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
@@ -713,12 +732,13 @@ Dart 只在「没历史、也没有正在跑的块」时画（`bare`），点一
    模型 / 思考 / 安全 / 提示词面板、排队与插话切换都进了 Flutter。
 
 6. ~~**看图 / 斜杠 / @提及**~~ —— **0.1.32 已完成**。
-7. ~~**历史跳转 / 待办展开 / 空态建议**~~ —— **0.1.33 已完成**（见上一节）。
+7. ~~**历史跳转 / 待办展开 / 空态建议**~~ —— **0.1.33 已完成**。
+8. ~~**项目长按菜单**~~ —— **0.1.34 已完成**（见上一节）。
 
 **剩下没迁的**：
-启动页 `splash.ts`、输入历史 `history-*`、以及十来个 sheet（连接、端点、主题、安全、DSH 工具、
-用量、工作区选择器、后端、重命名、编辑消息、发送历史、上下文）、扫码覆盖层 `scan-overlay.ts`、
-文件引用/下载、`acp-notice.ts`、`run-completion.ts`。
+启动页 `splash.ts`、以及十来个 sheet（连接、端点、主题、安全、DSH 工具、用量、工作区选择器、
+后端、重命名、发送历史、上下文）、扫码覆盖层 `scan-overlay.ts`、文件引用/下载、
+`acp-notice.ts`、`run-completion.ts`。
 这些都不在主路径上：点它们会 `leaveFlutterThen()` 回 WebView 开原生弹层，行为一致，只是闪一下。
 
 各插件对应关系：

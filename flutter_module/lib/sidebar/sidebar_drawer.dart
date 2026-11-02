@@ -290,8 +290,7 @@ class _SidebarDrawerState extends State<SidebarDrawer> {
       children: <Widget>[
         InkWell(
           onTap: () => _send('toggleProject', <String, Object?>{'projectId': section.projectId ?? ''}),
-          onLongPress: () =>
-              _send('projectMenu', <String, Object?>{'projectId': section.projectId ?? ''}),
+          onLongPress: () => _projectMenu(section),
           child: Container(
             color: section.active ? c.surfaceAlt : Colors.transparent,
             padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
@@ -570,6 +569,99 @@ class _SidebarDrawerState extends State<SidebarDrawer> {
         widget.onClose();
         _send('sessionMore', <String, Object?>{'id': row.id});
     }
+  }
+
+  /// 项目长按菜单。
+  ///
+  /// 以前这里 `leaveFlutterThen` 回网页版弹层（抽屉盖着，弹层在背后看不见）。
+  /// 现在动作都由侧栏通道走，菜单在本地画。
+  ///
+  /// 这里**故意**没有「内置 Chat 项目不能移除」那条分支：Web 版那条分支其实到不了 ——
+  /// Chat 项目在侧栏是「聊天」段的平铺行，永远进不了项目分组，所以分组头不会被长按到它。
+  /// 搬一条到不了的分支过来只是多一处需要维护的假逻辑。
+  Future<void> _projectMenu(SidebarSection section) async {
+    final String projectId = section.projectId ?? '';
+    if (projectId.isEmpty) return;
+    final String? choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: PiColors.of(context).surface,
+      builder: (BuildContext sheetContext) {
+        final PiColors c = PiColors.of(sheetContext);
+        Widget item(String id, String label, {bool danger = false}) => ListTile(
+              dense: true,
+              title: Text(
+                label,
+                style: TextStyle(color: danger ? c.danger : c.text, fontSize: 14),
+              ),
+              onTap: () => Navigator.of(sheetContext).pop(id),
+            );
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    section.label ?? '项目',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: c.textMuted, fontSize: 12),
+                  ),
+                ),
+              ),
+              item('create', '在此项目新建会话'),
+              item('toggle', section.collapsed ? '展开该项目' : '收起该项目'),
+              item('remove', '从列表移除项目', danger: true),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (!mounted || choice == null) return;
+    switch (choice) {
+      case 'create':
+        widget.onClose();
+        _send('createSession', <String, Object?>{'projectId': projectId});
+      case 'toggle':
+        _send('toggleProject', <String, Object?>{'projectId': projectId});
+      case 'remove':
+        final bool ok = await _confirmRemoveProject(section.label ?? '这个项目');
+        if (ok) _send('projectRemove', <String, Object?>{'projectId': projectId});
+    }
+  }
+
+  /// 二次确认：只从列表移除，不动磁盘上的文件（Web 版的提示文字照抄）。
+  Future<bool> _confirmRemoveProject(String label) async {
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        final PiColors c = PiColors.of(dialogContext);
+        return AlertDialog(
+          backgroundColor: c.surface,
+          title: Text('移除项目？', style: TextStyle(color: c.text, fontSize: 15)),
+          content: Text(
+            '只把「$label」从 PiDeck 的列表里移除，不会删除磁盘上的项目文件。',
+            style: TextStyle(color: c.textSecondary, fontSize: 13, height: 1.5),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text('取消', style: TextStyle(color: c.textMuted)),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: c.danger),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('确认移除'),
+            ),
+          ],
+        );
+      },
+    );
+    return ok == true;
   }
 
   Future<void> _rename(SidebarRow row) async {
