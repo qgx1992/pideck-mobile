@@ -181,9 +181,10 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   不能只存在某个页面自己的回调里 —— 换一个入口改，另一个入口看不见（踩过：Web 改「跟随系统」，
   Flutter 主界面还按缓存的 dark 画）。主题走 `flutter_module/lib/theme_mode.dart` 的 `piThemeMode`，
   快照里的 `themeMode` 只是「Web 侧的当前值」。
-- **抽屉的开合只有一个方向**（0.2.3）：`workspace.open` 决定 Flutter 端开还是关，`endDrawerEnableOpenDragGesture: false`。
-  允许滑动开抽屉就会出现「Web 侧不知道的抽屉」，下一份快照一到又把它关掉，看起来像抽风。
-  同理，工作区里的数据一律 Web 侧取（git 状态 / 目录 / 待办都在 `main.ts` 的 `reloadFlutterWorkspace()`）。
+- **抽屉开合 = 本地意图 + Web 快照**（0.2.3 起，0.2.4 修正）：用户点击/滑动写 `_workspaceIntent`
+  并立刻按意图画，同时把 `workspaceOpen` / `workspaceClose` 发给 Web；快照的 `open` 和意图一致后才清掉意图。
+  **只挂 `endDrawer` 不会让抽屉出现**，必须显式调 `openEndDrawer()`（踩过：只按快照开合 + 禁掉滑动，
+  用户点按钮毫无反应）。数据一律 Web 侧取（git 状态 / 目录 / 待办在 `main.ts` 的 `reloadFlutterWorkspace()`）。
 - 往 Dart 搬菜单时**不要照搬到不了的分支**：`openProjectMenu` 里「内置 Chat 项目不能移除」
   永远走不到（Chat 项目在「聊天」段平铺，进不了项目分组），所以 Dart 侧没有这个判断，
   快照里也就没有对应的 `chatProject` 字段。搬之前先验证前端能不能触发那条分支。

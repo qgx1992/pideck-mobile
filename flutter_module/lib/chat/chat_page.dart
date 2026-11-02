@@ -47,6 +47,16 @@ class _ChatScreenState extends State<ChatScreen> {
   ChatSnapshot _snapshot = const ChatSnapshot();
   SidebarSnapshot _sidebar = SidebarSnapshot.none;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  /// 右侧工作区抽屉「用户刚刚点了什么」。
+  ///
+  /// 快照是数据来源，但**开合动作要立刻有反馈**：点下去先按用户的意图画，
+  /// 直到某份快照里的 `workspace.open` 和意图一致才算对齐。
+  /// （只在「来了快照就清空意图」的话，关闭动作会被一份还在路上的旧快照顶回来。）
+  bool? _workspaceIntent;
+
+  /// 抽屉当前实际显示的开关（快照没给意见时的兜底）。
+  bool _workspaceOpen = false;
   final ScrollController _scroll = ScrollController();
   final TextEditingController _composer = TextEditingController();
 
@@ -188,12 +198,42 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  /// 统一的「打开 / 收起工作区」：先按用户意图画，再通知 Web，最后真的开合。
+  ///
+  /// 少了最后那一步 `openEndDrawer()` 就只是把 `endDrawer` 挂上去，
+  /// 抽屉不会自己滑出来 —— 这也是「按钮点了没反应」的原因之一。
+  void _setWorkspaceOpen(bool open) {
+    setState(() {
+      _workspaceIntent = open;
+      _workspaceOpen = open;
+    });
+    sendChatAction(<String, Object?>{
+      'type': open ? 'workspaceOpen' : 'workspaceClose',
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ScaffoldState? scaffold = _scaffoldKey.currentState;
+      if (scaffold == null) return;
+      if (open && !scaffold.isEndDrawerOpen) {
+        scaffold.openEndDrawer();
+      } else if (!open && scaffold.isEndDrawerOpen) {
+        Navigator.of(context).pop();
+      }
+    });
+  }
+
   /// 把「Web 侧说抽屉该开着」翻译成真的开/关。
   ///
   /// 两边状态必须由快照单向驱动：Dart 自己开抽屉只会让 Web 侧不知道，
   /// 下一次推送一到（每 80ms 都可能）抽屉就会被强行关掉。
   void _syncWorkspaceDrawer(WorkspaceSnapshot? workspace) {
-    final bool want = workspace?.open ?? false;
+    final bool? intent = _workspaceIntent;
+    // 快照追上了用户的意图 → 意图退休，之后完全听快照
+    if (intent != null && (workspace?.open ?? false) == intent) {
+      _workspaceIntent = null;
+    }
+    if (workspace != null) _workspaceOpen = workspace.open;
+    final bool want = _workspaceIntent ?? _workspaceOpen;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ScaffoldState? scaffold = _scaffoldKey.currentState;
@@ -459,6 +499,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final bool bare = snapshot.history.isEmpty && live == null;
     final int historyCount = snapshot.history.length;
     final int liveCount = live?.blocks.length ?? 0;
+    // 优先听用户刚点的意图，其次听快照，最后才回退到本地记录
+    final bool workspaceOpen = _workspaceIntent ?? snapshot.workspace?.open ?? _workspaceOpen;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -468,15 +510,25 @@ class _ChatScreenState extends State<ChatScreen> {
         onAction: sendSidebarAction,
         onClose: () => _scaffoldKey.currentState?.closeDrawer(),
       ),
-      // 右侧工作区：开合状态由 Web 侧快照决定（`workspace.open`），所以禁掉滑动，
-      // 免得用户滑开一个 Web 侧并不知道的抽屉，下一次快照就被强行关掉。
-      endDrawerEnableOpenDragGesture: false,
-      endDrawer: snapshot.workspace == null
-          ? null
-          : WorkspaceDrawer(
-              snapshot: snapshot.workspace!,
+      // 右侧工作区：数据来自快照（可能还没到），开合状态本地先记一份。
+      // 滑动手势保留 —— 用户的第一反应就是从右边缘往左滑。
+      endDrawer: workspaceOpen
+          ? WorkspaceDrawer(
+              snapshot: snapshot.workspace ??
+                  WorkspaceSnapshot(
+                    open: true,
+                    loading: true,
+                    title: snapshot.title,
+                  ),
               onAction: sendChatAction,
-            ),
+            )
+          : null,
+      onEndDrawerChanged: (bool opened) {
+        final bool current =
+            _workspaceIntent ?? _snapshot.workspace?.open ?? _workspaceOpen;
+        if (opened == current) return;
+        _setWorkspaceOpen(opened);
+      },
       appBar: AppBar(
         titleSpacing: 0,
         leading: IconButton(
@@ -506,16 +558,12 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: <Widget>[
           IconButton(
-            tooltip: snapshot.workspace?.open == true ? '收起工作区' : '工作区',
+            tooltip: workspaceOpen ? '收起工作区' : '工作区',
             icon: Icon(
-              snapshot.workspace?.open == true
-                  ? Icons.view_sidebar_rounded
-                  : Icons.view_sidebar_outlined,
+              workspaceOpen ? Icons.view_sidebar_rounded : Icons.view_sidebar_outlined,
               color: c.textMuted,
             ),
-            onPressed: () => sendChatAction(<String, Object?>{
-              'type': snapshot.workspace?.open == true ? 'workspaceClose' : 'workspaceOpen',
-            }),
+            onPressed: () => _setWorkspaceOpen(!workspaceOpen),
           ),
           IconButton(
             tooltip: '刷新',
@@ -542,7 +590,7 @@ class _ChatScreenState extends State<ChatScreen> {
             return;
           }
           if (scaffold != null && scaffold.isEndDrawerOpen) {
-            sendChatAction(<String, Object?>{'type': 'workspaceClose'});
+            _setWorkspaceOpen(false);
             return;
           }
           if (_snapshot.picker != null) {
