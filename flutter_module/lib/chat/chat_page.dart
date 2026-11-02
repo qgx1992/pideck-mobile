@@ -420,12 +420,10 @@ class _ChatScreenState extends State<ChatScreen> {
         onClose: () => _scaffoldKey.currentState?.closeDrawer(),
       ),
       appBar: AppBar(
-        backgroundColor: c.background,
-        elevation: 0,
         titleSpacing: 0,
         leading: IconButton(
           tooltip: '会话列表',
-          icon: Icon(Icons.menu_rounded, color: c.text),
+          icon: const Icon(Icons.menu_rounded),
           onPressed: () => _scaffoldKey.currentState?.openDrawer(),
         ),
         title: Column(
@@ -436,14 +434,17 @@ class _ChatScreenState extends State<ChatScreen> {
               snapshot.title.isEmpty ? '会话' : snapshot.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: c.text),
+              style: Theme.of(context).textTheme.titleMedium,
             ),
             if (snapshot.isRunning)
               Text(
                 snapshot.statusText.isEmpty ? '运行中…' : snapshot.statusText,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11.5, color: c.accent),
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(color: Theme.of(context).colorScheme.primary),
               ),
           ],
         ),
@@ -527,26 +528,20 @@ class _ChatScreenState extends State<ChatScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
-                Container(
-                  width: 92,
-                  height: 92,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: c.accent.withValues(alpha: 0.14),
+                CircleAvatar(
+                  radius: 44,
+                  backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                  child: Icon(
+                    Icons.chat_bubble_outline_rounded,
+                    size: 36,
+                    color: Theme.of(context).colorScheme.onPrimaryContainer,
                   ),
-                  child: Icon(Icons.forum_outlined, size: 38, color: c.accent),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 20),
                 Text(
                   snapshot.emptyTitle.isEmpty ? '开始使用你的 PiDeck' : snapshot.emptyTitle,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 23,
-                    height: 1.3,
-                    fontWeight: FontWeight.w600,
-                    color: c.text,
-                  ),
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: c.text),
                 ),
                 if (snapshot.emptySubtitle.isNotEmpty)
                   Padding(
@@ -554,7 +549,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Text(
                       snapshot.emptySubtitle,
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 13.5, height: 1.55, color: c.textMuted),
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: c.textMuted),
                     ),
                   ),
                 const SizedBox(height: 20),
@@ -1131,8 +1126,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// 空态提示词：点一下填进输入框（不直接发 —— 用户多半想改两个字再发）。
   Widget _suggestionChip(PiColors c, String prompt) {
-    return InkWell(
-      onTap: () {
+    return ActionChip(
+      onPressed: () {
         _composer.value = TextEditingValue(
           text: prompt,
           selection: TextSelection.collapsed(offset: prompt.length),
@@ -1142,20 +1137,17 @@ class _ChatScreenState extends State<ChatScreen> {
         _composerFocus.requestFocus();
         setState(() {});
       },
-      borderRadius: BorderRadius.circular(999),
-      // 尺寸与配色照 Web 的 `.suggestion-chip`：8/16 内边距、13px、bg-elev 底、无边线
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 320),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(999),
-          color: c.surfaceAlt,
-        ),
+      visualDensity: VisualDensity.compact,
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+      side: BorderSide.none,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      label: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 300),
         child: Text(
           prompt,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 13, height: 1.35, color: c.textMuted),
+          style: TextStyle(fontSize: 13, height: 1.35, color: c.textSecondary),
         ),
       ),
     );
@@ -1266,19 +1258,18 @@ class _ChatScreenState extends State<ChatScreen> {
     bool muted = false,
     bool active = false,
   }) {
-    final Color color = active ? c.accent : (muted ? c.textMuted : c.textSecondary);
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: active ? c.accent.withValues(alpha: 0.16) : c.surface,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: active ? c.accent : c.divider),
-        ),
-        child: Text(label, style: TextStyle(fontSize: 12, color: color)),
-      ),
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final Color color = active ? scheme.onSecondaryContainer : (muted ? c.textMuted : c.textSecondary);
+    // 用真的 M3 组件，不要继续手画胶囊：ActionChip 自带涟漪、无障碍语义、
+    // 跟随 chipTheme 的尺寸与形状，也才有"原生控件"的手感。
+    return ActionChip(
+      onPressed: onTap,
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      backgroundColor: active ? scheme.secondaryContainer : scheme.surfaceContainerHigh,
+      side: BorderSide.none,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      label: Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: active ? FontWeight.w600 : FontWeight.w500)),
     );
   }
 
@@ -1568,11 +1559,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _composerBar(PiColors c, ChatSnapshot snapshot) {
     final bool running = snapshot.isRunning;
     final bool canSend = _composer.text.trim().isNotEmpty || _images.isNotEmpty;
-    return Container(
-      decoration: BoxDecoration(
-        color: c.background,
-        border: Border(top: BorderSide(color: c.divider)),
-      ),
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface,
       child: SafeArea(
         top: false,
         child: Column(
@@ -1584,21 +1573,22 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: <Widget>[
-                  IconButton(
+                  IconButton.filledTonal(
                     tooltip: '添加图片',
                     visualDensity: VisualDensity.compact,
-                    color: c.textMuted,
-                    icon: const Icon(Icons.add_photo_alternate_outlined, size: 22),
+                    icon: const Icon(Icons.add_photo_alternate_outlined, size: 20),
                     onPressed: _images.length >= _maxImages ? null : _pickImage,
                   ),
-                  if (snapshot.header.promptCount > 0)
-                    IconButton(
+                  if (snapshot.header.promptCount > 0) ...<Widget>[
+                    const SizedBox(width: 4),
+                    IconButton.filledTonal(
                       tooltip: '提示词模板',
                       visualDensity: VisualDensity.compact,
-                      color: c.textMuted,
-                      icon: const Icon(Icons.bolt_outlined, size: 22),
+                      icon: const Icon(Icons.bolt_outlined, size: 20),
                       onPressed: () => sendChatAction(<String, Object?>{'type': 'prompts'}),
                     ),
+                  ],
+                  const SizedBox(width: 8),
                   Expanded(
                     child: TextField(
                       controller: _composer,
@@ -1606,47 +1596,41 @@ class _ChatScreenState extends State<ChatScreen> {
                       minLines: 1,
                       maxLines: 6,
                       textInputAction: TextInputAction.newline,
-                      style: TextStyle(color: c.text, fontSize: 14.5),
+                      style: TextStyle(color: c.text, fontSize: 15),
                       decoration: InputDecoration(
-                        hintText: running ? '运行中，可继续输入（会排队）' : '发消息…',
-                        hintStyle: TextStyle(color: c.textMuted, fontSize: 13.5),
+                        hintText: running ? '运行中，输入会排队' : '发消息…',
+                        hintStyle: TextStyle(color: c.textMuted, fontSize: 14),
                         filled: true,
-                        fillColor: c.background,
+                        fillColor: scheme.surfaceContainerHighest,
                         isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: BorderSide(color: c.divider),
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
                         ),
                         enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: BorderSide(color: c.divider),
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
                         ),
                         focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: BorderSide(
-                            color: Color.alphaBlend(c.accent.withValues(alpha: 0.6), c.divider),
-                          ),
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide(color: scheme.primary, width: 1.4),
                         ),
                       ),
                       onChanged: _onComposerChanged,
                     ),
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 8),
                   if (running)
-                    IconButton.filled(
+                    IconButton.filledTonal(
                       tooltip: '停止',
-                      style: IconButton.styleFrom(backgroundColor: c.surfaceAlt, foregroundColor: c.danger),
+                      style: IconButton.styleFrom(foregroundColor: c.danger),
                       icon: const Icon(Icons.stop_rounded),
                       onPressed: () => sendChatAction(<String, Object?>{'type': 'stop'}),
                     )
                   else
                     IconButton.filled(
                       tooltip: '发送',
-                      style: IconButton.styleFrom(
-                        backgroundColor: canSend ? c.accent : c.surfaceAlt,
-                        foregroundColor: canSend ? Colors.white : c.textMuted,
-                      ),
                       icon: const Icon(Icons.arrow_upward_rounded),
                       onPressed: canSend ? _send : null,
                     ),
@@ -1738,6 +1722,8 @@ class _HistoryTile extends StatelessWidget {
 
   Widget _body(BuildContext context) {
     final PiColors c = PiColors.of(context);
+    // M3 的角色色（容器/其上文字）不在 PiColors 里 —— 它只管"语义"，角色色直接取 scheme。
+    final ColorScheme scheme = Theme.of(context).colorScheme;
 
     if (item.isTool) {
       return _ToolCard(
@@ -1749,80 +1735,75 @@ class _HistoryTile extends StatelessWidget {
     }
 
     if (item.isUser) {
-      // 与 Web 版 `.msg--user .msg-body` 对齐：整宽、圆角 12、10/12 内边距、
-      // 底色是 accent 16% 叠在 bg-soft 上（不是直接叠页面底色，否则深色下更艳）。
-      return GestureDetector(
-        onLongPress: onLongPress,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            _roleLabel(c, '我'),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: Color.alphaBlend(c.accent.withValues(alpha: 0.16), c.surface),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Color.alphaBlend(c.accent.withValues(alpha: 0.32), c.divider)),
+      // Material 3 的对话惯例：用户消息靠右、填 `primaryContainer`、圆角 20，
+      // 右下角收一个小圆角表示"这条是出口"。助手消息不套气泡（正文里还有
+      // 代码块、表格、工具卡，套一层框就是框套框）。
+      return Align(
+        alignment: Alignment.centerRight,
+        child: GestureDetector(
+          onLongPress: onLongPress,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.82),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: scheme.primaryContainer,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(20),
+                      topRight: Radius.circular(20),
+                      bottomLeft: Radius.circular(20),
+                      bottomRight: Radius.circular(6),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      if (item.images.isNotEmpty) _images(context, item.images),
+                      if (item.text.isNotEmpty)
+                        MarkdownView(
+                          source: item.text,
+                          compact: true,
+                          baseStyle: TextStyle(color: scheme.onPrimaryContainer, fontSize: 15),
+                        ),
+                    ],
+                  ),
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  if (item.images.isNotEmpty) _images(context, item.images),
-                  if (item.text.isNotEmpty)
-                    MarkdownView(source: item.text, compact: true, baseStyle: TextStyle(color: c.text, fontSize: 14.5)),
-                ],
-              ),
-            ),
-            _timeLabel(c, item.time),
-          ],
+              _timeLabel(context, c, item.time, align: CrossAxisAlignment.end),
+            ],
+          ),
         ),
       );
     }
 
-    // 助手消息也有气泡（Web 版每条 `.msg-body` 都有底色与边线）：
-    // 之前这里是一段裸文本，一屏里「一半有框一半没框」，看着就没有版式。
+    // 助手消息：整宽正文 + 顶部一个极小的时间行（M3 里靠排版分层，不靠边框）。
     return GestureDetector(
       onLongPress: onLongPress,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          _roleLabel(c, 'Pi'),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: c.surface,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: c.divider),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                if (item.thinking.isNotEmpty) _ThinkingBlock(text: item.thinking),
-                if (item.text.isNotEmpty) MarkdownView(source: item.text),
-                if (item.images.isNotEmpty) _images(context, item.images),
-              ],
-            ),
-          ),
-          _timeLabel(c, item.time),
+          if (item.thinking.isNotEmpty) _ThinkingBlock(text: item.thinking),
+          if (item.text.isNotEmpty) MarkdownView(source: item.text),
+          if (item.images.isNotEmpty) _images(context, item.images),
+          _timeLabel(context, c, item.time),
         ],
       ),
     );
   }
 
-  /// 角色行（`11px` 暗色，左缩进 2）——与 Web 的 `.msg-role` 一致。
-  Widget _roleLabel(PiColors c, String label) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 2, top: 6),
-      child: Text(label, style: TextStyle(fontSize: 11, color: c.textMuted)),
-    );
-  }
-
-  /// 时间行：留在气泡外面（Web 的 `.msg-time` 是消息列里的一行，不是气泡内容）。
-  Widget _timeLabel(PiColors c, String time) {
+  /// 时间行：气泡外的一行小字（M3 的 `labelSmall`，比正文低两级的层级）。
+  Widget _timeLabel(BuildContext context, PiColors c, String time,
+      {CrossAxisAlignment align = CrossAxisAlignment.start}) {
     if (time.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(left: 2, top: 4, bottom: 6),
-      child: Text(time, style: TextStyle(fontSize: 10, color: c.textMuted)),
+      padding: const EdgeInsets.only(left: 6, right: 6, top: 6, bottom: 12),
+      child: Text(
+        time,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: c.textMuted),
+      ),
     );
   }
 
@@ -2072,10 +2053,10 @@ class _ToolCardState extends State<_ToolCard> {
     };
     final String firstLine = widget.detail.split('\n').first;
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
+      margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: c.divider),
+        borderRadius: BorderRadius.circular(12),
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2086,11 +2067,11 @@ class _ToolCardState extends State<_ToolCard> {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               child: Row(
                 children: <Widget>[
-                  Icon(icon, size: 14, color: color),
-                  const SizedBox(width: 6),
+                  Icon(icon, size: 16, color: color),
+                  const SizedBox(width: 8),
                   Text(
                     widget.name,
-                    style: TextStyle(fontSize: 12, color: c.text, fontFamily: 'monospace'),
+                    style: TextStyle(fontSize: 12.5, color: c.text, fontFamily: 'monospace'),
                   ),
                   if (!_open && firstLine.isNotEmpty)
                     Expanded(

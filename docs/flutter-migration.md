@@ -737,7 +737,7 @@ Dart 侧也无条件给「从列表移除」。搬迁移时先问一句「这条
 2. **DSH 子代理历史仍回网页版**：那是要滚动的长文本（角色前缀 + 多段），
    搬过来的收益远小于再写一套排版。
 
-## 视觉对齐 Web（0.1.37）：别凭手感重画
+## 视觉对齐 Web（0.1.37）：别凭手感重画（**已被 0.2.0 取代**，留作历史）
 
 用户反馈「新加的原生 UI 感觉怪怪的」。查下来不是某个组件写错了，而是**重画的时候用了自己的手感**：
 气泡、工具卡、输入框、空态各用各的圆角与间距，一屏里像拼出来的。基准其实一直在仓库里 ——
@@ -793,6 +793,53 @@ Dart 侧也无条件给「从列表移除」。搬迁移时先问一句「这条
    （流式时每帧都是新 key，无界就是内存泄漏）。
 3. 图片永远给 `cacheWidth`：解码成本跟原始像素成正比，而缩略图只有 128 逻辑像素。
 4. 推送频率是产品参数，不是越快越好 —— 40ms 与 80ms 在流式文本上看不出差别，但解码与重建成本差一倍。
+
+## 0.2.0：从「对齐网页」改成 Material 3（目标变更）
+
+0.1.21–0.1.38 的迁移是「把 WebView 里的像素搬进 Flutter」：字号、圆角、间距都照抄 `app/src/styles.css`。
+结果是**能跑，但看着还是网页** —— 手画的胶囊、虚线框、12px 圆角、贴着边框的小灰字，都是 Web 的手段，
+不是一台安卓原生应用的样子。用户的原话是「加这个 flutter 我是想重构整个 UI，当前怎么还是 web 样式」。
+
+从 0.2.0 起，**`app/src/styles.css` 不再是视觉基准**。基准换成 Material 3：
+
+### 设计层（`flutter_module/lib/app_theme.dart`）
+
+- `buildPiTheme(Brightness)` → `ThemeData(useMaterial3: true)`，配色 `ColorScheme.fromSeed(seedColor: 0xFF4C6FE0)`，
+  亮/暗两套，`themeMode` 默认 `system`（跟系统走）。
+- **`PiColors` 降级成「语义色薄适配层」**：`background/surface/surfaceAlt/accent/danger/text/textSecondary/textMuted/divider`
+  全部映射自 `colorScheme`（`surface` / `surfaceContainerLow` / `surfaceContainerHigh` / `primary` / `error` /
+  `onSurface` / `onSurfaceVariant` / `outlineVariant`）。好处是**还没逐个改写的页面立刻跟着 M3 调色板走**，
+  不会出现「聊天页是 M3、侧栏还是旧配色」的两套视觉。
+- 组件主题一次定死，页面里不再写像素：`appBarTheme`（surface 底、无 tint）、`cardTheme`（radius 16、`surfaceContainerLow`、
+  `outlineVariant` 边）、`bottomSheetTheme`（顶部 radius 28 + `showDragHandle: true`）、`dialogTheme`（radius 24）、
+  `inputDecorationTheme`（filled + radius 20 + focused 用 `primary`）、`chipTheme`（radius 8、`surfaceContainerHigh`）、
+  `filledButton/outlinedButton/textButton`（radius 20）、`snackBarTheme`（floating）、`popupMenuTheme`（radius 16）。
+- M3 角色色（`primaryContainer` / `onPrimaryContainer` 等）**不进 `PiColors`**：需要时直接 `Theme.of(context).colorScheme`，
+  语义与角色分开，免得 PiColors 变成一个什么都装的袋子。
+
+### 各页面变成了什么
+
+| 位置 | 0.1.x（照抄 Web） | 0.2.0（M3） |
+|---|---|---|
+| 顶部信息条 | 手画胶囊（`InkWell` + 圆角容器 + 边框） | `ActionChip`（带涟漪与无障碍语义），选中态 `secondaryContainer` |
+| 空态提示词 | 手画胶囊、`bg-elev` 底、无边线 | `ActionChip`，点一下仍只填输入框不发 |
+| 空态 | 92px 半透明圆 + 23px 字 | `CircleAvatar(primaryContainer)` + `headlineSmall`/`bodyMedium` |
+| 用户消息 | 整宽气泡、accent 16% 叠色、12 圆角、带边框 | 靠右、`primaryContainer`、20 圆角（右下 6）、正文 `onPrimaryContainer` |
+| 助手消息 | 整宽气泡 + 边框（与用户对称） | **不套气泡**：整宽正文（正文里还有代码块/表格/工具卡，套框就是框套框），时间用 `labelSmall` |
+| 角色标签「我 / Pi」 | 11px 小灰字 | 去掉 —— 左右对齐本身已经说明是谁 |
+| 工具卡 | 1px 实线框 | `surfaceContainerLow` 低层卡片、12 圆角 |
+| 输入区 | 自绘 `Container` + 竖线分隔 + 带边框 TextField | `Material(surface)` + `TextField`（filled、`surfaceContainerHighest`、radius 24）+ `IconButton.filledTonal`（附件/提示词）+ `IconButton.filled`（发送） |
+| 侧栏页签 | `Row` + 手画按钮 | `SegmentedButton`（整条连在一起，M3 的标准控件） |
+| 设置分组 | 半透明容器 + 12 圆角 + 更小的灰字标题 | `Card`（radius 16）+ `titleSmall` + 主色标题 |
+| 通用弹层 | `backgroundColor: transparent` + 手画把手 + 16 圆角 | `showDragHandle: true` + `useSafeArea`，形状交给 `bottomSheetTheme`；行用 `ListTile` |
+
+### 判断准则（已写进 AGENTS.md）
+
+1. 能用 M3 现成控件就别自己画：`ActionChip` / `SegmentedButton` / `ListTile` / `Card` / `IconButton.filledTonal`
+   自带尺寸、涟漪、无障碍语义与主题联动；手画的版本永远会在某个模式下对不上。
+2. 页面里**不写像素值**（字号、圆角、内边距）—— 要么走 `textTheme`，要么走组件主题；只有布局间距可以用常量。
+3. 需要角色色（`primaryContainer` 之类）时直接取 `colorScheme`，不要往 `PiColors` 里加字段。
+4. 迁移一个页面的顺序：先让它只用 `PiColors`（保证颜色跟随 M3），再把自绘控件换成 M3 控件，最后删掉自绘样式。
 
 ## 逐页迁移顺序（建议）
 

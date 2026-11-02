@@ -122,8 +122,8 @@ gh secret set ANDROID_KEYSTORE_PROPERTIES < android/keystore.properties
 
 产物：
 ```
-apk/PiDeck-0.1.38-debug.apk    # 约 27 MB（含 Flutter 引擎后明显变大），debug 签名（含扫码插件后变大）
-apk/PiDeck-0.1.38-release.apk  # 约 43 MB（新增 Flutter 引擎与 AOT 产物），自己的 keystore 签名
+apk/PiDeck-0.2.0-debug.apk    # 约 27 MB（含 Flutter 引擎后明显变大），debug 签名（含扫码插件后变大）
+apk/PiDeck-0.2.0-release.apk  # 约 43 MB（新增 Flutter 引擎与 AOT 产物），自己的 keystore 签名
 apk/index.html               # 下载页（二维码内联）
 apk/qr.svg                   # 同一张二维码的独立文件
 apk/SHA256SUMS.txt           # 校验值（多项目合并，不会覆盖别人的条目）

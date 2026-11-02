@@ -169,7 +169,11 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - **快照驱动的页面里，`setState` 必须能说出「哪个可见元素依赖它」**。说不出就是在用整页重建换一个没人看的
   变量（0.1.38 的输入框 `onChanged` 就是这样：每敲一个字重建整页）。纯函数式转换（markdown 解析、base64 解码）
   输入稳定就缓存，缓存必须有上限（FIFO），否则流式时每帧一个新 key 就是内存泄漏；图片永远给 `cacheWidth`。
-- **视觉参数照 `app/src/styles.css` 抄，别凭手感**：`--radius` = 12、气泡内边距 10/12、角色行 11px、
+- **视觉基准是 Material 3，不是 `app/src/styles.css`**（0.2.0 起重构为原生 UI）。页面里**不写像素值**
+  （字号/圆角/内边距）——走 `textTheme` 或组件主题；能用 `ActionChip` / `SegmentedButton` / `ListTile` /
+  `Card` / `IconButton.filledTonal` 就别自己画（手画的控件对不上主题切换与无障碍）。M3 角色色（`primaryContainer` 等）
+  直接取 `Theme.of(context).colorScheme`，不要往 `PiColors` 里加字段 —— 它只是「语义色」的薄适配层。
+- **视觉参数照 `app/src/styles.css` 抄，别凭手感**（0.1.x 时代的规则，仅用于解释历史代码；新代码按上一条）：`--radius` = 12、气泡内边距 10/12、角色行 11px、
   时间行 10px 且在气泡外、消息图 128×128、输入框圆角 10、空态是「徽标 + 标题 + 副标题 + 提示词」整块。
   0.1.37 之前的偏差清单见 `docs/flutter-migration.md`。半透明色一律 `Color.alphaBlend(色.withValues(alpha: x), 真正的底色)`，
   不要直接叠页面底色（Web 的 `color-mix` 是对着 `--bg-soft` 混的）。纯黑底的页面（看图页）不许用主题色画按钮。

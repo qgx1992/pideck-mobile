@@ -170,36 +170,30 @@ class _SidebarDrawerState extends State<SidebarDrawer> {
   }
 
   Widget _tabs(PiColors c, SidebarSnapshot snapshot) {
+    if (snapshot.tabs.isEmpty) return const SizedBox.shrink();
+    // M3 的页签就该是 SegmentedButton：整条连在一起、选中项一块填充色，
+    // 自己拿 Row + Container 拼出来的是"网页的 tag 栏"。
+    final Set<String> ids = snapshot.tabs.map((SidebarTab tab) => tab.id).toSet();
+    final String selected = ids.contains(snapshot.tab) ? snapshot.tab : snapshot.tabs.first.id;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-      child: Row(
-        children: <Widget>[
+      child: SegmentedButton<String>(
+        segments: <ButtonSegment<String>>[
           for (final SidebarTab tab in snapshot.tabs)
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: GestureDetector(
-                  onTap: () => _send('toggleTab', <String, Object?>{'tab': tab.id}),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 7),
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: snapshot.tab == tab.id ? c.accent.withValues(alpha: 0.16) : c.surfaceAlt,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      tab.count > 0 ? '${tab.label} ${tab.count}' : tab.label,
-                      style: TextStyle(
-                        color: snapshot.tab == tab.id ? c.accent : c.textSecondary,
-                        fontSize: 12.5,
-                        fontWeight: snapshot.tab == tab.id ? FontWeight.w600 : FontWeight.w400,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+            ButtonSegment<String>(
+              value: tab.id,
+              label: Text(tab.count > 0 ? '${tab.label} ${tab.count}' : tab.label),
             ),
         ],
+        selected: <String>{selected},
+        showSelectedIcon: false,
+        onSelectionChanged: (Set<String> value) =>
+            _send('toggleTab', <String, Object?>{'tab': value.first}),
+        style: SegmentedButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          textStyle: const TextStyle(fontSize: 12.5),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
       ),
     );
   }

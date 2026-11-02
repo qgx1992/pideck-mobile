@@ -24,7 +24,8 @@ Future<void> main() async {
       sessionId: args.sessionId,
       initialSettingsJson: initialJson,
       initialChatJson: initialChatJson,
-      initialThemeMode: themeModeFrom(seed?.theme.mode ?? 'dark'),
+      // 默认跟随系统：这是 0.2.0 起的产品决定（Web 侧旧默认是 dark）
+      initialThemeMode: themeModeFrom(seed?.theme.mode ?? 'system'),
       connection: seed?.connection,
     ),
   );

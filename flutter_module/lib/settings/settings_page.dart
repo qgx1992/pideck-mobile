@@ -606,31 +606,26 @@ class _Section extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final PiColors c = PiColors.of(context);
-    return Container(
+    final ThemeData theme = Theme.of(context);
+    // M3 的设置分组：一组一张实心卡（`surfaceContainerLow`），标题用
+    // `titleSmall`+主色，视觉层级由卡片与留白给出，不再靠"更小的灰字"。
+    return Card(
       margin: const EdgeInsets.only(top: 12),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-      decoration: BoxDecoration(
-        color: c.surface,
-        // 与聊天页气泡、弹层统一成 12（Web 的 --radius）
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 2, bottom: 8),
-            child: Text(
-              title,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.3,
-                color: c.textMuted,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text(
+                title,
+                style: theme.textTheme.titleSmall?.copyWith(color: c.accent),
               ),
             ),
-          ),
-          ...children,
-        ],
+            ...children,
+          ],
+        ),
       ),
     );
   }

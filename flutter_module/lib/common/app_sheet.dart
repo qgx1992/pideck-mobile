@@ -108,10 +108,13 @@ class AppSheetHost {
 
   Future<void> _present(BuildContext context) async {
     _open = true;
+    // `showDragHandle` + `bottomSheetTheme` 的形状就是 M3 的弹层外观，
+    // 不用再自己画那条把手（手画的那条与 M3 的把手粗细、位置都对不上）。
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      showDragHandle: true,
+      useSafeArea: true,
       builder: (BuildContext sheetContext) {
         final ValueNotifier<AppSheet>? view = _view;
         if (view == null) return const SizedBox.shrink();
@@ -159,10 +162,10 @@ class _AppSheetBody extends StatelessWidget {
         lastGroup = item.group;
         children.add(
           Padding(
-            padding: EdgeInsets.fromLTRB(16, children.isEmpty ? 0 : 10, 16, 4),
+            padding: EdgeInsets.fromLTRB(24, children.isEmpty ? 0 : 12, 24, 4),
             child: Text(
               item.group,
-              style: TextStyle(color: c.textMuted, fontSize: 11.5, letterSpacing: 0.3),
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(color: c.accent),
             ),
           ),
         );
@@ -170,57 +173,36 @@ class _AppSheetBody extends StatelessWidget {
       children.add(_row(context, c, item));
     }
 
-    return Container(
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              const SizedBox(height: 8),
-              Center(
-                child: Container(
-                  width: 34,
-                  height: 4,
-                  decoration: BoxDecoration(color: c.divider, borderRadius: BorderRadius.circular(2)),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
-                child: Text(
-                  sheet.title,
-                  style: TextStyle(color: c.text, fontSize: 15, fontWeight: FontWeight.w600),
-                ),
-              ),
-              if (sheet.note.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-                  child: Text(
-                    sheet.note,
-                    style: TextStyle(color: c.textMuted, fontSize: 12, height: 1.5),
-                  ),
-                ),
-              Flexible(
-                child: ListView(
-                  shrinkWrap: true,
-                  padding: const EdgeInsets.only(bottom: 12),
-                  children: children,
-                ),
-              ),
-            ],
+    final ThemeData theme = Theme.of(context);
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 4, 24, 4),
+            child: Text(sheet.title, style: theme.textTheme.titleLarge),
           ),
-        ),
+          if (sheet.note.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: Text(sheet.note, style: theme.textTheme.bodySmall?.copyWith(color: c.textMuted)),
+            ),
+          Flexible(
+            child: ListView(
+              shrinkWrap: true,
+              padding: const EdgeInsets.only(bottom: 16),
+              children: children,
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _row(BuildContext context, PiColors c, AppSheetItem item) {
+    final ThemeData theme = Theme.of(context);
     final Color color = item.disabled
         ? c.textMuted.withValues(alpha: 0.6)
         : item.danger
@@ -228,42 +210,24 @@ class _AppSheetBody extends StatelessWidget {
             : c.text;
     // 纯信息行（目标 / 技能）不给点击：点了没反应比不画箭头更糟
     final VoidCallback? onTap = item.disabled || !item.actionable ? null : () => onPick(item.id);
-    return InkWell(
+    return ListTile(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: <Widget>[
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(item.label, style: TextStyle(color: color, fontSize: 14)),
-                  if (item.description.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        item.description,
-                        style: TextStyle(color: c.textMuted, fontSize: 11.5, height: 1.4),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            if (item.selected)
-              Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: Icon(Icons.check, size: 16, color: c.accent),
-              )
-            else if (item.actionable)
-              Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: Icon(Icons.chevron_right, size: 16, color: c.textMuted),
-              ),
-          ],
-        ),
+      enabled: !item.disabled,
+      selected: item.selected,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+      title: Text(
+        item.label,
+        style: theme.textTheme.bodyLarge?.copyWith(color: color, fontWeight: FontWeight.w500),
       ),
+      subtitle: item.description.isEmpty
+          ? null
+          : Text(
+              item.description,
+              style: theme.textTheme.bodySmall?.copyWith(color: c.textMuted),
+            ),
+      trailing: item.selected
+          ? Icon(Icons.check_rounded, size: 20, color: c.accent)
+          : (item.actionable ? Icon(Icons.chevron_right_rounded, size: 20, color: c.textMuted) : null),
     );
   }
 }
