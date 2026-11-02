@@ -1,7 +1,7 @@
 /** 对话渲染：历史消息 + 当前轮的流式块 + ask 确认卡片。 */
 
 import type { ChatBlock, PendingUiRequest, RunStatus, WireMessage } from "@core/types.ts";
-import { h, clear } from "./dom.ts";
+import { h, clear, clockOf } from "./dom.ts";
 import { renderMarkdownInto } from "./markdown.ts";
 import type { MarkdownOptions } from "./markdown.ts";
 import { collectImageSources } from "./image-attach-model.ts";
@@ -1099,7 +1099,7 @@ function messageNode(
   wrap.append(body);
   if (images.length > 0) wrap.append(imageStrip(images));
   if (typeof timestamp === "number" && timestamp > 0) {
-    wrap.append(h("div", { class: "msg-time", text: new Date(timestamp).toLocaleTimeString().slice(0, 5) }));
+    wrap.append(h("div", { class: "msg-time", text: clockOf(timestamp) }));
   }
   return wrap;
 }

@@ -13,6 +13,7 @@
 
 import type { ChatBlock, PendingUiRequest, RunStatus, WireMessage } from "@core/types.ts";
 import { messageText, normalizeRole } from "../ui/chat-view.ts";
+import { clockOf } from "../ui/dom.ts";
 import { splitThinking } from "../ui/thinking-tags.ts";
 import { collectImageSources } from "../ui/image-attach-model.ts";
 import { actionsForRole } from "../ui/message-actions-model.ts";
@@ -94,10 +95,10 @@ export interface ChatMenuItem {
 /** 工具条目的两行摘要（和 `historyToolEntry()` 的口径一致）。 */
 const TOOL_DETAIL_LIMIT = 2_000;
 
-function clockOf(timestamp: unknown): string {
+function messageClock(timestamp: unknown): string {
   if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) return "";
   try {
-    return new Date(timestamp).toLocaleTimeString().slice(0, 5);
+    return clockOf(timestamp);
   } catch {
     return "";
   }
@@ -144,7 +145,7 @@ export function historyItemsOf(messages: readonly WireMessage[]): ChatHistoryIte
         role: "tool",
         text: "",
         thinking: "",
-        time: clockOf(message.timestamp),
+        time: messageClock(message.timestamp),
         images: [],
         toolName,
         toolState: isError ? "error" : status === "running" ? "running" : "ok",
@@ -171,7 +172,7 @@ export function historyItemsOf(messages: readonly WireMessage[]): ChatHistoryIte
       role: role === "user" ? "user" : "assistant",
       text: split.text,
       thinking,
-      time: clockOf(message.timestamp),
+      time: messageClock(message.timestamp),
       images,
       toolName: "",
       toolState: "",

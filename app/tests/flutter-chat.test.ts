@@ -32,7 +32,9 @@ test("historyItemsOf：用户消息取正文与时间", () => {
   assert.equal(items[0].role, "user");
   assert.equal(items[0].text, "你好");
   assert.equal(items[0].id, "m1");
-  assert.match(items[0].time, /^\d{1,2}:\d{2}$/);
+  // 必须是 24 小时制补零，且**不能**跟着系统语言变：en-US 下 toLocaleTimeString()
+  // 给的是 "3:04:00 AM"，切前五位就成了 "3:04:"（CI 上就是这么红的）
+  assert.match(items[0].time, /^[0-2]\d:[0-5]\d$/);
 });
 
 test("historyItemsOf：<thinking> 标签从正文里剥出来", () => {

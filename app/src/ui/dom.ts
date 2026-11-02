@@ -62,6 +62,18 @@ export function clear(el: Element): void {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
+/**
+ * 只取「时:分」的钟点（24 小时制、补零）。
+ *
+ * 别用 `toLocaleTimeString().slice(0, 5)`：它跟着系统语言走 —— en-US 下是
+ * `3:04:00 AM`，切出来就是 `3:04:`（带一个孤零零的冒号）。CI 跑在 en-US 上，
+ * 于是「所有测试在本地绿、在 GitHub 上红」，真机把语言切成英文也会看到这个尾巴。
+ */
+export function clockOf(ms: number): string {
+  const date = new Date(ms);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 export function fmtTime(ms: number | undefined): string {
   if (!ms) return "";
   const date = new Date(ms);
