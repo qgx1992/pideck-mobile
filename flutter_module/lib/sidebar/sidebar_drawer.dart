@@ -146,16 +146,22 @@ class _SidebarDrawerState extends State<SidebarDrawer> {
           hintStyle: TextStyle(color: c.textMuted, fontSize: 13.5),
           prefixIcon: Icon(Icons.search, size: 17, color: c.textMuted),
           prefixIconConstraints: const BoxConstraints(minWidth: 34),
-          suffixIcon: _search.text.isEmpty
-              ? null
-              : IconButton(
-                  tooltip: '清空',
-                  icon: Icon(Icons.close, size: 15, color: c.textMuted),
-                  onPressed: () {
-                    _search.clear();
-                    _send('search', <String, Object?>{'query': ''});
-                  },
-                ),
+          // 清空按钮要听 controller：`_search.text` 只在 build 时读一次的话，
+          // 打完字按钮不会出现（整页不重建），用户只能一个个删。
+          suffixIcon: ValueListenableBuilder<TextEditingValue>(
+            valueListenable: _search,
+            builder: (BuildContext context, TextEditingValue value, Widget? _) =>
+                value.text.isEmpty
+                    ? const SizedBox.shrink()
+                    : IconButton(
+                        tooltip: '清空',
+                        icon: Icon(Icons.close, size: 15, color: c.textMuted),
+                        onPressed: () {
+                          _search.clear();
+                          _send('search', <String, Object?>{'query': ''});
+                        },
+                      ),
+          ),
           filled: true,
           fillColor: c.surfaceAlt,
           border: OutlineInputBorder(

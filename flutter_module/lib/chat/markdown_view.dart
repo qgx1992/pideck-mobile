@@ -18,12 +18,19 @@ class MarkdownView extends StatelessWidget {
     super.key,
     required this.source,
     this.baseStyle,
-    this.selectable = true,
+    this.selectable = false,
     this.compact = false,
   });
 
   final String source;
   final TextStyle? baseStyle;
+
+  /// 正文是否可选。
+  ///
+  /// 默认 **false**：`SelectableText` 自己会吃掉长按手势（它要开始选词），
+  /// 外层 `GestureDetector.onLongPress` 就永远收不到 —— 症状是「长按助手消息
+  /// 弹不出菜单」，而菜单里本来就有「复制」。代码块仍然可选（`_CodeBlock`），
+  /// 那里需要复制片段；要整条复制走长按菜单。
   final bool selectable;
 
   /// 气泡里（用户消息）用更小的行距，别把屏幕占满。

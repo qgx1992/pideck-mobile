@@ -238,6 +238,18 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   哪些下标），不要用「平均高度 × 下标」估算 —— 长回答和短回答差一个数量级，长会话里最不准。
 - 待办清单的**展开态是 Dart 本地状态**（`_todoExpanded`），不要推回 WebView；清单条目本身不可点选
   （由 agent 维护）。`ChatTodoSummary.total` 老快照没有时要退回 `open + done`，否则会显示 `0/0`。
+- **`TextEditingController` 驱动的可见状态必须挂监听**（0.2.5）：按钮可用性、清空按钮、字数提示这类
+  只读一次 `controller.text` 就写进 `build` 的地方，输入变化时**不会重建**。症状是「打完字发送键
+  还是灰的，滚一下列表才亮」「搜索框打了字清空按钮不出现」。用 `ValueListenableBuilder` 包住那个
+  控件（重建范围锁在它自己身上），**不要**回到整页 `setState`（0.1.38 卡顿就是它）。
+- **`SelectableText` 会吃掉长按**（0.2.5）：`MarkdownView` 正文默认 `selectable: false`，否则外层
+  `GestureDetector.onLongPress` 收不到，长按消息弹不出菜单。代码块仍可选中。
+- **新增 Flutter 动作必须同时进 `app/tests/flutter-actions.test.ts` 的对账范围**：它扫 Dart 的
+  `'type'` / `_send('x')` / `_act('x')` 与 `main.ts` 三个 dispatch 的 `case`，缺一边就红。
+  动态动作名（`question.kind` 这类）要登记进 `DYNAMIC_ALLOW`。
+- 组件交互测试（`flutter_module/test/*_components_test.dart`）用假宿主通道逐键点过去断言动作；
+  写的时候注意两个坑：`Scaffold.drawer` 里的 widget 没打开也在树里（找到 ≠ 点到，测内容就直接
+  把抽屉当页面画）；带输入框的页面 `pumpAndSettle()` 永远超时（光标闪烁），用固定 `pump(Duration)`。
 - 空态提示词（`ChatSnapshot.suggestions`）点一下**只填输入框、不直接发送**。
 
 ## 改动完成后必须跑的验证

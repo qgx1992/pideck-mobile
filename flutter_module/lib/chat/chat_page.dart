@@ -1692,9 +1692,9 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onComposerChanged(String text) {
     final String previous = _composerText;
     _composerText = text;
-    // 这里**不能** setState：`_composerText` 只用来判断「刚打出来的是 / 还是 @」，
-    // 不驱动任何界面元素。整页重建一次就是几十条消息的 build + 布局，
-    // 打字时每敲一个字卡一下，就是这一行造成的。
+    // 这里**不**整页 setState：打字每敲一个字都重建几十条消息的 build + 布局，
+    // 就是 0.1.38 卡顿的来源。但发送按钮的可用状态确实依赖输入框，
+    // 所以那个按钮单独包了 `ValueListenableBuilder(_composer)` —— 只重建它自己。
     final String? trigger = composerTrigger(
       previous: previous,
       next: text,
@@ -1902,7 +1902,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _composerBar(PiColors c, ChatSnapshot snapshot) {
     final bool running = snapshot.isRunning;
-    final bool canSend = _composer.text.trim().isNotEmpty || _images.isNotEmpty;
+    // canSend 要在按钮自己那一层算（见下面的 ValueListenableBuilder）：
+    // 输入框内容变化时整页不重建，把判断放在这里就等于「打完字按钮还是灰的，
+    // 得滚一下会话界面触发重建才变亮」—— 0.2.5 修的就是这个。
+    final bool hasImages = _images.isNotEmpty;
     final ColorScheme scheme = Theme.of(context).colorScheme;
     return Material(
       color: scheme.surface,
@@ -1984,10 +1987,16 @@ class _ChatScreenState extends State<ChatScreen> {
                           sendChatAction(<String, Object?>{'type': 'stop'}),
                     )
                   else
-                    IconButton.filled(
-                      tooltip: '发送',
-                      icon: const Icon(Icons.arrow_upward_rounded),
-                      onPressed: canSend ? _send : null,
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: _composer,
+                      builder: (BuildContext context, TextEditingValue value, Widget? _) {
+                        final bool canSend = value.text.trim().isNotEmpty || hasImages;
+                        return IconButton.filled(
+                          tooltip: '发送',
+                          icon: const Icon(Icons.arrow_upward_rounded),
+                          onPressed: canSend ? _send : null,
+                        );
+                      },
                     ),
                 ],
               ),

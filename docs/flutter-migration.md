@@ -951,6 +951,72 @@ Web 版这块读三样东西：Git 状态与最近提交、目录树、会话的
   而滑动又被禁掉，用户就没有任何办法打开它。教训见 AGENTS.md。
 - **文件预览在 Drawer 里就地显示**，不回 WebView：抽屉是覆盖层，跳走再回来会丢掉位置。
 
+## 0.2.5：控件状态要跟着「输入」走，不能只在 build 时读一次
+
+用户报的症状很具体：**输入框打完字，发送键一直是灰的，得用手指拉一下消息列表才变亮。**
+
+根因不是按钮写错了，而是 0.1.38 为了治卡顿删掉了 `onChanged` 里的 `setState`
+（那次确实是整页重建、每敲一个字卡一下）。删掉之后 `canSend` 变成「上一帧算出来的值」：
+
+```dart
+// 改前（0.2.4）：build 时读一次，输入变化不会触发重建
+final bool canSend = _composer.text.trim().isNotEmpty || _images.isNotEmpty;
+...
+onPressed: canSend ? _send : null,
+```
+
+滚动消息列表会触发别处的 `setState`，整页重建一次，按钮就"突然"亮了 ——
+这就是那个"拉一下才变"的观感。修法是把重建范围锁在按钮自己身上：
+
+```dart
+// 改后：只听 controller，输入一变只重建这一个按钮
+ValueListenableBuilder<TextEditingValue>(
+  valueListenable: _composer,
+  builder: (context, value, _) => IconButton.filled(
+    onPressed: (value.text.trim().isNotEmpty || hasImages) ? _send : null,
+    ...
+  ),
+),
+```
+
+同一个毛病在侧栏搜索框里还有一处：`suffixIcon` 读 `_search.text` 决定要不要显示「清空」，
+打完字按钮不出现，用户只能一个字一个字删。也改成 `ValueListenableBuilder`。
+
+**判据**：`TextEditingController` / `ValueNotifier` 驱动的任何可见状态（按钮可用、清空按钮、
+字数提示、面板内容），都必须在该控件的**祖先**里挂监听；写在 `build` 里读一次就是错的。
+
+### 长按弹不出菜单：`SelectableText` 会吃掉手势
+
+`MarkdownView` 原来用 `SelectableText.rich` 画正文，它自己处理长按（开始选词），
+外层 `GestureDetector.onLongPress` 永远收不到 —— 长按助手消息弹不出菜单，
+而菜单里本来就有「复制」。现在正文默认 `selectable: false`（用 `Text.rich`），
+代码块仍保留 `SelectableText`（那里需要复制片段）。整条复制走长按菜单。
+
+### 组件可用性的自动化体检
+
+Flutter 页上的按钮不直接干活，只发一个动作名给 WebView。动作名两边各写一份字面量，
+少接一个 case 的症状是**点了完全没反应**、不崩不报错、日志安静 —— 只能靠真机点。
+
+现在有两层检查：
+
+1. **静态接线**（`app/tests/flutter-actions.test.ts`）：扫 Dart 源码里的 `'type': '...'`、
+   `_send('...')`、`_act('...')`，和 `main.ts` 三个 dispatch 函数的 `case` 集合对账 ——
+   缺分支（点下去没人接）和孤儿分支（改名后留下的死代码）都会红。动态动作名
+   （`question.kind`、通用转发的 `type`）登记在 `DYNAMIC_ALLOW` 里。
+   顶栏 chip 的 key、Web 产出方、dispatch 分支三者也要对得上。
+2. **交互行为**（`flutter_module/test/chat_components_test.dart`、`sidebar_components_test.dart`、
+   `settings_components_test.dart`、`composer_send_test.dart`）：把宿主通道换成记录器，
+   逐个点过去，断言「发出了哪条动作、参数对不对」。覆盖顶栏四个按钮、信息 chips、
+   输入区四个键、运行中的停止键、消息长按菜单、空态提示词、侧栏页签/搜索/会话行/
+   长按菜单/项目分组/底部三个按钮、设置页主题/通知/刷新/返回。
+
+写这类测试时踩到两个坑：
+
+- **`Scaffold.drawer` 里的 widget 即使没打开也在树里**，`find` 找得到但点不到 ——
+  测试会给出假红（"点了没反应"）或者更糟的假绿。测抽屉内容就直接把 `SidebarDrawer` 当页面画。
+- **`pumpAndSettle()` 在有输入框的页面上永远超时**（光标闪烁是无限动画），用固定时长的
+  `pump(Duration(...))`。
+
 ## 逐页迁移顺序（建议）
 
 按「依赖原生插件少 → 多」排，迁一页就把入口切过去，随时能停：
