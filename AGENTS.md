@@ -39,6 +39,14 @@
 
 > 本机 `git push` 需要显式走系统代理：`git -c http.proxy=http://127.0.0.1:7897 push ...`
 > （代理端口会随 Clash 重启变化，先 `netstat` 确认）。
+>
+> 出包流水线（`.github/workflows/android-release.yml`）在 gradle 之前会跑 `flutter pub get`，
+> 缺 `flutter_module/.android/local.properties` 时手写 `sdk.dir` / `flutter.sdk` —— add-to-app 之后
+> gradle 要求这个文件（它是 `flutter pub get` 的产物、不进 git），v0.1.35 的出包就是卡在这。
+> 流水线里还有 `flutter analyze` / `flutter test`，所以**本地先跑绿再打 tag**，否则 tag 白打。
+>
+> CI 的 runner 是 en-US：任何 `toLocaleTimeString()` / `toLocaleDateString()` 之类的本地化输出
+> 都会在 CI 与本地之间分叉（踩过：消息时间是 `3:04:`）。要格式化的时间自己算，别靠 locale。
 
 ## 局域网下载页（8080）：开机自启的计划任务，不要挂工具子进程
 
