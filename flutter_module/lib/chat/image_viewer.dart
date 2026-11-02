@@ -2,8 +2,6 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
-import '../app_theme.dart';
-
 /// 全屏看图。
 ///
 /// 为什么不用 `pub` 包：需要的功能只有「捏合缩放 + 左右翻页 + 点一下关掉」，
@@ -65,7 +63,13 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final PiColors c = PiColors.of(context);
+    // 看图页固定黑底，所以**不能**用主题色画按钮：浅色主题下 `c.text` 是深灰，
+    // 在纯黑上等于隐形（关闭按钮看得见才怪）。这里用固定的白色。
+    final TextStyle counterStyle = TextStyle(
+      color: Colors.white.withValues(alpha: 0.8),
+      fontSize: 12,
+      shadows: const <Shadow>[Shadow(color: Colors.black54, blurRadius: 6)],
+    );
     // 看图页固定黑底：浅色主题下白底会把对比度压没，看不清图片边缘
     return Scaffold(
       backgroundColor: Colors.black,
@@ -97,7 +101,11 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
               right: 8,
               child: IconButton(
                 tooltip: '关闭',
-                icon: Icon(Icons.close_rounded, color: c.text),
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.black.withValues(alpha: 0.35),
+                  foregroundColor: Colors.white,
+                ),
+                icon: const Icon(Icons.close_rounded),
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
             ),
@@ -110,7 +118,7 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
                   child: Center(
                     child: Text(
                       '${_index + 1} / ${widget.images.length}',
-                      style: TextStyle(color: c.textSecondary, fontSize: 12),
+                      style: counterStyle,
                     ),
                   ),
                 ),

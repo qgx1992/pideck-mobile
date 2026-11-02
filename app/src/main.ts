@@ -5444,6 +5444,8 @@ function syncFlutterChat(): void {
       header: chatHeaderView(),
       picker: flutterPicker,
       suggestions: emptySuggestions(),
+      emptyTitle: emptyStateTitle(),
+      emptySubtitle: emptyStateSubtitle(suggestionContext(activeProjectId ? runtime?.store.projects().find((item) => item.id === activeProjectId) : undefined)),
       sheet: flutterChatSheet,
     }),
   );

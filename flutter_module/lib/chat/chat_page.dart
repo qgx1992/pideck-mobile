@@ -399,6 +399,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final PiColors c = PiColors.of(context);
     final ChatSnapshot snapshot = _snapshot;
     final ChatLive? live = snapshot.live;
+    // 一句历史都没有、也没有在跑的流：这时画首屏引导（对齐 Web 版 `.history.is-empty-state`）
+    final bool bare = snapshot.history.isEmpty && live == null;
     final int historyCount = snapshot.history.length;
     final int liveCount = live?.blocks.length ?? 0;
 
@@ -455,7 +457,9 @@ class _ChatScreenState extends State<ChatScreen> {
         children: <Widget>[
           _headerBar(c, snapshot.header),
           Expanded(
-            child: Stack(
+            child: bare && snapshot.suggestions.isNotEmpty
+                ? _emptyState(c, snapshot)
+                : Stack(
               children: <Widget>[
                 ListView.builder(
                   controller: _scroll,
@@ -502,6 +506,67 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// 空会话的首屏引导：徽标 + 标题 + 副标题 + 三条提示词。
+  ///
+  /// 对齐 Web 版 `.empty-state`（92px 圆底徽标、23px 标题、13.5px 副标题、胶囊提示词）。
+  /// 以前这里只有几个飘在输入框上方的 chip —— 没有标题托底，看着像残留的按钮。
+  Widget _emptyState(PiColors c, ChatSnapshot snapshot) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 36),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight - 60),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                Container(
+                  width: 92,
+                  height: 92,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: c.accent.withValues(alpha: 0.14),
+                  ),
+                  child: Icon(Icons.forum_outlined, size: 38, color: c.accent),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  snapshot.emptyTitle.isEmpty ? '开始使用你的 PiDeck' : snapshot.emptyTitle,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 23,
+                    height: 1.3,
+                    fontWeight: FontWeight.w600,
+                    color: c.text,
+                  ),
+                ),
+                if (snapshot.emptySubtitle.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      snapshot.emptySubtitle,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13.5, height: 1.55, color: c.textMuted),
+                    ),
+                  ),
+                const SizedBox(height: 20),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.center,
+                  children: <Widget>[
+                    for (final String prompt in snapshot.suggestions) _suggestionChip(c, prompt),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _footer(BuildContext context, PiColors c, ChatSnapshot snapshot) {
     final List<Widget> children = <Widget>[];
     if (snapshot.loading && !snapshot.hasContent) {
@@ -533,21 +598,6 @@ class _ChatScreenState extends State<ChatScreen> {
             textAlign: TextAlign.center,
             style: TextStyle(color: c.textMuted, fontSize: 13, height: 1.5),
           ),
-        ),
-      ));
-    }
-    final bool bare = snapshot.history.isEmpty && snapshot.live == null;
-    if (bare && snapshot.suggestions.isNotEmpty) {
-      children.add(Padding(
-        padding: const EdgeInsets.only(top: 12),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          alignment: WrapAlignment.center,
-          children: <Widget>[
-            for (final String prompt in snapshot.suggestions)
-              _suggestionChip(c, prompt),
-          ],
         ),
       ));
     }
@@ -1086,14 +1136,20 @@ class _ChatScreenState extends State<ChatScreen> {
         setState(() {});
       },
       borderRadius: BorderRadius.circular(999),
+      // 尺寸与配色照 Web 的 `.suggestion-chip`：8/16 内边距、13px、bg-elev 底、无边线
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        constraints: const BoxConstraints(maxWidth: 320),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: c.divider),
-          color: c.surface,
+          color: c.surfaceAlt,
         ),
-        child: Text(prompt, style: TextStyle(fontSize: 12.5, color: c.textSecondary)),
+        child: Text(
+          prompt,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 13, height: 1.35, color: c.textMuted),
+        ),
       ),
     );
   }
@@ -1541,16 +1597,22 @@ class _ChatScreenState extends State<ChatScreen> {
                         hintText: running ? '运行中，可继续输入（会排队）' : '发消息…',
                         hintStyle: TextStyle(color: c.textMuted, fontSize: 13.5),
                         filled: true,
-                        fillColor: c.surface,
+                        fillColor: c.background,
                         isDense: true,
                         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
+                          borderRadius: BorderRadius.circular(10),
                           borderSide: BorderSide(color: c.divider),
                         ),
                         enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
+                          borderRadius: BorderRadius.circular(10),
                           borderSide: BorderSide(color: c.divider),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide(
+                            color: Color.alphaBlend(c.accent.withValues(alpha: 0.6), c.divider),
+                          ),
                         ),
                       ),
                       onChanged: _onComposerChanged,
@@ -1673,55 +1735,80 @@ class _HistoryTile extends StatelessWidget {
     }
 
     if (item.isUser) {
-      return Align(
-        alignment: Alignment.centerRight,
-        child: GestureDetector(
-          onLongPress: onLongPress,
-          child: Container(
-            constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.82),
-            margin: const EdgeInsets.only(top: 6, bottom: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            decoration: BoxDecoration(
-              color: c.accent.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: c.accent.withValues(alpha: 0.3)),
+      // 与 Web 版 `.msg--user .msg-body` 对齐：整宽、圆角 12、10/12 内边距、
+      // 底色是 accent 16% 叠在 bg-soft 上（不是直接叠页面底色，否则深色下更艳）。
+      return GestureDetector(
+        onLongPress: onLongPress,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            _roleLabel(c, '我'),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Color.alphaBlend(c.accent.withValues(alpha: 0.16), c.surface),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Color.alphaBlend(c.accent.withValues(alpha: 0.32), c.divider)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  if (item.images.isNotEmpty) _images(context, item.images),
+                  if (item.text.isNotEmpty)
+                    MarkdownView(source: item.text, compact: true, baseStyle: TextStyle(color: c.text, fontSize: 14.5)),
+                ],
+              ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                if (item.images.isNotEmpty) _images(context, item.images),
-                if (item.text.isNotEmpty)
-                  MarkdownView(source: item.text, compact: true, baseStyle: TextStyle(color: c.text, fontSize: 14.5)),
-                if (item.time.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(item.time, style: TextStyle(fontSize: 10.5, color: c.textMuted)),
-                  ),
-              ],
-            ),
-          ),
+            _timeLabel(c, item.time),
+          ],
         ),
       );
     }
 
+    // 助手消息也有气泡（Web 版每条 `.msg-body` 都有底色与边线）：
+    // 之前这里是一段裸文本，一屏里「一半有框一半没框」，看着就没有版式。
     return GestureDetector(
       onLongPress: onLongPress,
-      child: Container(
-        margin: const EdgeInsets.only(top: 6, bottom: 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            if (item.thinking.isNotEmpty) _ThinkingBlock(text: item.thinking),
-            if (item.text.isNotEmpty) MarkdownView(source: item.text),
-            if (item.images.isNotEmpty) _images(context, item.images),
-            if (item.time.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Text(item.time, style: TextStyle(fontSize: 10.5, color: c.textMuted)),
-              ),
-          ],
-        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _roleLabel(c, 'Pi'),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: c.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: c.divider),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                if (item.thinking.isNotEmpty) _ThinkingBlock(text: item.thinking),
+                if (item.text.isNotEmpty) MarkdownView(source: item.text),
+                if (item.images.isNotEmpty) _images(context, item.images),
+              ],
+            ),
+          ),
+          _timeLabel(c, item.time),
+        ],
       ),
+    );
+  }
+
+  /// 角色行（`11px` 暗色，左缩进 2）——与 Web 的 `.msg-role` 一致。
+  Widget _roleLabel(PiColors c, String label) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 2, top: 6),
+      child: Text(label, style: TextStyle(fontSize: 11, color: c.textMuted)),
+    );
+  }
+
+  /// 时间行：留在气泡外面（Web 的 `.msg-time` 是消息列里的一行，不是气泡内容）。
+  Widget _timeLabel(PiColors c, String time) {
+    if (time.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(left: 2, top: 4, bottom: 6),
+      child: Text(time, style: TextStyle(fontSize: 10, color: c.textMuted)),
     );
   }
 
@@ -1745,6 +1832,9 @@ class _HistoryTile extends StatelessWidget {
 }
 
 /// 图片：`data:` 走内存解码，其余当 URL 拉。两路都不落盘。
+/// 缩略图边长：照抄 Web 的 `.msg-image`（128×128，object-fit: cover）。
+const double _thumb = 128;
+
 class _ChatImage extends StatelessWidget {
   const _ChatImage({required this.source, this.onTap});
 
@@ -1759,22 +1849,33 @@ class _ChatImage extends StatelessWidget {
       final int comma = source.indexOf(',');
       try {
         final Uint8List bytes = base64Decode(source.substring(comma + 1));
-        child = Image.memory(bytes, width: 140, fit: BoxFit.cover);
+        child = Image.memory(bytes, width: _thumb, height: _thumb, fit: BoxFit.cover);
       } catch (_) {
-        child = const SizedBox(width: 140, height: 60);
+        child = SizedBox(width: _thumb, height: _thumb);
       }
     } else if (source.startsWith('http')) {
       child = Image.network(
         source,
-        width: 140,
+        width: _thumb,
+        height: _thumb,
         fit: BoxFit.cover,
-        errorBuilder: (BuildContext context, Object error, StackTrace? stack) =>
-            SizedBox(width: 140, height: 60, child: Center(child: Icon(Icons.broken_image_outlined, color: c.textMuted))),
+        errorBuilder: (BuildContext context, Object error, StackTrace? stack) => SizedBox(
+          width: _thumb,
+          height: _thumb,
+          child: Center(child: Icon(Icons.broken_image_outlined, color: c.textMuted)),
+        ),
       );
     } else {
-      child = const SizedBox(width: 140, height: 60);
+      child = SizedBox(width: _thumb, height: _thumb);
     }
-    final Widget clipped = ClipRRect(borderRadius: BorderRadius.circular(8), child: child);
+    final Widget clipped = Container(
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c.divider),
+      ),
+      child: ClipRRect(borderRadius: BorderRadius.circular(9), child: child),
+    );
     if (onTap == null) return clipped;
     return GestureDetector(behavior: HitTestBehavior.opaque, onTap: onTap, child: clipped);
   }
@@ -1931,8 +2032,7 @@ class _ToolCardState extends State<_ToolCard> {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
       decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(color: c.divider),
       ),
       child: Column(
@@ -1941,7 +2041,7 @@ class _ToolCardState extends State<_ToolCard> {
           InkWell(
             onTap: widget.detail.isEmpty ? null : () => setState(() => _open = !_open),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               child: Row(
                 children: <Widget>[
                   Icon(icon, size: 14, color: color),

@@ -319,6 +319,19 @@ void main() {
     expect(view.todo!.total, 1);
   });
 
+  test('空会话首屏文案：解析 emptyTitle / emptySubtitle，缺省为空串', () {
+    final ChatSnapshot withText = ChatSnapshot.fromJson(<String, Object?>{
+      'emptyTitle': '开始使用你的 PiDeck',
+      'emptySubtitle': '发送一条消息即可开始新的一轮。',
+    });
+    expect(withText.emptyTitle, '开始使用你的 PiDeck');
+    expect(withText.emptySubtitle, '发送一条消息即可开始新的一轮。');
+
+    final ChatSnapshot bare = ChatSnapshot.fromJson(<String, Object?>{});
+    expect(bare.emptyTitle, '');
+    expect(bare.emptySubtitle, '');
+  });
+
   test('空态提示词：只有字符串会被收下', () {
     final ChatSnapshot snapshot = ChatSnapshot.fromJson(<String, Object?>{
       'suggestions': <Object?>['介绍一下这个项目', 42, null, '跑一下测试'],

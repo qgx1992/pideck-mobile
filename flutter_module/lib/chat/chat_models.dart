@@ -297,6 +297,8 @@ class ChatSnapshot {
     this.header = const ChatHeaderView(),
     this.picker,
     this.suggestions = const <String>[],
+    this.emptyTitle = '',
+    this.emptySubtitle = '',
     this.sheet,
   });
 
@@ -324,6 +326,10 @@ class ChatSnapshot {
   ///
   /// WebView 只在「没有已加载历史」时给，Dart 也只在没历史时画。
   final List<String> suggestions;
+
+  /// 空会话首屏的标题 / 副标题（与 Web 版首屏同一套文案，由 WebView 给）。
+  final String emptyTitle;
+  final String emptySubtitle;
 
   /// 顶栏（标题 / meta / chips / 上下文 / 发送模式 / 待办与子代理摘要）。
   ///
@@ -375,6 +381,8 @@ class ChatSnapshot {
       header: header is Map<Object?, Object?> ? ChatHeaderView.fromJson(mapOf(header)) : const ChatHeaderView(),
       picker: picker is Map<Object?, Object?> ? ChatPickerView.fromJson(mapOf(picker)) : null,
       suggestions: listOf(json['suggestions']).whereType<String>().toList(growable: false),
+      emptyTitle: json['emptyTitle'] is String ? json['emptyTitle'] as String : '',
+      emptySubtitle: json['emptySubtitle'] is String ? json['emptySubtitle'] as String : '',
       sheet: sheet is Map<Object?, Object?> ? AppSheet.fromJson(mapOf(sheet)) : null,
     );
   }

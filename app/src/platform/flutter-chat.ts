@@ -79,6 +79,9 @@ export interface ChatSnapshot {
   picker: ChatPickerView | null;
   /** 空会话时的快捷提示词（点一下插到输入框，不直接发） */
   suggestions: string[];
+  /** 空会话时的首屏标题 / 副标题（文案在 Web 侧算，Dart 只管画） */
+  emptyTitle: string;
+  emptySubtitle: string;
   /** 聊天页发起的弹层（DSH 工具）；null 表示不显示 */
   sheet?: SheetView | null;
 }
@@ -203,6 +206,8 @@ export interface ChatSnapshotInput {
   picker?: ChatPickerView | null;
   /** 空会话时的快捷提示词；Dart 只在「没历史、也没有正在跑的块」时显示 */
   suggestions?: readonly string[];
+  emptyTitle?: string;
+  emptySubtitle?: string;
   sheet?: SheetView | null;
 }
 
@@ -230,6 +235,8 @@ export function buildChatSnapshot(input: ChatSnapshotInput): ChatSnapshot {
     header: input.header ?? emptyHeader(),
     picker: input.picker ?? null,
     suggestions: [...(input.suggestions ?? [])],
+    emptyTitle: input.emptyTitle ?? "",
+    emptySubtitle: input.emptySubtitle ?? "",
     sheet: input.sheet ?? null,
   };
 }

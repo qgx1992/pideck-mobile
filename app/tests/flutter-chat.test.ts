@@ -226,6 +226,21 @@ test("messageMenus：没传 backend 时按 pi 处理", () => {
   assert.equal(snapshot.messageMenus.user.length, 5);
 });
 
+test("空会话首屏文案：标题 / 副标题原样带出，没给时为空串", () => {
+  const snapshot = buildChatSnapshot({
+    sessionId: "s1",
+    messages: [],
+    emptyTitle: "开始使用你的 PiDeck",
+    emptySubtitle: "发送一条消息即可开始新的一轮。",
+  });
+  assert.equal(snapshot.emptyTitle, "开始使用你的 PiDeck");
+  assert.equal(snapshot.emptySubtitle, "发送一条消息即可开始新的一轮。");
+  // 没传时必须是空串：Dart 侧按 `isEmpty` 兜默认标题，undefined 会漏过去
+  const bare = buildChatSnapshot({ sessionId: "s1", messages: [] });
+  assert.equal(bare.emptyTitle, "");
+  assert.equal(bare.emptySubtitle, "");
+});
+
 test("弹层：sheet 原样带出，没传时为 null", () => {
   const view = {
     kind: "dsh",
