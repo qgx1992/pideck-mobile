@@ -883,6 +883,13 @@ MainActivity(WebView 起来，加载 pideck)
 - 图标明暗跟着 `Theme.of(context).brightness` 走，跟随系统切换时会自动重算；
 - `ContrastEnforced: false` —— 否则系统会给透明栏补一层遮罩色，又变回「不是我的主题色」。
 
+**还有一半在 Android 主题里**：`FlutterHostActivity` 原来借用网页版的 `AppTheme.NoActionBar`，它为了让
+`@capacitor/status-bar` 能控制网页版状态栏，显式 `windowOptOutEdgeToEdgeEnforcement=true` —— 于是 Flutter 页
+顶上永远是一条固定深灰色带（`@color/appBackgroundDark`），Dart 侧怎么设都改不动。0.2.2 给宿主页单开了
+`AppTheme.FlutterHost`（`res/values/styles.xml` 与 `res/values-v35/styles.xml` 各一份，因为同名 style 不会跨目录合并）：
+不退出强制 edge-to-edge、`statusBarColor`/`navigationBarColor` 透明、`windowBackground` 兜底深色防闪白。
+判断标准很直接：**状态栏色带的颜色跟 App 主题无关，就说明是 Android 主题在管，不是 Flutter 在画。**
+
 ### 判断准则
 
 1. **壳可以换，引擎不搬**：`src/api/frames.ts` 的 reducer / SSE 解析只留一份。

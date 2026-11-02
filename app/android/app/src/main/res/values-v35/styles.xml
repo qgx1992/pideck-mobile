@@ -16,4 +16,16 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>
+    <!--
+      API 35 起系统强制 edge-to-edge —— Flutter 宿主页正好要的就是这个行为，
+      所以这里不再退出强制，只把两条栏设透明并把图标明暗交给 SystemChrome。
+    -->
+    <style name="AppTheme.FlutterHost" parent="AppTheme.NoActionBar">
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowBackground">@color/appBackgroundDark</item>
+    </style>
 </resources>

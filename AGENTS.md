@@ -193,6 +193,10 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   必须保留 `onEndpoint(run, …)` 那层包装，否则多设备下会连错端点。
 - **盖住整屏的 Flutter 页必须处理返回键**（`PopScope`）：先收抽屉、再收面板，都收不掉才发 `exitApp`
   （Web 侧 `CapacitorApp.exitApp()`）。Android 上没有任何兜底——不拦就直接 finish 掉整个 App。
+- **Flutter 宿主 Activity 必须用 `@style/AppTheme.FlutterHost`**（0.2.2）：`AppTheme.NoActionBar` 为了让
+  `@capacitor/status-bar` 能控制网页版状态栏，`windowOptOutEdgeToEdgeEnforcement=true`，谁能用它画 Flutter 页，
+  谁的顶上就永远有一条固定深灰色带（跟主题无关）。`AppTheme.FlutterHost` 反过来：不退出强制 edge-to-edge、
+  两条系统栏透明、`windowBackground` 兜底深色。改 `AndroidManifest.xml` 里任何新增的 Flutter Activity 时照抄这个主题。
 - 系统栏只在一处定义：`piSystemUiOverlayStyle(dark)`（`flutter_module/lib/app_theme.dart`），
   由 `MaterialApp.builder` 的 `AnnotatedRegion` 下发；`SystemUiMode.edgeToEdge` + 透明栏 +
   `ContrastEnforced: false`，否则系统补的遮罩色会让状态栏/手势条和主题对不上。
