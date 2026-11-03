@@ -45,6 +45,8 @@ const notifyBtn = $<HTMLButtonElement>("notify-btn");
 let devices = loadDevices();
 const probeStates = new Map<string, ProbeState>();
 
+/** 扫码取景框还开着时，返回键先取消它（由 scanInline 赋值）。 */
+let cancelScan: (() => void) | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 function toast(message: string): void {
 	toastEl.textContent = message;
@@ -256,6 +258,8 @@ async function scanInline(
 				if (timer) clearTimeout(timer);
 				resolve(value);
 			};
+			// 返回键在扫码期间先取消取景（见文件末尾的 installBackHandler）
+			cancelScan = () => finish(null);
 
 			scanCancel.onclick = () => finish(null);
 			scanTorch.onclick = () => {
@@ -291,6 +295,7 @@ async function scanInline(
 			}, 60_000);
 		});
 	} finally {
+		cancelScan = null;
 		scanCancel.onclick = null;
 		scanTorch.onclick = null;
 		if (torchOn) await BarcodeScanner.toggleTorch().catch(() => undefined);
@@ -364,8 +369,13 @@ notifyBtn.addEventListener("click", () => {
 	})();
 });
 
-// 返回键：启动页没有可关的层，连按两次退出（第一次只提示，避免误触）
+// 返回键：扫码取景框先取消，没有层可关时连按两次退出（第一次只提示，避免误触）
 installBackHandler({
+	onIntercept: () => {
+		if (!cancelScan) return false;
+		cancelScan();
+		return true;
+	},
 	onBack: () => void App.exitApp(),
 	confirmWithinMs: 2000,
 	onWarn: () => toast("再按一次退出"),

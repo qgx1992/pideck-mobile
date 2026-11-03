@@ -165,8 +165,13 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
 - 返回键**不能**用 `canGoBack ? history.back() : …`：WebView 里它几乎永远是 true —— 上游给每个覆盖层压一条
   `__pideckDismiss` 记录（`web/useDismissOnBack.ts:20`），选中会话还会 `pushState("/s/<id>")`
   （`web/WebChatApp.tsx:228`），于是返回手势变成「浏览器后退」：关掉面板后还在会话之间一格一格退。
-  现在走 `app/shell/back.ts`：栈顶是覆盖层就 `history.back()` 让上游关掉那一层，否则直接回启动页；
-  启动页连按两次才退出。`app/shell/back.test.ts` 有一条直接读 vendor 源码对账 `__pideckDismiss` 键名。
+  现在走 `app/shell/back.ts` 的 `BACK_LAYERS`：按「最上面一层」逐层关，关无可关才回启动页；
+  启动页连按两次才退出。层级顺序 = Radix 弹层（安全等级/模型/提示词 popover，合成 pointerdown
+  点外部，失败再补 Escape）→ `role=dialog`（`WebBottomSheet` 家族、搜索/技能面板，合成 Escape）
+  → 上游压了 `__pideckDismiss` 的右侧栏/文件预览（`history.back()`）→ 左侧会话栏
+  （`.mobile-sidebar-backdrop.is-open` 存在时点 `.mobile-sidebar-close`）。
+  只有右侧栏和文件预览会自己订阅返回，**其余层不压历史记录**，所以必须由壳这边按选择器命中；
+  `app/shell/back.test.ts` 对这些选择器逐个读 vendor 源码对账，上游改 class 就红。
 
 ## 改动完成后必须跑的验证
 
