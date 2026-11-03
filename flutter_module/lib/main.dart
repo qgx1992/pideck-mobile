@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -16,14 +17,18 @@ Future<void> main() async {
   // 边到边：系统栏透明，页面内容铺到底下，由 AnnotatedRegion 决定图标明暗
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
-  final args = await loadHostArgs();
-  // 首帧就要是对的主题，否则浅色用户会先看到一下深色再跳过去。
-  final initialJson = await loadInitialSettings();
+  // 宿主参数与设置缓存并发去问：两次平台通道往返互不依赖，串行做只会把
+  // 「窗口已经出来、里面还是空背景」的时间翻倍（冷启动本来就短，这里能省一半）。
+  final (HostArgs args, String initialJson) = await (
+    loadHostArgs(),
+    loadInitialSettings(),
+  ).wait;
   final SettingsData? seed = _parse(initialJson);
   // 聊天页的首帧快照是另一份缓存；只在真的要进聊天页时多要一次。
+  // 宿主侧 `getChat` 读的就是 `currentChat()` 那份 static 缓存，不会走 JS。
   final String initialChatJson = args.route == 'chat' ? await loadInitialChat() : '';
   // 首帧就用对主题：Web 侧存的是 light / dark / system，但只有快照才知道最新值，
-  // 这里的 seed 只是"上一次设置页推过来的"—— 聊天页首帧之后会立刻按快照纠正。
+  // 这里的 seed 只是「上一次设置页推过来的」—— 聊天页首帧之后会按快照自己纠正。
   piThemeMode.value = themeModeFrom(seed?.theme.mode ?? 'system');
   runApp(
     PiDeckFlutterApp(

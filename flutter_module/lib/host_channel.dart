@@ -139,6 +139,20 @@ Future<void> closeHost() async {
   }
 }
 
+/// 直接退出 App（宿主 `finishAffinity()`）。
+///
+/// 为什么需要它：返回键原先只发一个 `exitApp` 动作给 WebView，由它调
+/// `CapacitorApp.exitApp()`。WebView 被 Flutter 页盖着时是 paused
+/// （被系统挂起时连 JS 都不跑），那个动作就没人执行 —— 用户按返回没任何反应。
+/// 自己跑数据面的页面（= 主界面就是这一页）可以直接让宿主动手。
+Future<void> exitAppHost() async {
+  try {
+    await hostChannel.invokeMethod<void>('exitApp');
+  } catch (_) {
+    /* 忽略 */
+  }
+}
+
 /// 拉起后台看护（原生前台服务）。
 ///
 /// 什么时候必须调：Dart 自己把提问发出去之后。用户经常发完就上滑回桌面，

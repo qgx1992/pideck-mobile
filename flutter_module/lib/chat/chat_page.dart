@@ -75,7 +75,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   ChatSnapshot _snapshot = const ChatSnapshot();
   SidebarSnapshot _sidebar = SidebarSnapshot.none;
 
@@ -195,9 +195,19 @@ class _ChatScreenState extends State<ChatScreen> {
     sendClose: () => sendChatAction(<String, Object?>{'type': 'sheetClose'}),
   );
 
+  /// 上一次进入后台的时刻。
+  ///
+  /// 有它才能区分「真的离开过」和「划一下通知栏 / 侧滑抽屉」：
+  /// 后者也会发 `inactive`，跟着重连只会白白多一条流。
+  DateTime? _backgroundedAt;
+
+  /// 短于这个时长的切后台不算（下拉通知栏、来电横幅、抽屉侧滑）。
+  static const Duration _resumeMinBackground = Duration(milliseconds: 700);
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     bindHostChannel(
       onChat: _applyJson,
       onSidebar: _applySidebar,
@@ -206,12 +216,16 @@ class _ChatScreenState extends State<ChatScreen> {
     _scroll.addListener(_onScroll);
     if (widget.initialJson.isNotEmpty) _applyJson(widget.initialJson);
     if (widget.canRunNativeRuntime) _ensureRuntime(widget.sessionId);
-    loadInitialChat().then((String json) {
-      if (json == '{}' || json == widget.initialJson) return;
-      _applyJson(json);
-    });
+    // 宿主在打开本页之前刚把同一份缓存给过我们（`main()` 里的 `loadInitialChat()`）——
+    // 那是同一个 `currentChat()` static 缓存，再问一遍只是白多一次平台通道往返。
+    if (widget.initialJson.isEmpty) {
+      loadInitialChat().then((String json) {
+        if (!mounted || json == '{}') return;
+        _applyJson(json);
+      });
+    }
     loadInitialSidebar().then((String json) {
-      if (json == '{}') return;
+      if (!mounted || json == '{}') return;
       _applySidebar(json);
     });
   }
@@ -290,8 +304,43 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _sidebar = next);
   }
 
+  /* --------------------- 前后台：回前台重新对账 --------------------- */
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      _backgroundedAt ??= DateTime.now();
+      return;
+    }
+    if (state != AppLifecycleState.resumed) return;
+    final DateTime? at = _backgroundedAt;
+    _backgroundedAt = null;
+    if (at == null) return;
+    if (DateTime.now().difference(at) < _resumeMinBackground) return;
+    _resumeAfterBackground();
+  }
+
+  /// 回到前台：两侧都要叫醒，因为它们收不到同一个信号。
+  ///
+  /// Dart 侧（数据面）：帧流在后台里大概率已经是僵尸连接了，要主动换一条；
+  /// 顺带重拉历史 + 状态仓对账（见 `ChatRuntime.resume()`）。
+  ///
+  /// WebView 侧（控制面）：这一页在前台时 MainActivity 是 paused，它的
+  /// `visibilitychange` 不会触发，`resumeAfterBackground()` 也就不跑 ——
+  /// 顶栏 / 选择面板 / 侧栏会一直停在进后台前那份快照上。所以发一个 `resume`
+  /// 动作回去，让它走同一条路径（不是给它重开一条并行逻辑）。
+  void _resumeAfterBackground() {
+    if (!mounted) return;
+    final ChatRuntime? runtime = _runtime;
+    if (runtime != null) unawaited(runtime.resume());
+    final WorkspaceRuntime? workspace = _workspace;
+    if (workspace != null) unawaited(workspace.refresh());
+    unawaited(sendChatAction(<String, Object?>{'type': 'resume'}));
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _runtimeFlush?.cancel();
     _workspace?.dispose();
     _runtime?.dispose();
@@ -303,6 +352,27 @@ class _ChatScreenState extends State<ChatScreen> {
     _composerFocus.dispose();
     _pendingController.dispose();
     super.dispose();
+  }
+
+  /// 返回键的最后一步：退出 App，但**不指望 WebView 一定会执行**。
+  ///
+  /// 原先只发一个 `exitApp` 动作给 WebView，由它调 `CapacitorApp.exitApp()`。
+  /// 但这一页盖着整屏时 WebView 是 paused，被系统挂起时连 JS 都不跑 —— 
+  /// 那个动作就没人执行，用户按返回完全没反应（「返回键要按好几次」）。
+  ///
+  /// 三层，作用范围从大到小：
+  ///  1. 动作照发：网页模式下根据它的判断决定该干什么，行为不改；
+  ///  2. 自己跑数据面 = 这一页就是主界面，让宿主 `finishAffinity()`，
+  ///     不经 WebView、一定生效；
+  ///  3. 300ms 后这页还在（没人处理），把自己关掉回到网页版 —— 
+  ///     宁可回到网页版，也不要一个按下去没反应的键。
+  void _exitApp() {
+    unawaited(sendChatAction(<String, Object?>{'type': 'exitApp'}));
+    if (widget.canRunNativeRuntime) unawaited(exitAppHost());
+    Future<void>.delayed(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      unawaited(closeHost());
+    });
   }
 
   void _notice(String text) {
@@ -1204,7 +1274,7 @@ class _ChatScreenState extends State<ChatScreen> {
             sendChatAction(<String, Object?>{'type': 'closePicker'});
             return;
           }
-          sendChatAction(<String, Object?>{'type': 'exitApp'});
+          _exitApp();
         },
         child: Column(
           children: <Widget>[

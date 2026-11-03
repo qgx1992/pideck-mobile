@@ -249,6 +249,13 @@ public class FlutterHostActivity extends FlutterFragmentActivity {
                     result.success(null);
                     finish();
                     break;
+                case "exitApp":
+                    // 返回键的最后一道兜底：这一页自己跑数据面时它就是主界面，
+                    // 不经过 WebView（它可能被挂起）直接退出 App。
+                    result.success(null);
+                    Log.i(TAG, "Dart 请求退出 App");
+                    finishAffinity();
+                    break;
                 default:
                     result.notImplemented();
                     break;

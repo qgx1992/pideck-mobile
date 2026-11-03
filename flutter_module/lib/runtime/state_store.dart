@@ -13,6 +13,7 @@ import 'dart:async';
 
 import 'api_client.dart';
 import 'backoff.dart';
+import 'stream_pump.dart';
 
 /// 状态仓的连接状态（与 TS 的 `StoreStatus` 同字符串）。
 enum StoreStatus {
@@ -79,6 +80,12 @@ class StateStore {
   /// SSE 正常时的兜底轮询间隔（会话列表变化只能靠它推下来）。
   final int fallbackPollMs;
 
+  /// 空闲多久没收到字节就判定这条状态流已经死了。
+  ///
+  /// 比聊天流（50s）短一点：状态流是全局的，断掉会让侧栏/运行目标一起变旧。
+  /// 服务端 15s 一个 ping，这里留三倍余量；ping 是注释行，按**字节**续命才有意义。
+  static const Duration streamIdleTimeout = Duration(seconds: 45);
+
   final void Function(StoreStatus status)? onStatus;
   final void Function(Object error)? onError;
 
@@ -94,6 +101,7 @@ class StateStore {
   bool _firstReady = false;
   StoreStatus _status = StoreStatus.idle;
   Future<void>? _refreshing;
+  StreamPump<Map<String, Object?>>? _statePump;
   Timer? _pollTimer;
   int _pollIntervalMs = 0;
 
@@ -203,8 +211,14 @@ class StateStore {
   }
 
   /// 回到前台立即对账一次（SSE 在后台通常已被系统挂起）。
+  ///
+  /// 顺序很重要：**先踢流，再对账**。后台期间那条连接多半已经死了但读操作还挂着，
+  /// 不踢掉它就只能等 [streamIdleTimeout] 的超时，而用户这时正看着屏幕。
+  /// 踢掉之后 `_loop` 会立刻重连（被踢的不退避），重连前自己也会再对账一次，
+  /// 两边的 `refresh()` 由 inflight 去重合并成一个请求。
   Future<void> noteForeground() async {
     if (!_running) return;
+    _statePump?.kick();
     try {
       await refresh();
     } on Object catch (error) {
@@ -231,14 +245,21 @@ class StateStore {
       }
 
       try {
-        await for (final Map<String, Object?> snapshot in client.stateEvents(
-          onOpen: () {
-            _setStatus(StoreStatus.live);
-            // SSE 只推「运行时/pendingUi」相关变化，会话列表得靠轮询兜底。
-            _startPolling(fallbackPollMs);
-          },
-        )) {
-          if (!_running) break;
+        final StreamPump<Map<String, Object?>> pump = StreamPump<Map<String, Object?>>(
+          open: (void Function() onActivity, Future<void> abort) => client.stateEvents(
+            onOpen: () {
+              _setStatus(StoreStatus.live);
+              // SSE 只推「运行时/pendingUi」相关变化，会话列表得靠轮询兜底。
+              _startPolling(fallbackPollMs);
+            },
+            onActivity: onActivity,
+            abort: abort,
+          ),
+          idleTimeout: streamIdleTimeout,
+        );
+        _statePump = pump;
+        await pump.run((Map<String, Object?> snapshot) {
+          if (!_running) return;
           _etag = null;
           _replace(normalizeStateJson(snapshot));
           if (!_firstReady) {
@@ -249,7 +270,10 @@ class StateStore {
           consecutiveFailures = 0;
           backoff.reset();
           _startPolling(fallbackPollMs);
-        }
+        });
+        _statePump = null;
+        // 被主动踢掉（回前台换连接）：立刻重连，不进退避。
+        if (pump.kicked) continue;
         // 服务端正常收尾：退避后重连。
         consecutiveFailures = 0;
       } on PiDeckException catch (error) {
@@ -304,6 +328,8 @@ class StateStore {
 
   void stop() {
     _running = false;
+    _statePump?.kick();
+    _statePump = null;
     _stopPolling();
     _setStatus(StoreStatus.closed);
   }

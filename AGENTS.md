@@ -350,6 +350,15 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   **Authorization 头**取字节（不要拼 `?token=`，会落到浏览器历史 / 下载记录 / 系统 Intent），
   再走宿主 `saveTextFile()` 落盘；文件名规则与 Web 的 `safeFileStem` 逐字一致
   （`sidebar/session_actions.dart` 里的 `safeFileStem` / `exportStamp`，有单测锁住）。
+- **收一条 SSE 流必须靠 `abort`，`Subscription.cancel()` 在 `async*` 上是假动作**（0.2.18）：
+  `streamSse` 是 `async*`，而生成器**只在 `yield` 点处理取消请求** —— 它挂在
+  `await for (chunk in response.transform(utf8.decoder))` 等字节时永远到不了 `yield` 点，
+  `cancel()` 的 Future **永远不完成**（实测 3s 仍挂着、服务端连接也没断）。
+  所以 `StreamPump.open` 的签名是 `Stream<T> Function(void Function() onActivity, Future<void> abort)`，
+  `abort` 必须一路透传到 `streamSse(abort: ...)`（内部 `_abortable()` 在 abort 完成时结束内层流，
+  生成器才走得到结尾）。漏传的症状就是「回前台换连接」静默失效：`kick()` 之后 `run()` 不返回，
+  外层重连循环再也不转，用户看到连接一直挂着但一个字节都不来。
+  回归用例：`flutter_module/test/stream_abort_test.dart`（真开一个只 flush 一个字节就吊住的服务端）。
 - **假 SSE 服务端必须 `response.bufferOutput = false`**：Dart 的 `HttpResponse` 默认把 body 攒到 close 才发，
   而流式连接永远不 close，客户端一帧都收不到（症状是 `store.ready` 永远不为真、测试 30s 超时）。
   测试和服务端 mock 一个都不能漏这一行。

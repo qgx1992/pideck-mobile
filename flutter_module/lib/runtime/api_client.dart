@@ -448,6 +448,7 @@ class PiDeckClient {
     Map<String, Object?>? query,
     void Function()? onOpen,
     void Function()? onActivity,
+    Future<void>? abort,
   }) async* {
     final HttpClient client = HttpClient()..connectionTimeout = connectTimeout;
     try {
@@ -467,7 +468,7 @@ class PiDeckClient {
       onOpen?.call();
 
       final SseParser parser = SseParser();
-      await for (final String chunk in response.transform(utf8.decoder)) {
+      await for (final String chunk in _abortable(response.transform(utf8.decoder), abort)) {
         onActivity?.call();
         for (final SseEvent event in parser.push(chunk)) {
           yield event;
@@ -482,10 +483,15 @@ class PiDeckClient {
   }
 
   /// 会话帧流：`[DONE]` 标记 → `finish` 帧（与 `streamSession` 一致）。
-  Stream<Map<String, Object?>> sessionFrames(String sessionId, {void Function()? onOpen}) async* {
+  Stream<Map<String, Object?>> sessionFrames(
+    String sessionId, {
+    void Function()? onOpen,
+    Future<void>? abort,
+  }) async* {
     await for (final SseEvent event in streamSse(
       '/api/sessions/${Uri.encodeComponent(sessionId)}/stream',
       onOpen: onOpen,
+      abort: abort,
     )) {
       if (event.data == sseDoneMarker) {
         yield doneFrame();
@@ -549,8 +555,17 @@ class PiDeckClient {
   ///
   /// 注意它**不包含**会话列表变化（新建/删除/改名不在 revision 判据里），
   /// 所以调用方仍要保留低频 `/api/state` 对账（见 `state_store.dart`）。
-  Stream<Map<String, Object?>> stateEvents({void Function()? onOpen}) async* {
-    await for (final SseEvent event in streamSse('/api/events', onOpen: onOpen)) {
+  Stream<Map<String, Object?>> stateEvents({
+    void Function()? onOpen,
+    void Function()? onActivity,
+    Future<void>? abort,
+  }) async* {
+    await for (final SseEvent event in streamSse(
+      '/api/events',
+      onOpen: onOpen,
+      onActivity: onActivity,
+      abort: abort,
+    )) {
       if (event.event != 'state') continue;
       try {
         final Object? parsed = jsonDecode(event.data);
@@ -736,4 +751,50 @@ class FileContent {
   final int size;
 
   bool get isText => kind == 'text' || kind == 'truncated';
+}
+
+/// 让一条永不自然结束的流可以被外部**主动收线**。
+///
+/// 为什么不能只靠 `StreamSubscription.cancel()`：`async*` 生成器只在 `yield`
+/// 点处理取消请求，而它挂在 `await for` 等字节时永远到不了 `yield` 点，
+/// 于是 `cancel()` 的 Future **永远不会完成**（实测 3 秒仍挂）。
+/// 把 abort 完成变成「源流结束」，生成器就能走到结尾、把取消请求处理掉。
+Stream<T> _abortable<T>(Stream<T> source, Future<void>? abort) {
+  if (abort == null) return source;
+  late StreamController<T> controller;
+  StreamSubscription<T>? subscription;
+  bool closed = false;
+
+  void finish() {
+    if (closed) return;
+    closed = true;
+    controller.close();
+  }
+
+  controller = StreamController<T>(
+    onListen: () {
+      subscription = source.listen(
+        (T chunk) {
+          if (!closed) controller.add(chunk);
+        },
+        onError: (Object error, StackTrace stack) {
+          if (closed) return;
+          closed = true;
+          controller.addError(error, stack);
+          controller.close();
+        },
+        onDone: finish,
+        cancelOnError: true,
+      );
+      unawaited(abort.whenComplete(() {
+        unawaited(subscription?.cancel());
+        finish();
+      }));
+    },
+    onCancel: () {
+      finish();
+      return subscription?.cancel();
+    },
+  );
+  return controller.stream;
 }

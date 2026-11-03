@@ -9,6 +9,7 @@ import 'history_model.dart';
 import 'prompt_payload.dart';
 import 'sse.dart';
 import 'state_store.dart';
+import 'stream_pump.dart';
 
 /// 聊天页的数据面运行时（Dart 侧自己跑，不再依赖 WebView 推快照）。
 ///
@@ -85,6 +86,9 @@ class ChatRuntime extends ChangeNotifier {
   /// 否则「刚发出去那一瞬间」屏幕上什么都不动，用户会以为没发出去。
   final List<Map<String, Object?>> _optimistic = <Map<String, Object?>>[];
 
+  /// 当前那条帧流（回前台时要换掉它，见 [resume]）。
+  StreamPump<SseEvent>? _framePump;
+
   PendingUiRequest? _pending;
 
   /// 正在提交（用于把状态显示成 running，否则发送到第一帧之间按钮是灰的）。
@@ -144,6 +148,31 @@ class ChatRuntime extends ChangeNotifier {
     store.start();
     unawaited(_loadHistory());
     unawaited(_frameLoop());
+  }
+
+  /// 回到前台：把「后台里变成僵尸的连接」换掉，并把数据重新对账一遍。
+  ///
+  /// 为什么不能只等看门狗：App 被冻结时 TCP 连接大多是死的，但读操作还挂着、
+  /// 没有人会抛错，用户只能盯着一个不动的界面等满 [stallTimeout]（50 秒）——
+  /// 这就是「从后台回来内容不刷新」的主因。回前台必须自己动手：
+  ///
+  ///  1. `kick()` 收掉当前帧流 → `_frameLoop` 立刻重连（不退避）；
+  ///  2. 状态仓对账（标题 / 待答卡片都靠它）+ 重拉历史（后台期间可能已经跑完）；
+  ///  3. 后台期间跑完的那一轮，`finished` 帧永远收不到了：看状态仓里还有没有
+  ///     这个会话的运行目标，没有就本地收口，否则按钮停在「停止」、计时器一直转
+  ///     （与 TS 的 `settleStaleTurn()` 同义）。
+  Future<void> resume() async {
+    if (_disposed) return;
+    _framePump?.kick();
+    await store.noteForeground();
+    if (_disposed) return;
+    await _loadHistory(quiet: true);
+    if (_disposed) return;
+    if (store.ready &&
+        reducer.status == RunStatus.running &&
+        store.targetOf(sessionId) == null) {
+      _applyFrame(doneFrame());
+    }
   }
 
   /* ------------------------------- 写动作 ------------------------------- */
@@ -433,23 +462,37 @@ class ChatRuntime extends ChangeNotifier {
       final DateTime startedAt = DateTime.now();
       bool everOpened = false;
       try {
-        final Stream<SseEvent> stream = client.streamSse(
-          '/api/sessions/${Uri.encodeComponent(sessionId)}/stream',
-          onOpen: () {
-            everOpened = true;
-            _frameBackoff.reset();
-            _connected = true;
-            _notify();
-          },
+        final StreamPump<SseEvent> pump = StreamPump<SseEvent>(
+          open: (void Function() onActivity, Future<void> abort) => client.streamSse(
+            '/api/sessions/${Uri.encodeComponent(sessionId)}/stream',
+            onOpen: () {
+              everOpened = true;
+              _frameBackoff.reset();
+              _connected = true;
+              _notify();
+            },
+            onActivity: onActivity,
+            abort: abort,
+          ),
+          // 看门狗：50s 一个字节都没收到 → 收掉这条流，循环到底部立刻重连
+          // （被踢/假死的不等退避）。按字节而不是按事件算：ping 是注释行，
+          // 它不会变成事件，按事件计时会在长工具调用时误杀健康连接。
+          idleTimeout: stallTimeout,
         );
-        // `timeout` 在这里就是看门狗：50s 一个事件都没来 → 收掉这条流，
-        // 循环到底部按「假死」立刻重连（退避归零，不等 15s）。
-        await for (final SseEvent event
-            in stream.timeout(stallTimeout, onTimeout: (EventSink<SseEvent> sink) => sink.close())) {
+        _framePump = pump;
+        await pump.run((SseEvent event) {
           if (_disposed) return;
           _handleFrameEvent(event);
+        });
+        _framePump = null;
+        // 回前台主动换连接：不是网络坏了，不要退避。
+        if (pump.kicked) {
+          _connected = false;
+          _notify();
+          continue;
         }
       } on PiDeckException catch (error) {
+        _framePump = null;
         if (_disposed) return;
         if (error.isAuth) {
           _authFailed = true;
@@ -464,6 +507,7 @@ class ChatRuntime extends ChangeNotifier {
         }
       } catch (_) {
         // 流被主动 cancel 也会走到这里，不当错误处理。
+        _framePump = null;
       }
       if (_disposed || _authFailed) return;
       _connected = false;
@@ -575,7 +619,7 @@ class ChatRuntime extends ChangeNotifier {
     }
   }
 
-  Future<void> _loadHistory() async {
+  Future<void> _loadHistory({bool quiet = false}) async {
     try {
       final MessageWindow window = await client.getMessages(sessionId);
       if (_disposed) return;
@@ -611,7 +655,7 @@ class ChatRuntime extends ChangeNotifier {
       if (_isMissingTranscript(error)) {
         _errorTitle = null;
         _errorDetail = null;
-        if (!_noticedMissingTranscript) {
+        if (!_noticedMissingTranscript && !quiet) {
           _noticedMissingTranscript = true;
           onNotice?.call('这个会话还没有历史（电脑端还没写出会话文件），可以先发消息');
         }
@@ -619,12 +663,15 @@ class ChatRuntime extends ChangeNotifier {
         _notify();
         return;
       }
-      _errorTitle = '历史加载失败';
-      _errorDetail = error.describe();
+      // quiet（回前台的后台对账）失败时不把已经看得见的内容换成错误卡：
+      // 刚回前台网络抖一下，满屏报错比不刷新还难受。
+      if (!quiet || _messages.isEmpty) {
+        _errorTitle = '历史加载失败';
+        _errorDetail = error.describe();
+      }
       _notify();
     }
   }
-
   /// 桌面端「会话文件还没写出来」时回的是 5xx（不是 404，也不是空数组）。
   ///
   /// 新建的会话要等第一条消息落盘才有 transcript 文件；在此之前
@@ -700,6 +747,9 @@ class ChatRuntime extends ChangeNotifier {
     _disposed = true;
     _historyRetryTimer?.cancel();
     _historyRetryTimer = null;
+    // 先把帧流收掉，否则它要等 50s 看门狗或者下一个字节才退。
+    _framePump?.kick();
+    _framePump = null;
     store.stop();
     // 两条流的取消靠「关掉客户端」：`streamSse` 的 async* 生成器在
     // HttpClient 关闭时抛 SocketException 并走 finally，循环随即退出。

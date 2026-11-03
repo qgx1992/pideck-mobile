@@ -6501,6 +6501,13 @@ function dispatchFlutterChatAction(action: Record<string, unknown>): void {
       pushFlutterNotice("已引用到输入框");
       return;
     }
+    case "resume": {
+      // Flutter 页盖着 WebView 时 MainActivity 是 paused，`visibilitychange` 不会触发，
+      // `resumeAfterBackground()` 就不会跑 —— 顶栏 / 选择面板 / 侧栏停在进后台前那份快照上。
+      // Dart 回到前台发这个动作，让它走**同一条**对账路径（不另开一套逻辑）。
+      void resumeAfterBackground().then((_) => syncFlutterChat());
+      return;
+    }
     case "exitApp": {
       // Flutter 页上的返回键。shell 模式下它盖着整屏，退回去就是"什么都没有"的网页版，
       // 所以直接退出 App；用户之前明确选了网页版，就按「返回网页版」处理。
