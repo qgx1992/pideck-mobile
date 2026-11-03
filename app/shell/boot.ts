@@ -20,6 +20,8 @@ import { getSseTransport, isNativeSseAvailable } from "./native-sse.ts";
 import { installFetchBridge } from "./fetch-bridge.ts";
 import { installEventSource } from "./event-source.ts";
 import { startRunWatch } from "./run-watch.ts";
+import { readNativeInsets, startSafeArea } from "./safe-area.ts";
+import { startSystemBars } from "./system-bars.ts";
 
 const authHeaders = (token: string): Record<string, string> => (token ? { authorization: `Bearer ${token}` } : {});
 
@@ -34,6 +36,10 @@ if (!device) {
 	installEventSource(device.baseUrl, authHeaders(device.token));
 	installExternalLinks();
 	installDownloadBridge();
+
+	// 系统栏：底部手势条的内边距（原生实测，补 env() 报 0 的设备）与状态栏图标配色
+	startSafeArea();
+	startSystemBars();
 
 	const container = navigator as unknown as { serviceWorker?: ServiceWorkerContainer };
 	if (container.serviceWorker) {
@@ -65,6 +71,9 @@ if (!device) {
 		nativeSse: isNativeSseAvailable(),
 		nativeHttp: Capacitor.isNativePlatform(),
 		sseIds: () => getSseTransport().list(),
+		// 安全区：原生实测重叠（dp）+ 实际注入的样式。底部被压住时先看这两个。
+		insets: () => readNativeInsets(),
+		safeAreaCss: () => document.getElementById("pideck-safe-area")?.textContent ?? "",
 	};
 
 	// 返回键：上游用 pushState 叠层（抽屉/面板各一层），所以能回就回一层；

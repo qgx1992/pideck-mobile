@@ -20,6 +20,12 @@ import {
 	type DeviceRecord,
 } from "./device.ts";
 import { ensureNotificationPermission, rememberedNotificationDenial } from "./permissions.ts";
+import { applySystemBars } from "./system-bars.ts";
+import { startSafeArea } from "./safe-area.ts";
+
+// 启动页固定深色，系统栏也钉在深色：从浅色主题的聊天页退回来时图标不能还留在深色。
+void applySystemBars("dark");
+startSafeArea();
 
 type ProbeState = "checking" | "online" | "offline" | "auth";
 

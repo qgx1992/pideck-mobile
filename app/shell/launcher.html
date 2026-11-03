@@ -25,7 +25,8 @@
         background: var(--bg);
         color: var(--text);
         font: 15px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-        padding: calc(env(safe-area-inset-top) + 20px) 16px calc(env(safe-area-inset-bottom) + 24px);
+        padding: calc(max(env(safe-area-inset-top, 0px), var(--pideck-inset-top, 0px)) + 20px) 16px
+        calc(max(env(safe-area-inset-bottom, 0px), var(--pideck-inset-bottom, 0px)) + 24px);
         max-width: 720px;
         margin: 0 auto;
       }
@@ -80,7 +81,8 @@
       .hint { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.6; }
       .empty { color: var(--muted); border: 1px dashed var(--border); border-radius: 14px; padding: 22px; text-align: center; font-size: 14px; }
       .toast {
-        position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 24px);
+        position: fixed; left: 50%;
+        bottom: calc(max(env(safe-area-inset-bottom, 0px), var(--pideck-inset-bottom, 0px)) + 24px);
         transform: translateX(-50%);
         background: #26262d; border: 1px solid var(--border); color: var(--text);
         padding: 10px 16px; border-radius: 999px; font-size: 13px; max-width: 85vw;

@@ -142,6 +142,16 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
 - 扫码取景是「相机预览在 WebView 下面」：`BarcodeScanner.startScan()` 只负责起相机，
   页面必须自己把背景变透明（`body.barcode-scanner-active`），否则看到的是纯色块。
   `app/shell/launcher.html` 里的遮罩只能靠取景框自身的 `box-shadow`，整屏底色必须 transparent。
+- **别信 `env(safe-area-inset-*)`**：Android WebView 在 edge-to-edge 布局下会把它报成 0
+  （页面明明被手势条压住），上游 `WebChatApp.tsx:1299` 的 `pb-[env(safe-area-inset-bottom)]`
+  于是等于没写、输入框被小横条盖住。壳的解法是 `NavigationBar.getInsets()`（原生量 WebView
+  与系统栏的**实际重叠**，dp）→ `app/shell/safe-area.ts` 只把 env() 没算到的差值写进那几条
+  utility 的 padding（`app/shell/safe-area-css.ts` 生成样式表，有单测）。退出 e2e 成功的机型
+  重叠为 0，不会被推走；键盘收起/旋转后 150ms 重算。
+- 状态栏图标不会自己跟主题：主题只是 `documentElement.dataset.theme`，图标明暗在系统手里。
+  `app/shell/system-bars.ts` 用 `MutationObserver` 盯 `data-theme`，同步 `StatusBar.setStyle`
+  （`Style.Dark` = 浅色图标）与 `NavigationBar.setColor({ lightIcons })`；启动页固定深色。
+  真机排查：`__pideckDebug.insets()` / `__pideckDebug.safeAreaCss()`。
 
 ## 改动完成后必须跑的验证
 
