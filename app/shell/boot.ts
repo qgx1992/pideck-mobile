@@ -7,12 +7,14 @@
  *   2. 装 fetch / EventSource 桥（相对 `/api/*` → 设备地址，SSE → 原生）；
  *   3. 关掉上游的 service worker（Capacitor 下它会缓存旧 assets，表现为「更新了还是老页面」）；
  *   4. 外链交给系统浏览器、blob 下载交给原生保存；
- *   5. 起后台看护（有会话在跑时拉起前台服务，跑完发通知）。
+ *   5. 起后台看护（有会话在跑时拉起前台服务，跑完发通知）；
+ *   6. 点通知带进来的会话要直接落到那一条（见 `launch-session.ts`）。
  */
 
 import { Capacitor } from "@capacitor/core";
 
 import { installBackHandler } from "./back.ts";
+import { installLaunchWatcher, openPendingLaunch } from "./launch-session.ts";
 import { UPSTREAM_TOKEN_KEY, getActiveDevice } from "./device.ts";
 import { installDownloadBridge } from "./downloads.ts";
 import { installExternalLinks } from "./external-links.ts";
@@ -31,6 +33,10 @@ if (!device) {
 	// 直接打开 /web.html 但没有配对记录：回启动页
 	location.replace("/");
 } else {
+	// 点会话通知进来（冷启动）：先把地址栏指到 /s/<id>，上游恢复选中时就能直接进会话。
+	// 热启动（App 已在后台）由下面的 watcher 处理。
+	void openPendingLaunch({ mode: "replace" });
+
 	if (device.token) localStorage.setItem(UPSTREAM_TOKEN_KEY, device.token);
 	installFetchBridge(device.baseUrl);
 	installEventSource(device.baseUrl, authHeaders(device.token));
@@ -80,6 +86,9 @@ if (!device) {
 	// 返回键 / 全面屏手势：只退覆盖层，退不掉就回启动页。
 	// 不能用 canGoBack——上游给会话也压了 /s/<id> 路由，那样会退成「浏览器后退」。
 	installBackHandler({ onBack: () => location.replace("/") });
+
+	// 点通知 / 从后台回来：取走原生那个一次性会话 id 并就地切会话
+	installLaunchWatcher({ mode: "push" });
 
 	// 看护：会话一开跑就拉前台服务（后台启动会被系统拒绝，所以必须在前台就开始）
 	const runWatch = startRunWatch(device);

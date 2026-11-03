@@ -10,7 +10,10 @@ public class MainActivity extends BridgeActivity {
 
     /** 点通知进来时要跳转的会话（一次性，JS 取走后清空） */
     static final String EXTRA_SESSION_ID = "pideckSessionId";
+    /** 通知来自哪台设备（多设备时不能把别的设备的会话开在当前设备上） */
+    static final String EXTRA_DEVICE_ID = "pideckDeviceId";
     private static volatile String pendingSessionId = null;
+    private static volatile String pendingDeviceId = null;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -58,8 +61,10 @@ public class MainActivity extends BridgeActivity {
         String sessionId = intent.getStringExtra(EXTRA_SESSION_ID);
         if (sessionId != null && !sessionId.isEmpty()) {
             pendingSessionId = sessionId;
+            pendingDeviceId = intent.getStringExtra(EXTRA_DEVICE_ID);
             // 清掉 extra，避免旋转屏幕等重建时又跳一次
             intent.removeExtra(EXTRA_SESSION_ID);
+            intent.removeExtra(EXTRA_DEVICE_ID);
         }
     }
 
@@ -67,6 +72,13 @@ public class MainActivity extends BridgeActivity {
     static String takePendingSessionId() {
         String value = pendingSessionId;
         pendingSessionId = null;
+        return value;
+    }
+
+    /** JS 取走待跳转会话所属的设备 id（可能为 null）。 */
+    static String takePendingDeviceId() {
+        String value = pendingDeviceId;
+        pendingDeviceId = null;
         return value;
     }
 }

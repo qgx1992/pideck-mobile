@@ -36,7 +36,9 @@ public class RunWatchPlugin extends Plugin {
             call.reject("baseUrl/token required");
             return;
         }
-        RunWatchService.start(getContext(), baseUrl, token, titles != null ? titles.toString() : "{}");
+        String deviceId = call.getString("deviceId", "");
+        RunWatchService.start(getContext(), baseUrl, token, titles != null ? titles.toString() : "{}",
+            deviceId == null ? "" : deviceId);
         call.resolve();
     }
 
@@ -91,7 +93,9 @@ public class RunWatchPlugin extends Plugin {
     public void consumeLaunchSession(PluginCall call) {
         JSObject result = new JSObject();
         String pending = MainActivity.takePendingSessionId();
+        String deviceId = MainActivity.takePendingDeviceId();
         result.put("sessionId", pending == null ? "" : pending);
+        result.put("deviceId", deviceId == null ? "" : deviceId);
         call.resolve(result);
     }
 }

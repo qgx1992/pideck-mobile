@@ -144,6 +144,14 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
 - 扫码取景是「相机预览在 WebView 下面」：`BarcodeScanner.startScan()` 只负责起相机，
   页面必须自己把背景变透明（`body.barcode-scanner-active`），否则看到的是纯色块。
   `app/shell/launcher.html` 里的遮罩只能靠取景框自身的 `box-shadow`，整屏底色必须 transparent。
+- **点通知要能直接进那个会话**：原生那端一直是通的（`RunWatchService` 两条通知的 Intent 都带
+  `pideckSessionId` + `pideckDeviceId`），缺的一直是 JS 不去取 —— 结果点通知只把 App 唤醒，停在
+  启动页。现在 `app/shell/launch-session.ts` 统一收口：冷启动由 `boot.ts` 把地址栏指到 `/s/<id>`
+  （上游 `WebChatApp.tsx:214` 会用 `sessionFromPath()` 恢复选中），热启动由 `appStateChange`/`resume`
+  取走 `RunWatchPlugin.consumeLaunchSession()` 后就地 `pushState` + `popstate`。启动页还兼一层：
+  Capacitor 的 `html5mode` 会把无扩展名路径回落到 `index.html`，所以「停在 `/s/<id>` 上被系统重建」
+  加载的是启动页，它转写成待跳转记录再送进 `web.html`。守门测试
+  `app/shell/notification-tap.test.ts`（8 条）盯着两头，删任一端都会红。
 - **启动页的页面画布必须保持透明**：相机预览（`BarcodeScanner.startScan`）铺在 WebView **下面**，
   `html` / `body` / WebView / 窗口任何一层有底色，取景框里就是一块纯色。踩过两次：一次是
   `.scan-overlay` 自己带底色，一次是 `safe-area-css.ts` 无条件给 `html` 铺画布色

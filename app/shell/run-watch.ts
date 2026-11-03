@@ -14,7 +14,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 import type { DeviceRecord } from "./device.ts";
 
 interface RunWatchApi {
-	start(options: { baseUrl: string; token: string; titles: Record<string, string> }): Promise<void>;
+	start(options: { baseUrl: string; token: string; titles: Record<string, string>; deviceId: string }): Promise<void>;
 	stop(): Promise<void>;
 }
 
@@ -91,7 +91,7 @@ export function startRunWatch(device: DeviceRecord): RunWatchHandle {
 		if (watching) return;
 		titles = await fetchTitles(device);
 		try {
-			await RunWatch.start({ baseUrl: device.baseUrl, token: device.token, titles });
+			await RunWatch.start({ baseUrl: device.baseUrl, token: device.token, titles, deviceId: device.id });
 			watching = true;
 		} catch {
 			// 权限/系统拒绝（例如后台启动限制）：下一轮再试，不影响前台使用

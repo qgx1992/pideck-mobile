@@ -20,6 +20,7 @@ import {
 	upsertDevice,
 	type DeviceRecord,
 } from "./device.ts";
+import { consumeNativeLaunch, takeSessionRouteFromUrl, writePendingLaunch } from "./launch-session.ts";
 import { ensureNotificationPermission, rememberedNotificationDenial } from "./permissions.ts";
 import { applySystemBars } from "./system-bars.ts";
 
@@ -410,6 +411,35 @@ installBackHandler({
 	confirmWithinMs: 2000,
 	onWarn: () => toast("再按一次退出"),
 });
+
+/* ------------------------------------------------------------------ */
+/* 点通知进来 / 停在 /s/<id> 上被系统重建                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Capacitor 的 `html5mode` 会把无扩展名的路径回落到 `index.html`，所以「点通知 →
+ * 进 /s/<id>」和「WebView 重建时停在 /s/<id>」这两种情况加载的都是这个启动页。
+ * 这里把它转写成待跳转记录再送进聊天页（聊天页由 `boot.ts` 消费）。
+ */
+function handleSessionRoute(): boolean {
+	if (!takeSessionRouteFromUrl()) return false;
+	location.replace("/web.html");
+	return true;
+}
+
+/** 通知点击时 App 可能已经在启动页上：从后台回来取一次原生的一次性会话 id。 */
+function handleIncomingLaunch(): void {
+	void consumeNativeLaunch().then((launch) => {
+		if (!launch) return;
+		writePendingLaunch(launch);
+		location.replace("/web.html");
+	});
+}
+
+if (!handleSessionRoute()) handleIncomingLaunch();
+App.addListener("appStateChange", ({ isActive }) => {
+	if (isActive && !handleSessionRoute()) handleIncomingLaunch();
+}).catch(() => undefined);
 
 // 从聊天页退回来时重新测一次，顺手刷新「最后一次在线」
 document.addEventListener("visibilitychange", () => {

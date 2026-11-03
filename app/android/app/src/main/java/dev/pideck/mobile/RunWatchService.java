@@ -54,6 +54,8 @@ public class RunWatchService extends Service {
     public static final String EXTRA_BASE_URL = "baseUrl";
     public static final String EXTRA_TOKEN = "token";
     public static final String EXTRA_TITLES = "titles";
+    /** 这次看护盯的是哪台设备（通知点回来时要先切到它） */
+    public static final String EXTRA_DEVICE_ID = "deviceId";
 
     /**
      * App 是否在前台。唯一真相源在 PiDeckApp（按 Activity started 计数），
@@ -76,18 +78,20 @@ public class RunWatchService extends Service {
     private Thread worker;
     private String baseUrl = "";
     private String token = "";
+    private String deviceId = "";
     private JSONObject titles = new JSONObject();
     private final Map<String, String> lastStatus = new HashMap<>();
     /** 上一次见过的待答卡片（sessionId:requestId），用来判断「新提问」 */
     private final java.util.Set<String> knownRequests = new java.util.HashSet<>();
     private boolean seeded = false;
 
-    public static void start(Context context, String baseUrl, String token, String titlesJson) {
+    public static void start(Context context, String baseUrl, String token, String titlesJson, String deviceId) {
         Intent intent = new Intent(context, RunWatchService.class);
         intent.setAction(ACTION_START);
         intent.putExtra(EXTRA_BASE_URL, baseUrl);
         intent.putExtra(EXTRA_TOKEN, token);
         intent.putExtra(EXTRA_TITLES, titlesJson);
+        intent.putExtra(EXTRA_DEVICE_ID, deviceId == null ? "" : deviceId);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -116,8 +120,10 @@ public class RunWatchService extends Service {
         String nextBaseUrl = intent != null ? intent.getStringExtra(EXTRA_BASE_URL) : null;
         String nextToken = intent != null ? intent.getStringExtra(EXTRA_TOKEN) : null;
         String nextTitles = intent != null ? intent.getStringExtra(EXTRA_TITLES) : null;
+        String nextDeviceId = intent != null ? intent.getStringExtra(EXTRA_DEVICE_ID) : null;
         if (nextBaseUrl != null) baseUrl = nextBaseUrl;
         if (nextToken != null) token = nextToken;
+        if (nextDeviceId != null) deviceId = nextDeviceId;
         if (nextTitles != null) {
             try {
                 titles = new JSONObject(nextTitles);
@@ -343,6 +349,7 @@ public class RunWatchService extends Service {
         Intent intent = new Intent(this, MainActivity.class);
         intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         intent.putExtra(MainActivity.EXTRA_SESSION_ID, sessionId);
+        intent.putExtra(MainActivity.EXTRA_DEVICE_ID, deviceId);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
         PendingIntent pending = PendingIntent.getActivity(this, (sessionId + "#ask").hashCode(), intent, flags);
@@ -388,6 +395,7 @@ public class RunWatchService extends Service {
         Intent intent = new Intent(this, MainActivity.class);
         intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         intent.putExtra(MainActivity.EXTRA_SESSION_ID, sessionId);
+        intent.putExtra(MainActivity.EXTRA_DEVICE_ID, deviceId);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
         PendingIntent pending = PendingIntent.getActivity(this, sessionId.hashCode(), intent, flags);
