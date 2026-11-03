@@ -122,7 +122,7 @@ gh secret set ANDROID_KEYSTORE_PROPERTIES < android/keystore.properties
 
 产物：
 ```
-apk/PiDeck-0.3.7-release.apk   # 13.6 MB（0.3.0 删掉 Flutter 引擎后），自己的 keystore 签名
+apk/PiDeck-0.3.8-release.apk   # 13.6 MB（0.3.0 删掉 Flutter 引擎后），自己的 keystore 签名
 apk/index.html               # 下载页（二维码内联）
 apk/qr.svg                   # 同一张二维码的独立文件
 apk/SHA256SUMS.txt           # 校验值（多项目合并，不会覆盖别人的条目）

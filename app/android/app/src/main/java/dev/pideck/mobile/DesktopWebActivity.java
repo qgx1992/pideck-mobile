@@ -226,7 +226,21 @@ public class DesktopWebActivity extends AppCompatActivity {
      * 为什么不能写死：桌面 Web 端主题跟桌面端设置（也可能是跟随系统），
      * 而 `AppTheme.WebShell` 的静态样式是「深色一套」 —— 浅色主题下会变成白底白图标。
      */
+    /** 页面 `env(safe-area-inset-*)` 的自报值（CSS px）+ `header` 相对页面顶边的偏移。 */
+    private volatile float pageInsetTop = -1f;
+    private volatile float pageHeaderTop = -1f;
+
     private final class ShellBridge {
+        @JavascriptInterface
+        public void setInsetInfo(final float safeTop, final float headerTop) {
+            pageInsetTop = safeTop;
+            pageHeaderTop = headerTop;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                if (contentRoot == null) return;
+                applyBarInsets(ViewCompat.getRootWindowInsets(contentRoot));
+            });
+        }
+
         @JavascriptInterface
         public void setTheme(final boolean dark, final String background) {
             new Handler(Looper.getMainLooper()).post(() -> applyBarTheme(dark, background));
@@ -282,12 +296,13 @@ public class DesktopWebActivity extends AppCompatActivity {
         int statusBar = systemDimen("status_bar_height");
         int navBar = systemDimen("navigation_bar_height");
 
-        // 以**实测位置**为准：容器已经在状态栏下面（decor-fit 生效）时，insets 仍可能报一个
-        // 非 0 的顶值 —— 那就再加一次，顶栏凭空下移一大截（实测：0.3.4 顶栏上面多出半屏空白）。
-        // 实测为 0 就不加，只在容器顶边真的压到状态栏里时才补。
+        // 页面自己让位了多少（`web.html` 写了 `pt-[env(safe-area-inset-top)]`，新 WebView 在
+        // edge-to-edge 下**会上报真实安全区**，这时页面已经把内容排到状态栏下面了）。
+        // 先信页面：它让了 N 个 CSS px，我们只补 `statusBar − N`，避免两端各让一次、凭空多一条空白；
+        // 页面报 0（老 WebView / env 不生效）时退回「实测差值」，兜住内容压进状态栏的情况。
         int measuredTop = Math.max(0, statusBar - screenPos[1]);
-        int top = measuredTop == 0 ? 0 : Math.max(measuredTop,
-                insets == null ? 0 : insets.getInsets(systemBars | WindowInsetsCompat.Type.displayCutout()).top);
+        int pageTop = pageInsetTop > 0 ? Math.round(pageInsetTop * getResources().getDisplayMetrics().density) : 0;
+        int top = Math.max(0, measuredTop - pageTop);
 
         // 底部一律不补：这个 ROM 上 `navigation_bar_height` 与窗口实际height对不上，
         // 任何反推都会多补一条黑边（0.3.5 实测：输入条下面多出 ~50dp 黑带）。
@@ -312,7 +327,8 @@ public class DesktopWebActivity extends AppCompatActivity {
                     + " sb=" + statusBar + " in=" + insetsTop
                     + " pad=" + top + "/" + bottom
                     + " real=" + real.heightPixels + " usable=" + usable.heightPixels
-                    + " dpi=" + real.densityDpi);
+                    + " dpi=" + real.densityDpi
+                    + " pt=" + pageInsetTop + " ht=" + pageHeaderTop);
         }
     }
 
@@ -379,6 +395,19 @@ public class DesktopWebActivity extends AppCompatActivity {
             + "try{new MutationObserver(report).observe(document.body,{attributes:true,attributeFilter:['class','style']});}catch(e){}"
             + "try{window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',report);}catch(e){}"
             + "document.addEventListener('visibilitychange',report);"
+            + "function insetTop(){try{"
+            + "var d=document.createElement('div');"
+            + "d.style.cssText='position:fixed;top:0;left:0;width:0;height:0;padding-top:env(safe-area-inset-top,0px);visibility:hidden;';"
+            + "document.documentElement.appendChild(d);"
+            + "var v=parseFloat(getComputedStyle(d).paddingTop)||0;d.remove();return v;}catch(e){return 0;}}"
+            + "function reportInsets(){try{var h=document.querySelector('header');"
+            + "var ht=h?Math.round(h.getBoundingClientRect().top - (document.documentElement.scrollTop||0)):-1;"
+            + "if(window.PiDeckShell&&window.PiDeckShell.setInsetInfo)window.PiDeckShell.setInsetInfo(insetTop(),ht);}catch(e){}}"
+            + "reportInsets();"
+            + "try{new ResizeObserver(reportInsets).observe(document.documentElement);}catch(e){}"
+            + "window.addEventListener('resize',reportInsets);"
+            + "window.addEventListener('load',reportInsets);"
+            + "setTimeout(reportInsets,600);setTimeout(reportInsets,2000);"
             + "})();";
 
     /**
