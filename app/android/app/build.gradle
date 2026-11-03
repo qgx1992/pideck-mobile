@@ -10,8 +10,8 @@ if (hasReleaseKeystore) {
 }
 
 // 允许 CI 用 -PpideckVersionName / -PpideckVersionCode 覆盖版本（本地构建走默认值）
-def pideckVersionName = (project.findProperty("pideckVersionName") ?: "0.3.1").toString()
-def pideckVersionCode = (project.findProperty("pideckVersionCode") ?: "301").toString().toInteger()
+def pideckVersionName = (project.findProperty("pideckVersionName") ?: "0.3.2").toString()
+def pideckVersionCode = (project.findProperty("pideckVersionCode") ?: "302").toString().toInteger()
 
 android {
     namespace "dev.pideck.mobile"
