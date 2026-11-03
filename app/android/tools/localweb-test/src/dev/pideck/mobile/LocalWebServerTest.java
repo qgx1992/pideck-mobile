@@ -10,6 +10,8 @@ import java.util.*;
 /** JVM 侧验证：本地外壳服务的转发语义（静态缓存、鉴权注入、SSE 不缓冲、POST 体透传）。 */
 public class LocalWebServerTest {
 
+    static final String CRLF = new String(new char[]{13, 10});
+
     static int pass = 0, fail = 0;
 
     public static void main(String[] args) throws Exception {
@@ -30,15 +32,24 @@ public class LocalWebServerTest {
         System.out.println("origin = " + origin);
         check("服务已启动", origin != null && origin.startsWith("http://127.0.0.1:"));
 
-        // 1) 静态入口：回源 + 落盘
+        // 1) 静态入口：回源 + 落盘（上游是 chunked，必须拆完帧再发）
         String entry = http(origin, "GET", "/", null, null);
         check("入口页回源", entry.contains("200 OK") && entry.contains("ENTRY v1"));
+        check("入口页正文不是分帧泄漏", bodyOf(entry).startsWith("<!doctype html>"));
         check("入口页落盘缓存", new File(Context.CACHE, "webui/index.html").isFile());
+        check("缓存里存的是拆帧后的正文",
+                new String(java.nio.file.Files.readAllBytes(new File(Context.CACHE, "webui/index.html").toPath()),
+                        StandardCharsets.UTF_8).startsWith("<!doctype html>"));
 
-        // 2) 静态资源带扩展名
+        // 2) 静态资源带扩展名（chunked 单块）
         String asset = http(origin, "GET", "/assets/app.js", null, null);
-        check("assets 回源", asset.contains("200 OK") && asset.contains("console.log(1)"));
-        check("assets content-type", asset.toLowerCase().contains("content-type: text/javascript"));
+        check("assets 回源", asset.contains("200 OK"));
+        check("assets 正文等于原文件（无 chunk 头）", bodyOf(asset).equals("console.log(1)"));
+        check("assets content-type 取自上游", asset.toLowerCase().contains("content-type: text/javascript"));
+
+        // 2b) gzip 回源也要解开（WebView 不支持 Content-Encoding 不可见的原始字节）
+        String gz = http(origin, "GET", "/assets/gz.css", null, null);
+        check("gzip 回源已解压", bodyOf(gz).equals("body{color:red}"));
 
         // 3) /api/* 注入 Authorization 并透传响应
         String state = http(origin, "GET", "/api/state", null, null);
@@ -128,9 +139,13 @@ public class LocalWebServerTest {
             String bodyText = new String(body, StandardCharsets.UTF_8);
 
             if (path.equals("/") || path.startsWith("/s/")) {
-                respond(out, "text/html; charset=utf-8", "<!-- ENTRY v1 -->");
+                // 真实桌面端的 HTML 是 chunked 发出的（踩过：不拆帧就白屏）
+                respondChunked(out, "text/html; charset=utf-8",
+                        new String[]{"<!doctype html><html><body>", "<div id=root>ENTRY v1</div></body></html>"});
             } else if (path.equals("/assets/app.js")) {
-                respond(out, "text/javascript; charset=utf-8", "console.log(1)");
+                respondChunked(out, "text/javascript; charset=utf-8", new String[]{"console.log(1)"});
+            } else if (path.equals("/assets/gz.css")) {
+                respondGzip(out, "text/css; charset=utf-8", "body{color:red}");
             } else if (path.equals("/api/state")) {
                 respond(out, "application/json; charset=utf-8",
                         "{\"ok\":true,\"auth\":\"" + auth + "\"}");
@@ -153,6 +168,33 @@ public class LocalWebServerTest {
         } catch (Exception error) {
             // 掉线测试会走到这里，忽略
         }
+    }
+
+    static void respondChunked(OutputStream out, String contentType, String[] parts) throws IOException {
+        out.write(("HTTP/1.1 200 OK" + CRLF + "Content-Type: " + contentType + CRLF
+                + "Transfer-Encoding: chunked" + CRLF + "Connection: close" + CRLF + CRLF)
+                .getBytes(StandardCharsets.UTF_8));
+        for (String part : parts) {
+            byte[] data = part.getBytes(StandardCharsets.UTF_8);
+            out.write((Integer.toHexString(data.length) + CRLF).getBytes(StandardCharsets.UTF_8));
+            out.write(data);
+            out.write(CRLF.getBytes(StandardCharsets.UTF_8));
+        }
+        out.write(("0" + CRLF + CRLF).getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+
+    static void respondGzip(OutputStream out, String contentType, String payload) throws IOException {
+        ByteArrayOutputStream raw = new ByteArrayOutputStream();
+        try (java.util.zip.GZIPOutputStream gzip = new java.util.zip.GZIPOutputStream(raw)) {
+            gzip.write(payload.getBytes(StandardCharsets.UTF_8));
+        }
+        byte[] data = raw.toByteArray();
+        out.write(("HTTP/1.1 200 OK" + CRLF + "Content-Type: " + contentType + CRLF
+                + "Content-Encoding: gzip" + CRLF + "Content-Length: " + data.length + CRLF
+                + "Connection: close" + CRLF + CRLF).getBytes(StandardCharsets.UTF_8));
+        out.write(data);
+        out.flush();
     }
 
     static void respond(OutputStream out, String contentType, String payload) throws IOException {
@@ -195,6 +237,12 @@ public class LocalWebServerTest {
             while ((read = in.read(buf)) > 0) buffer.write(buf, 0, read);
             return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
         }
+    }
+
+    /** 取响应正文（跳过头部）。 */
+    static String bodyOf(String response) {
+        int index = response.indexOf("\r\n\r\n");
+        return index < 0 ? "" : response.substring(index + 4);
     }
 
     static void check(String name, boolean ok) {

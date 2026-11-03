@@ -42,6 +42,12 @@ final class LocalWebServer {
     /** 静态资源单文件上限（桌面端 assets 里最大的 mermaid chunk 约 3 MB）。 */
     private static final long MAX_ASSET_BYTES = 24L * 1024 * 1024;
     private static final String CRLF = new String(new char[]{13, 10});
+    /**
+     * 缓存格式版本：改了缓存内容的含义（比如拆分帧、换压缩策略）就 +1，旧目录会被丢掉重取。
+     * 不这么做的话，一次取坏的副本会一直留在手机上 —— 0.2.20 就是这样把 chunk 头存成了
+     * 入口页，升级后仍然白屏。
+     */
+    private static final int CACHE_VERSION = 2;
 
     private final Context appContext;
     private final File cacheRoot;
@@ -69,6 +75,7 @@ final class LocalWebServer {
     /** 启动并返回本地 origin（`http://127.0.0.1:<port>`）；失败返回 null。 */
     synchronized String start() {
         if (running) return origin();
+        prepareCache();
         try {
             serverSocket = new ServerSocket();
             serverSocket.setReuseAddress(true);
@@ -196,7 +203,7 @@ final class LocalWebServer {
     private void serveStatic(String method, String path, OutputStream out) throws IOException {
         String normalized = normalizeAssetPath(path);
         File cached = new File(cacheRoot, normalized);
-        if (cached.isFile() && cached.length() > 0) {
+        if (cached.isFile() && cached.length() > 0 && cacheUsable(normalized, cached)) {
             sendFile(out, cached, contentTypeOf(normalized));
             return;
         }
@@ -209,7 +216,10 @@ final class LocalWebServer {
         }
         if (fetched != null && fetched.status == 200) {
             storeCache(normalized, fetched.body);
-            writeBody(out, 200, contentTypeOf(normalized), fetched.body);
+            String type = fetched.contentType == null || fetched.contentType.isEmpty()
+                    ? contentTypeOf(normalized)
+                    : fetched.contentType;
+            writeBody(out, 200, type, fetched.body);
             return;
         }
         if (fetched != null && fetched.status >= 400 && fetched.status < 500) {
@@ -238,6 +248,62 @@ final class LocalWebServer {
             return "index.html";
         }
         return clean;
+    }
+
+    /** 缓存目录：版本对不上就整个重来（旧副本可能是旧格式 / 取坏的）。 */
+    private void prepareCache() {
+        File stamp = new File(cacheRoot, ".version");
+        String expected = String.valueOf(CACHE_VERSION);
+        boolean fresh = false;
+        if (stamp.isFile()) {
+            try {
+                String current = new String(java.nio.file.Files.readAllBytes(stamp.toPath()),
+                        StandardCharsets.UTF_8).trim();
+                fresh = current.equals(expected);
+            } catch (IOException ignored) {
+                fresh = false;
+            }
+        }
+        if (!fresh) {
+            deleteRecursively(cacheRoot);
+            //noinspection ResultOfMethodCallIgnored
+            cacheRoot.mkdirs();
+            try {
+                java.nio.file.Files.write(stamp.toPath(), expected.getBytes(StandardCharsets.UTF_8));
+            } catch (IOException error) {
+                Log.w(TAG, "写缓存版本失败: " + error);
+            }
+        }
+    }
+
+    private static void deleteRecursively(File target) {
+        File[] children = target.listFiles();
+        if (children != null) {
+            for (File child : children) deleteRecursively(child);
+        }
+        //noinspection ResultOfMethodCallIgnored
+        target.delete();
+    }
+
+    /**
+     * 入口页的兜底校验：正常 HTML 一定以 `<` 开头。
+     * 早期版本把 chunk 长度（`903\r\n`）当正文存过，这种副本必须当不存在。
+     */
+    private boolean cacheUsable(String normalized, File cached) {
+        if (!normalized.equals("index.html")) return true;
+        try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(cached, "r")) {
+            int first = file.read();
+            while (first == ' ' || first == '\n' || first == '\r' || first == '\t') first = file.read();
+            if (first != '<') {
+                Log.w(TAG, "缓存入口页不是 HTML，丢弃并重取");
+                //noinspection ResultOfMethodCallIgnored
+                cached.delete();
+                return false;
+            }
+            return true;
+        } catch (IOException error) {
+            return false;
+        }
     }
 
     private void storeCache(String name, byte[] data) {
@@ -338,14 +404,22 @@ final class LocalWebServer {
     private static final class Fetched {
         final int status;
         final byte[] body;
+        final String contentType;
 
-        Fetched(int status, byte[] body) {
+        Fetched(int status, byte[] body, String contentType) {
             this.status = status;
             this.body = body;
+            this.contentType = contentType;
         }
     }
 
-    /** 一次性把上游响应读完（只给静态资源回源用）。 */
+    /**
+     * 一次性把上游响应读完（只给静态资源回源用）。
+     *
+     * 必须自己拆分帧：上游（Node）对 HTML/JS 常用 `Transfer-Encoding: chunked`，
+     * 把原始 body 当正文字节发出去时，chunk 头会变成页面内容 —— 症状是白屏
+     * （0.2.20 踩过：入口页正文以 `903` 开头，903 是 0x903=2307 字节的 chunk 长度）。
+     */
     private Fetched fetchUpstream(String method, String path) throws IOException {
         String base = upstreamBase;
         if (base.isEmpty()) return null;
@@ -356,15 +430,16 @@ final class LocalWebServer {
             String requestPath = path.isEmpty() ? "/" : "/" + path;
             String request = method + " " + requestPath + " HTTP/1.1" + CRLF
                     + "Host: " + hostOf(base) + CRLF
+                    + "Accept-Encoding: identity" + CRLF
                     + "Connection: close" + CRLF + CRLF;
             upOut.write(request.getBytes(StandardCharsets.UTF_8));
             upOut.flush();
 
             InputStream in = upstream.getInputStream();
-            String status = readLine(in);
+            String statusLine = readLine(in);
             int code = 0;
-            if (status != null) {
-                String[] parts = status.split(" ");
+            if (statusLine != null) {
+                String[] parts = statusLine.split(" ");
                 if (parts.length >= 2) {
                     try {
                         code = Integer.parseInt(parts[1]);
@@ -372,24 +447,91 @@ final class LocalWebServer {
                     }
                 }
             }
+            boolean chunked = false;
+            boolean gzipped = false;
+            String contentType = null;
             String line;
             while ((line = readLine(in)) != null && !line.isEmpty()) {
-                // 静态资源不需要上游的响应头
+                String lower = line.toLowerCase(Locale.ROOT);
+                if (lower.startsWith("transfer-encoding:")) {
+                    chunked = lower.contains("chunked");
+                } else if (lower.startsWith("content-encoding:")) {
+                    gzipped = lower.contains("gzip");
+                } else if (lower.startsWith("content-type:")) {
+                    contentType = line.substring(line.indexOf(':') + 1).trim();
+                }
             }
-            if (code != 200) return new Fetched(code, new byte[0]);
+            if (code != 200) return new Fetched(code, new byte[0], contentType);
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-            byte[] chunk = new byte[64 * 1024];
-            int read;
-            while ((read = in.read(chunk)) > 0) {
-                buffer.write(chunk, 0, read);
-                if (buffer.size() > MAX_ASSET_BYTES) return null;
+            if (chunked) {
+                if (!readChunkedBody(in, buffer)) return null;
+            } else {
+                byte[] chunk = new byte[64 * 1024];
+                int read;
+                while ((read = in.read(chunk)) > 0) {
+                    buffer.write(chunk, 0, read);
+                    if (buffer.size() > MAX_ASSET_BYTES) return null;
+                }
             }
-            return new Fetched(code, buffer.toByteArray());
+            byte[] body = buffer.toByteArray();
+            if (gzipped) body = gunzip(body);
+            if (body == null) return null;
+            return new Fetched(code, body, contentType);
         } finally {
             try {
                 upstream.close();
             } catch (IOException ignored) {
             }
+        }
+    }
+
+    /** HTTP chunked 解码：一串「十六进制长度 + CRLF + 数据 + CRLF」，0 结尾。 */
+    private boolean readChunkedBody(InputStream in, ByteArrayOutputStream out) throws IOException {
+        while (true) {
+            String sizeLine = readLine(in);
+            if (sizeLine == null) return false;
+            String hex = sizeLine.trim();
+            int semicolon = hex.indexOf(';'); // chunk 扩展（`1a;name=value`）忽略
+            if (semicolon >= 0) hex = hex.substring(0, semicolon).trim();
+            if (hex.isEmpty()) return false;
+            int size;
+            try {
+                size = Integer.parseInt(hex, 16);
+            } catch (NumberFormatException error) {
+                return false;
+            }
+            if (size == 0) {
+                // 吃掉 trailer（可能为空行）
+                String trailer;
+                while ((trailer = readLine(in)) != null && !trailer.isEmpty()) {
+                    // ignore
+                }
+                return true;
+            }
+            byte[] chunk = new byte[size];
+            int offset = 0;
+            while (offset < size) {
+                int read = in.read(chunk, offset, size - offset);
+                if (read < 0) return false;
+                offset += read;
+            }
+            out.write(chunk, 0, size);
+            if (out.size() > MAX_ASSET_BYTES) return false;
+            readLine(in); // chunk 结尾的 CRLF
+        }
+    }
+
+    private static byte[] gunzip(byte[] data) {
+        try (java.util.zip.GZIPInputStream gzip =
+                     new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(data))) {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] chunk = new byte[16 * 1024];
+            int read;
+            while ((read = gzip.read(chunk)) > 0) buffer.write(chunk, 0, read);
+            return buffer.toByteArray();
+        } catch (IOException error) {
+            Log.w(TAG, "解压回源内容失败: " + error);
+            return null;
         }
     }
 
