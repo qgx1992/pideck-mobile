@@ -1,6 +1,6 @@
 {
   "name": "pideck-mobile",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "private": true,
   "type": "module",
   "description": "PiDeck 手机客户端（Capacitor 壳 + 上游 web 界面）",
