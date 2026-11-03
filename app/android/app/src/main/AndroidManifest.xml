@@ -26,16 +26,6 @@
 
         </activity>
 
-        <activity
-            android:name=".DesktopWebActivity"
-            android:label="@string/title_activity_main"
-            android:theme="@style/AppTheme.WebShell"
-            android:launchMode="singleTop"
-            android:excludeFromRecents="true"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
-            android:windowSoftInputMode="adjustResize" />
-
         <service
             android:name=".RunWatchService"
             android:exported="false"

@@ -16,18 +16,4 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>
-    <!--
-      API 35 起系统默认强制 edge-to-edge：内容会画到状态栏底下。桌面网页版不要这个行为 ——
-      裸 WebView 里 `env(safe-area-inset-*)` 恒为 0，侧边栏顶栏会顶进状态栏且点不到。
-      这里退出强制（windowOptOutEdgeToEdgeEnforcement=true），由系统把内容排在状态栏下面，
-      两条栏用页面底色（运行时 `applyBarTheme()` 实时同步）保持视觉连续。
-    -->
-    <style name="AppTheme.WebShell" parent="AppTheme.NoActionBar">
-        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
-        <item name="android:statusBarColor">@color/appBackgroundDark</item>
-        <item name="android:navigationBarColor">@color/appBackgroundDark</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
-        <item name="android:windowBackground">@color/appBackgroundDark</item>
-    </style>
 </resources>

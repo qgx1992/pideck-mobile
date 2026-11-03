@@ -99,48 +99,27 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 页面里的二维码用 `app/scripts/gen-qr.py` 生成、`app/scripts/verify-qr.mjs --expect <地址>` 校验。
 - 静态服务器没有 deny 规则，要挡住某个文件只能让它不在这棵目录树里。
 
-## 界面栈：WebView 本地 UI + 桌面网页版（0.3.0 起，Flutter 已移除）
+## 界面栈：只有本地 Web UI（0.3.12 起，桌面网页版已删除）
 
-0.2.x 期间客户端曾走「Flutter add-to-app」把聊天/侧栏/工作区搬进 Dart。这条路在 0.3.0 全部拆掉
-（`flutter_module/`、`FlutterHostActivity`、`src/platform/flutter-*.ts` 及其测试都已删除），原因：
-同一套界面维护两遍，协议再移植一份，每次桌面端加字段都要两边对表，而真正「对齐桌面端」的解法是
-**直接用桌面端那份 UI**。现在 App 里只有两套东西：
+两条「借桌面端界面」的路都试过，都已拆掉：
 
-1. **本地 Web UI**（`app/src/**`，Capacitor WebView）：保留的兜底界面，`npm run build` 的产物，
-   也是设置页、连接面板等入口的所在地。它自己维护协议（`src/api/`），功能面比桌面网页版窄。
-2. **桌面网页版**（下面一节）：把桌面端自带的浏览器 UI 直接跑在 App 里，功能面与桌面端一致。
+- **0.3.0 删 Flutter add-to-app**（`flutter_module/`、`FlutterHostActivity`）——原因：同一套界面
+  维护两遍，协议再移植一份，桌面端每加字段都要两边对表。
+- **0.3.12 删桌面网页版**（`DesktopWebActivity` / `DesktopWebPlugin` / `LocalWebServer` /
+  `src/platform/desktop-web.ts` / `android/tools/localweb-test/`）——原因：桌面端那份页面是给
+  浏览器写的，系统栏、返回键、文件选择、外链全要原生补。0.3.0–0.3.11 十一个版本里有大半在修
+  「顶栏压进状态栏 / 顶栏下方多一条空白」：桌面 Web 端只给聊天主壳写了
+  `pt-[env(safe-area-inset-top)]`，侧栏抽屉、弹窗都没写，客户端只能一边按页面自报扣减、一边注入
+  CSS 补抽屉，补丁越叠越脆。用户最后的选择是**回到自家界面**。
 
-改代码时的两条硬约束：
-- **不要再往 App 里移植桌面端界面**：需要桌面端的能力就走桌面网页版，需要壳的能力（通知、后台看护、
-  文件落盘、扫码）才写原生。
-- **`document.visibilityState` 重新变回可信信号**：没有 Flutter 页盖 WebView 了，
-  `isAppInBackground()` 只看 `visibilityHidden`（`app/src/platform/run-watch.ts`）。
+所以现在 UI 只有一处：**`app/src/**`（Capacitor WebView，`npm run build` 的产物）**。
 
-## 桌面网页版与本地外壳（0.2.20 起，主推荐路径）
-
-桌面端 0.9.9 自带一份**给浏览器用的同一套 UI**（`out/renderer/web.html`，靠 `createBrowserApi`
-把整个 `window.piDesktop` 映射成同源 `fetch`），并且已经做过手机走查。客户端的终态是
-**壳 + 桌面端那份 UI**，不再自己维护第二套界面与第二份协议：
-
-- 入口：设置 → 连接面板 → 「用桌面网页版打开」（`app/src/platform/desktop-web.ts` →
-  `DesktopWebPlugin` → `DesktopWebActivity`）。
-- `DesktopWebActivity` 用**裸 WebView** 加载页面，不是 Capacitor 的 BridgeActivity：
-  `native-bridge.js` 只在本地 origin 注入，远程页拿不到插件，所以返回键 / 文件选择 / 外链
-  这些直接用原生 WebView 接口实现。
-- `LocalWebServer`（`app/android/.../LocalWebServer.java`）：只监听 `127.0.0.1`、随机端口，
-  静态资源回源一次后落盘缓存（桌面掉线也能出界面），`/api/*` 转发并统一注入
-  `Authorization: Bearer`，SSE 逐块 flush。**改它必须跑**
-  `powershell -NoProfile -ExecutionPolicy Bypass -File app/android/tools/localweb-test/run.ps1`（14 项）。
-- 五个踩过的坑：① 入口页在桌面端是 `GET /`（优先回 `web.html`），**不是** `/index.html`；
-  ② 上游 404 要透出 404，不能拿入口页兜底；③ 响应头 `Connection` 必须改写成 `close`；
-  ④ **静态回源必须自己拆分帧** —— 桌面端对 HTML/JS 用 `Transfer-Encoding: chunked`，把原始 body
-  当正文发出去，`903
-
-` 这种 chunk 头就成了页面内容，React 不挂载 = 白屏（0.2.20 事故）；
-  gzip 回源同理要解开。⑤ **缓存要带格式版本号**（`CACHE_VERSION`），否则取坏的副本会一直留在
-  手机上，升级 App 也照样白屏。
-- 写 `.ps1` 带中文必须 **UTF-8 with BOM**（Windows PowerShell 5.1 按 GBK 解），
-  `-D...` 开头的 java 参数必须整个加引号，否则会被 PowerShell 当成自己的参数。
+- 安全区、返回键、文件选择、外链、扫码都在自己能控制的代码里（`app/src/platform/*` + 原生插件），
+  不再有「页面没给我们留位置」这一类问题。
+- 桌面端能力的边界：**壳的能力**（通知、后台看护、文件落盘、扫码、SSE）写原生；
+  **界面的能力**写 `app/src`，协议在 `src/api/`。不要再引第二种界面栈。
+- `document.visibilityState` 是可信信号：只有一个 WebView，`isAppInBackground()` 只看
+  `visibilityHidden`（`app/src/platform/run-watch.ts`）。
 
 ## 改动完成后必须跑的验证
 
@@ -148,7 +127,6 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 npm test && npm run typecheck                 # 协议核心
 cd app && npm test && npm run typecheck       # 客户端
 cd app && npm run build && npm run verify:send
-powershell -NoProfile -ExecutionPolicy Bypass -File app/android/tools/localweb-test/run.ps1  # 本地外壳 14 项
 ```
 
 出包前还要确认 Android 侧能编过：`cd app/android && ./gradlew assembleDebug`（或直接 `npm run apk:release`）。
