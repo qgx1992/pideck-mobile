@@ -148,6 +148,12 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
   与系统栏的**实际重叠**，dp）→ `app/shell/safe-area.ts` 只把 env() 没算到的差值写进那几条
   utility 的 padding（`app/shell/safe-area-css.ts` 生成样式表，有单测）。退出 e2e 成功的机型
   重叠为 0，不会被推走；键盘收起/旋转后 150ms 重算。
+- **`fixed`/`absolute` 覆盖层要单独让位**：右侧栏（`WebWorkspaceDrawer.tsx:28` 的 `aside`）、
+  全屏文件预览（`WebFilePreview.tsx:305`）、底部弹层（`WebBottomSheet.tsx:80`）的坐标原点在
+  整个视口上，主壳的 `pt/pb-[env(...)]` 管不到它们 —— 右侧栏的标题栏（含关闭 X）会整个顶进
+  状态栏里看不见。`app/shell/safe-area-css.ts` 的 `OVERLAY_RULES` 按 class 字符串精确命中这三种
+  面板补内边距；上游改 class 就会静默失效，所以 `app/shell/overlay-selectors.test.ts` 直接读
+  vendor 源码对账，同步上游后测试红一次就能发现。
 - 状态栏图标不会自己跟主题：主题只是 `documentElement.dataset.theme`，图标明暗在系统手里。
   `app/shell/system-bars.ts` 用 `MutationObserver` 盯 `data-theme`，同步 `StatusBar.setStyle`
   （`Style.Dark` = 浅色图标）与 `NavigationBar.setColor({ lightIcons })`；启动页固定深色。
