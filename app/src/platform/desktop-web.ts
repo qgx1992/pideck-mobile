@@ -15,7 +15,15 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 export interface DesktopWebBridge {
-  open(options: { url: string; title?: string }): Promise<{ opened: boolean }>;
+  open(options: {
+    /** 直连模式：完整 URL（含 `?token=`）。local 模式可省略。 */
+    url?: string;
+    /** local 模式：桌面端 origin，例如 `http://10.0.0.7:8765`。 */
+    upstream?: string;
+    /** local 模式：由本地服务统一注入 `Authorization: Bearer`。 */
+    token?: string;
+    title?: string;
+  }): Promise<{ opened: boolean }>;
   available(): Promise<{ available: boolean }>;
 }
 
@@ -47,16 +55,29 @@ export function desktopWebUrl(baseUrl: string, token: string): string {
   return `${base}/?${query.toString()}`;
 }
 
-/** 打开桌面网页版；返回是否真的启动了（浏览器里调用返回 false）。 */
+/**
+ * 打开桌面网页版；返回是否真的启动了（浏览器里调用返回 false）。
+ *
+ * `mode = "local"`（默认）：页面由原生侧的本地服务提供 —— 静态资源回源一次后缓存
+ * （桌面掉线也能出界面），`/api/*` 由本地服务转发并注入 Bearer，页面地址是
+ * `http://127.0.0.1:<随机端口>/`，与桌面端同构，不用改桌面端任何东西。
+ *
+ * `mode = "remote"`：WebView 直接开 `http://<主机>:<端口>/?token=…`。
+ * 只在排查「到底是本地转发坏了还是桌面端坏了」时用。
+ */
 export async function openDesktopWeb(options: {
   baseUrl: string;
   token: string;
   title?: string;
+  mode?: "local" | "remote";
 }): Promise<boolean> {
   if (!bridge) return false;
-  const url = desktopWebUrl(options.baseUrl, options.token);
+  const mode = options.mode ?? "local";
   try {
-    const result = await bridge.open({ url, title: options.title });
+    const result =
+      mode === "remote"
+        ? await bridge.open({ url: desktopWebUrl(options.baseUrl, options.token), title: options.title })
+        : await bridge.open({ upstream: options.baseUrl, token: options.token, title: options.title });
     return result?.opened === true;
   } catch (error) {
     console.warn("[desktop-web] 打开失败", error);

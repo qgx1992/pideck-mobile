@@ -395,6 +395,26 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   3. 页面上的刷新（顶栏转圈按钮、错误卡的「重试」）要调 `_refresh()`：先 `runtime.reloadHistory()` 再发
      `{'type':'refresh'}` —— 历史归 Dart 之后，只发动作回去，这边画面不会动。
 
+## 桌面网页版与本地外壳（0.2.20 起，迁移方向）
+
+桌面端 0.9.9 自带一份**给浏览器用的同一套 UI**（`out/renderer/web.html`，靠 `createBrowserApi`
+把整个 `window.piDesktop` 映射成同源 `fetch`），并且已经做过手机走查。客户端的终态是
+**壳 + 桌面端那份 UI**，不再自己维护第二套界面与第二份协议：
+
+- 入口：设置 → 连接面板 → 「用桌面网页版打开」（`app/src/platform/desktop-web.ts` →
+  `DesktopWebPlugin` → `DesktopWebActivity`）。
+- `DesktopWebActivity` 用**裸 WebView** 加载页面，不是 Capacitor 的 BridgeActivity：
+  `native-bridge.js` 只在本地 origin 注入，远程页拿不到插件，所以返回键 / 文件选择 / 外链
+  这些直接用原生 WebView 接口实现。
+- `LocalWebServer`（`app/android/.../LocalWebServer.java`）：只监听 `127.0.0.1`、随机端口，
+  静态资源回源一次后落盘缓存（桌面掉线也能出界面），`/api/*` 转发并统一注入
+  `Authorization: Bearer`，SSE 逐块 flush。**改它必须跑**
+  `powershell -NoProfile -ExecutionPolicy Bypass -File app/android/tools/localweb-test/run.ps1`（14 项）。
+- 三个踩过的坑：① 入口页在桌面端是 `GET /`（优先回 `web.html`），**不是** `/index.html`；
+  ② 上游 404 要透出 404，不能拿入口页兜底；③ 响应头 `Connection` 必须改写成 `close`。
+- 写 `.ps1` 带中文必须 **UTF-8 with BOM**（Windows PowerShell 5.1 按 GBK 解），
+  `-D...` 开头的 java 参数必须整个加引号，否则会被 PowerShell 当成自己的参数。
+
 ## 改动完成后必须跑的验证
 
 ```bash
@@ -402,6 +422,7 @@ npm test && npm run typecheck                 # 协议核心
 cd app && npm test && npm run typecheck       # 客户端
 cd app && npm run build && npm run verify:send
 cd flutter_module && flutter analyze && flutter test   # Flutter 侧
+powershell -NoProfile -ExecutionPolicy Bypass -File app/android/tools/localweb-test/run.ps1  # 本地外壳 14 项
 ```
 
 `verify:send` 是 mock 的发送链路（14 项），能挡住「发送后不回显 / 流式块重复 / 按钮状态错」这类回归。

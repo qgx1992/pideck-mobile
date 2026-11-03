@@ -24,13 +24,18 @@ public class DesktopWebPlugin extends Plugin {
     @PluginMethod
     public void open(PluginCall call) {
         String url = call.getString("url");
+        // 本地外壳模式：只给上游 origin + token，页面地址由本地服务决定
+        String upstream = call.getString("upstream");
+        String token = call.getString("token");
         String title = call.getString("title", "PiDeck");
-        if (url == null || url.isEmpty()) {
-            call.reject("url 不能为空");
+        boolean local = upstream != null && !upstream.isEmpty();
+        if (!local && (url == null || url.isEmpty())) {
+            call.reject("url 或 upstream 必须给一个");
             return;
         }
         try {
-            getActivity().startActivity(DesktopWebActivity.intentFor(getContext(), url, title));
+            getActivity().startActivity(
+                    DesktopWebActivity.intentFor(getContext(), url, local ? upstream : null, token, title));
             JSObject result = new JSObject();
             result.put("opened", true);
             call.resolve(result);

@@ -41,19 +41,44 @@ public class DesktopWebActivity extends AppCompatActivity {
     private static final String TAG = "PiDeckDesktopWeb";
     static final String EXTRA_URL = "pideckWebUrl";
     static final String EXTRA_TITLE = "pideckWebTitle";
+    /** 走本地外壳（内置缓存 + /api 转发）：值就是上游 origin，例如 http://10.0.0.7:8765 */
+    static final String EXTRA_UPSTREAM = "pideckWebUpstream";
+    static final String EXTRA_TOKEN = "pideckWebToken";
 
     private static final int REQUEST_FILE_CHOOSER = 0x5D11;
 
     private WebView webView;
     private WebChromeClient.FileChooserParams pendingChooser;
+    private LocalWebServer localServer;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        String url = getIntent() == null ? null : getIntent().getStringExtra(EXTRA_URL);
+        Intent intent = getIntent();
+        String upstream = intent == null ? null : intent.getStringExtra(EXTRA_UPSTREAM);
+        String token = intent == null ? null : intent.getStringExtra(EXTRA_TOKEN);
+        String url;
+        if (upstream != null && !upstream.isEmpty()) {
+            // 本地外壳：静态资源缓存 + /api 转发到 upstream（SSE 不缓冲），
+            // 把页面放到同源 127.0.0.1 上，桌面端那套相对路径与 SW 都不必改。
+            localServer = new LocalWebServer(this, upstream, token);
+            String origin = localServer.start();
+            if (origin == null) {
+                localServer = null;
+                url = intent.getStringExtra(EXTRA_URL);
+            } else {
+                // 页面自己会把 ?token= 存进 localStorage（桌面端 Web 端的行为），
+                // 带上它免得页面以为没鉴权；真正的请求头仍由本地服务统一注入。
+                url = origin + "/" + (token == null || token.isEmpty()
+                        ? ""
+                        : "?token=" + java.net.URLEncoder.encode(token, java.nio.charset.StandardCharsets.UTF_8));
+            }
+        } else {
+            url = intent == null ? null : intent.getStringExtra(EXTRA_URL);
+        }
         if (url == null || url.isEmpty()) {
-            Log.w(TAG, "缺少 pideckWebUrl，直接结束");
+            Log.w(TAG, "既没有上游地址也没有 URL，直接结束");
             finish();
             return;
         }
@@ -195,6 +220,10 @@ public class DesktopWebActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (localServer != null) {
+            localServer.stop();
+            localServer = null;
+        }
         if (webView != null) {
             ViewGroup parent = (ViewGroup) webView.getParent();
             if (parent != null) parent.removeView(webView);
@@ -205,9 +234,16 @@ public class DesktopWebActivity extends AppCompatActivity {
     }
 
     /** 供插件启动：单例入口，避免每处都拼 intent。 */
-    static Intent intentFor(android.content.Context context, String url, String title) {
+    static Intent intentFor(
+            android.content.Context context,
+            String url,
+            String upstream,
+            String token,
+            String title) {
         Intent intent = new Intent(context, DesktopWebActivity.class);
-        intent.putExtra(EXTRA_URL, url);
+        if (url != null) intent.putExtra(EXTRA_URL, url);
+        if (upstream != null) intent.putExtra(EXTRA_UPSTREAM, upstream);
+        if (token != null) intent.putExtra(EXTRA_TOKEN, token);
         intent.putExtra(EXTRA_TITLE, title);
         return intent;
     }
