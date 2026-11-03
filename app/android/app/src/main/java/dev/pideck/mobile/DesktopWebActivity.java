@@ -25,7 +25,9 @@ import android.widget.FrameLayout;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
 /**
@@ -89,8 +91,12 @@ public class DesktopWebActivity extends AppCompatActivity {
             return;
         }
 
-        // 系统栏铺满：桌面 Web 端用 env(safe-area-inset-*) 自己让出刘海与手势条
-        // （web.html 的 viewport 带 viewport-fit=cover），这里只需要别把它们涂成实色。
+        // 系统栏透明，页面画到它们底下；但**让位由原生做**，见下面的 insets 监听。
+        //
+        // 为什么不能指望页面自己让：web.html 的确写了 `pt-[env(safe-area-inset-top)]`，
+        // 可那是浏览器（有 UI 框、报告 safe-area）里才成立的。这里是裸 WebView、又是
+        // 真 edge-to-edge，`env(safe-area-inset-*)` 拿到的是 0 —— 于是抽屉（`fixed inset-y-0`）
+        // 顶栏和顶部会话标题直接顶进状态栏里，被状态栏的图标和时间压住。
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -101,6 +107,19 @@ public class DesktopWebActivity extends AppCompatActivity {
         webView = new WebView(this);
         webView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // 让出状态栏 / 刘海 / 手势条 / 键盘：给 WebView 自己加 padding，
+        // padding 区域露出的是 WebView 底色（已跟随页面主题同步），所以看起来仍是「页面铺满」，
+        // 只是内容不再被两条栏压住。用 max(手势条, 键盘)，配合 manifest 的 adjustResize。
+        ViewCompat.setOnApplyWindowInsetsListener(webView, (view, insets) -> {
+            int edge = WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout();
+            int top = insets.getInsets(edge).top;
+            int bottom = Math.max(insets.getInsets(edge).bottom,
+                    insets.getInsets(WindowInsetsCompat.Type.ime()).bottom);
+            if (view.getPaddingTop() != top || view.getPaddingBottom() != bottom) {
+                view.setPadding(0, top, 0, bottom);
+            }
+            return insets;
+        });
         // 页面自己画背景；WebView 保持不透明，避免键盘弹出时露出系统底色的黑边
         webView.setBackgroundColor(Color.parseColor("#101014"));
 

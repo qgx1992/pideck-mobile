@@ -52,6 +52,12 @@ def open_log() -> IO[str]:
 class Handler(http.server.SimpleHTTPRequestHandler):
     """默认 handler + 明确的目录（不依赖进程工作目录，开机自启时 cwd 是 system32）。"""
 
+    def end_headers(self) -> None:
+        # 页面 / 校验文件经常原地改：不加这句，手机浏览器会按启发式缓存一直显示旧页面
+        if self.path.split("?")[0].endswith((".html", ".txt", "/")):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     def log_message(self, fmt: str, *args: object) -> None:  # noqa: A003 - 覆盖基类签名
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = fmt % args
