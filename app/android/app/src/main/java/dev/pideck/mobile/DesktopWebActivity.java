@@ -287,15 +287,17 @@ public class DesktopWebActivity extends AppCompatActivity {
         contentRoot.getLocationOnScreen(screenPos);
         int statusBar = systemDimen("status_bar_height");
 
-        // 顶部占位一律由原生补（只补「实测差值」）：这个 ROM 上窗口是真 edge-to-edge，容器 y=0，
-        // 差值就是状态栏高度；decor-fit 生效的机型差值为 0，自然不补。
+        // 顶部占位 = 「实测差值」−「页面自己让过的量」。
         //
-        // 为什么不用「页面自报安全区扣减」那一套：桌面 Web 端只有**聊天主壳**上写了
-        // `pt-[env(safe-area-inset-top)]`，侧栏抽屉（`fixed inset-y-0`）根本没写。
-        // 一旦按页面自报把原生占位扣成 0，抽屉顶上那排（新建项目 / 搜索）就直接压进状态栏；
-        // 反过来只补原生、再把主壳那份 `pt-[env(...)]` 清零，两者都落在状态栏下面。
+        // 桌面 Web 端只给聊天主壳写了 `pt-[env(safe-area-inset-top)]`，而这个 WebView 会把
+        // 真实安全区算进 `env()`，所以主壳已经让过一份：再整份补原生，就是两头各让一次、
+        // 顶栏上方多一条空白（0.3.9/0.3.10 踩过）。反过来不算页面那份（0.3.10 试图把
+        // 主壳内边距清零）也不行：React 重渲染会把内联 style 顶回去，空白又回。
+        // 所以这里**只扣不减**：页面让了多少就从原生占位里扣掉多少；抽屉没让，由
+        // SAFE_AREA_PROBE 注入的 CSS 单独补（两边各管一头，互不依赖）。
         int measuredTop = Math.max(0, statusBar - screenPos[1]);
-        final int top = measuredTop;
+        int pageTop = pageInsetTop > 0 ? Math.round(pageInsetTop * getResources().getDisplayMetrics().density) : 0;
+        final int top = Math.max(0, measuredTop - pageTop);
 
         // 底部一律不补：这个 ROM 上 `navigation_bar_height` 与窗口实际height对不上，
         // 任何反推都会多补一条黑边（0.3.5 实测：输入条下面多出 ~50dp 黑带）。
@@ -353,21 +355,24 @@ public class DesktopWebActivity extends AppCompatActivity {
      * 页面不一定有 `data-theme`（桌面 Web 端有自己的主题来源），所以以计算后的背景色为准。
      */
     /**
-     * 顶部安全区统一由原生 padding 提供，所以把页面自己那份 `pt-[env(safe-area-inset-top)]` 清零，
-     * 否则新 WebView（会上报真实安全区）+ 原生 padding 会各让一次，顶栏上方多出一条空白。
+     * 侧栏抽屉是 `fixed inset-y-0 ... flex-col`，桌面 Web 端没给它写安全区内边距，于是顶部
+     * 那排（新建项目 / 搜索）会压进状态栏。主壳那份由页面自己的 `pt-[env(...)]` 负责，
+     * 抽屉这份用样式表补——用 `!important` 而不是内联 style：React 重渲染会把内联 padding
+     * 顶回去（0.3.10 踩过）。
      */
     private static final String SAFE_AREA_PROBE =
             "(function(){"
             + "if(window.__pideckSafeArea)return;"
             + "window.__pideckSafeArea=true;"
-            + "function zero(){try{"
-            + "var els=document.querySelectorAll('[class*=\'safe-area-inset-top\']');"
-            + "for(var i=0;i<els.length;i++){var el=els[i];"
-            + "if(getComputedStyle(el).paddingTop!=='0px')el.style.paddingTop='0px';}"
+            + "function inject(){try{"
+            + "if(document.getElementById('pideck-safe-area'))return;"
+            + "var st=document.createElement('style');"
+            + "st.id='pideck-safe-area';"
+            + "st.textContent='[class*=\"inset-y-0\"][class*=\"flex-col\"]{padding-top:env(safe-area-inset-top,0px)!important}';"
+            + "(document.head||document.documentElement).appendChild(st);"
             + "}catch(e){}}"
-            + "zero();"
-            + "try{new MutationObserver(zero).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});}catch(e){}"
-            + "window.addEventListener('resize',zero);"
+            + "inject();"
+            + "try{new MutationObserver(inject).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}"
             + "})();";
 
     private static final String THEME_PROBE =
