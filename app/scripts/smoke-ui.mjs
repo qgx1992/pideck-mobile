@@ -273,3 +273,6 @@ const sessions = await waitFor(() => (doc.body.textContent ?? "").includes("会�
 console.log(`✓ 已渲染输入框（textarea=${doc.querySelectorAll("textarea").length}），按钮 ${doc.querySelectorAll("button").length} 个`);
 console.log(`✓ 侧栏/会话：${sessions ? "有内容" : "空（这台机器可能还没有会话）"}`);
 console.log(`✓ CSS 产物：${readdirSync(path.join(DIST, "assets")).filter((name) => name.endsWith(".css")).join(", ") || "无"}`);
+
+// 断言通过就收工：SSE 订阅和重连定时器会把事件循环一直挂着
+process.exit(0);
