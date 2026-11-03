@@ -8,6 +8,7 @@
 
 import { Capacitor, CapacitorHttp } from "@capacitor/core";
 import { App } from "@capacitor/app";
+import { installBackHandler } from "./back.ts";
 import {
 	deviceIdFor,
 	getActiveDevice,
@@ -363,9 +364,11 @@ notifyBtn.addEventListener("click", () => {
 	})();
 });
 
-// 返回键：启动页没有可关的层，直接退出
-void App.addListener("backButton", () => {
-	void App.exitApp();
+// 返回键：启动页没有可关的层，连按两次退出（第一次只提示，避免误触）
+installBackHandler({
+	onBack: () => void App.exitApp(),
+	confirmWithinMs: 2000,
+	onWarn: () => toast("再按一次退出"),
 });
 
 // 从聊天页退回来时重新测一次，顺手刷新「最后一次在线」

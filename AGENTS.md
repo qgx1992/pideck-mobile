@@ -162,6 +162,12 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
   （`Style.Dark` = 浅色图标）与 `NavigationBar.setColor({ lightIcons })`；启动页固定深色。
   真机排查：`__pideckDebug.insets()` / `__pideckDebug.safeAreaCss()`。
 
+- 返回键**不能**用 `canGoBack ? history.back() : …`：WebView 里它几乎永远是 true —— 上游给每个覆盖层压一条
+  `__pideckDismiss` 记录（`web/useDismissOnBack.ts:20`），选中会话还会 `pushState("/s/<id>")`
+  （`web/WebChatApp.tsx:228`），于是返回手势变成「浏览器后退」：关掉面板后还在会话之间一格一格退。
+  现在走 `app/shell/back.ts`：栈顶是覆盖层就 `history.back()` 让上游关掉那一层，否则直接回启动页；
+  启动页连按两次才退出。`app/shell/back.test.ts` 有一条直接读 vendor 源码对账 `__pideckDismiss` 键名。
+
 ## 改动完成后必须跑的验证
 
 ```bash

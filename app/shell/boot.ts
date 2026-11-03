@@ -10,9 +10,9 @@
  *   5. 起后台看护（有会话在跑时拉起前台服务，跑完发通知）。
  */
 
-import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 
+import { installBackHandler } from "./back.ts";
 import { UPSTREAM_TOKEN_KEY, getActiveDevice } from "./device.ts";
 import { installDownloadBridge } from "./downloads.ts";
 import { installExternalLinks } from "./external-links.ts";
@@ -76,12 +76,9 @@ if (!device) {
 		safeAreaCss: () => document.getElementById("pideck-safe-area")?.textContent ?? "",
 	};
 
-	// 返回键：上游用 pushState 叠层（抽屉/面板各一层），所以能回就回一层；
-	// 回到根还没有历史时回启动页。不注册监听的话 Capacitor 会直接 finish()。
-	void App.addListener("backButton", ({ canGoBack }) => {
-		if (canGoBack) window.history.back();
-		else location.replace("/");
-	});
+	// 返回键 / 全面屏手势：只退覆盖层，退不掉就回启动页。
+	// 不能用 canGoBack——上游给会话也压了 /s/<id> 路由，那样会退成「浏览器后退」。
+	installBackHandler({ onBack: () => location.replace("/") });
 
 	// 看护：会话一开跑就拉前台服务（后台启动会被系统拒绝，所以必须在前台就开始）
 	const runWatch = startRunWatch(device);
