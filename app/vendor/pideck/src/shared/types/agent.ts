@@ -1,0 +1,457 @@
+import type { ThinkingLevelMap } from "./modelSpecs";
+import type { SessionEnvironment, SessionLocator, RemoteSessionExtensions, SessionSource } from "./session";
+import type { TodoItem } from "./todo";
+
+/**
+ * DSH host inbox 排队项（官方 `inbox` projection 的归一化形态；
+ * `session/updateQueue` 的操作目标）。与 PiDeck 客户端排队队列
+ * （utils/queuedPromptQueue 的 QueuedPrompt）是两个数据源：这里是
+ * 已经送达 host、因运行中回合而滞留 inbox 的消息。
+ */
+export type DshQueuedMessage = {
+	/** host 侧队列项 id（updateQueue 的 itemId）。 */
+	id: string;
+	/** 排队目标：next-turn = 当前回合结束后；next-step = 当前回合中途插入。 */
+	target: "next-turn" | "next-step";
+	/** 展示文本（content 的 text 块拼接；非文本块仅计入计数后缀）。 */
+	text: string;
+};
+
+/** DSH agent-team 成员（官方 `agentTeam` projection 的 TeamMemberProjection 归一化形态）。 */
+export type DshTeamMember = {
+	/** 成员会话 id（host 侧 SessionId）。 */
+	id: string;
+	name: string;
+	role: "lead" | "teammate";
+	/** 持久生命周期（lead 行恒为 active；进行态看会话状态，不在投影里）。 */
+	phase: "provisioning" | "active" | "failed";
+	/** failed 相的失败原因（phase=failed 时可能有）。 */
+	error?: string;
+};
+
+/** DSH agent-team 任务（TeamTaskView 归一化：只留面板展示字段）。 */
+export type DshTeamTask = {
+	id: string;
+	subject: string;
+	description: string;
+	status: "pending" | "in_progress" | "completed" | "deleted";
+	/** 承接成员名（任务未分配时缺省）。 */
+	ownerName?: string;
+	/** 依赖是否就绪（blockedBy 全部完成且无写入范围告警）。 */
+	ready: boolean;
+};
+
+/**
+ * DSH agent-team 团队状态（官方 `agentTeam` projection 的 TeamProjection 归一化）。
+ * 发布在 lead 会话的投影 map 上：PiDeck 里每个会话各自是自己团队的 lead，
+ * 按会话订阅即天然隔离。`failure` 是官方持久化记录被拒的首个错误名。
+ */
+export type DshTeamState = {
+	members: DshTeamMember[];
+	tasks: DshTeamTask[];
+	failure?: string;
+};
+
+export type AgentStatus = "starting" | "idle" | "running" | "error" | "closed";
+
+/**
+ * 运行时后端：pi（stdio JSON-RPC，现有）、dsh（DeepSeek Harness，无 web 内嵌形态）、
+ * imagegen（生图，无 LLM agent、无 pi/DSH 会话文件，历史独立存 ImageSessionStore）
+ * 或 videogen（生视频，同为直连供应商 API 的无 agent 后端，历史独立存 VideoSessionStore）。
+ * 与 `SessionSource`（历史导入来源）是两个维度：source 描述会话文件从哪来，
+ * backend 描述会话由哪个引擎驱动。缺省视为 "pi"，旧数据天然兼容。
+ * 生图/生视频是后端维度的独立类型（不等价于 pi 的一种模式），互不影响。
+ */
+export type AgentBackend = "pi" | "dsh" | "imagegen" | "videogen" | "acp";
+
+/**
+ * IM 渠道（微信 / 飞书桥）可选的运行时后端。
+ *
+ * 只开放 pi 与 dsh：两个后端都有可用的模型目录、thinking 开关与消息读取；
+ * 渠道指令（AgentChannelInstructions）在 dsh 上被拒（降级为不传），其余能力等价。
+ * ACP 刻意不在此放开（二期）：模型来自会话 configOptions、不接受渠道指令、无流式，
+ * 需要单独设计一套模型选择路径，先给半个选项比不给更糟。
+ */
+export type ImChannelBackend = Extract<AgentBackend, "pi" | "dsh">;
+
+/** 设置/绑定里持久化的 backend 一律经此解析：非法值返回 undefined（缺省 = pi），不抛错。 */
+export function parseImChannelBackend(value: unknown): ImChannelBackend | undefined {
+	return value === "pi" || value === "dsh" ? value : undefined;
+}
+
+/**
+ * 后端可选能力（核心接口方法之外的可选扩展）。
+ * 能力缺失的后端必须显式声明不持有，UI 按能力禁用入口，禁止硬造等价物。
+ */
+export type DshPermissionPreset = "read-only" | "workspace-write" | "danger-full-access";
+
+/** Keep permission validation at the IPC/runtime boundary, not only in the picker UI. */
+export function isDshPermissionPreset(value: unknown): value is DshPermissionPreset {
+	return value === "read-only" || value === "workspace-write" || value === "danger-full-access";
+}
+
+export type AgentGatewayCapability =
+	| "compact" // 手动压缩
+	| "fork" // 从消息 fork 新会话
+	| "getForkMessages" // fork 前置的消息列表
+	| "editMessage" // 编辑历史消息
+	| "deleteMessage" // 删除历史消息
+	| "getCommands" // 会话内命令列表
+	| "reloadResources" // 热重载扩展/技能/提示词/主题/上下文文件（pi 扩展命令 /reload）
+	| "exportHtml" // 导出 HTML
+	| "rewind"; // checkpoint 文件快照/回退（refs/pi-checkpoints，纯 git）
+
+export type AgentTab = {
+	id: string;
+	projectId: string;
+	cwd: string;
+	title: string;
+	status: AgentStatus;
+	sessionId?: string;
+	/** PiDeck 会话身份（与 CreateAgentInput.deckSessionId 同源），用于安全门 PIDECK_SESSION_ID 注入。 */
+	deckSessionId?: string;
+	sessionPath?: string;
+	/** Identity used only for session/runtime matching; agentId remains the process handle. */
+	sessionEnvironment?: SessionEnvironment;
+	sessionSource?: SessionSource;
+	/** 运行时后端；缺省 "pi"（旧数据/旧路径兼容）。 */
+	backend?: AgentBackend;
+	/**
+	 * 远端会话标记（P4.2 起的字段名，P4.4b 后语义已换成「由 PiDeck 决策」）。
+	 *
+	 * `true` = 这条会话的远端项目 trust **由 PiDeck 的决策表管理**（`remoteProjectTrust` 段，按键
+	 * `hostId + endpoint 身份摘要 + 规范项目根`）：主进程在 spawn 时按决策传 `--approve/--no-approve`，
+	 * 未决策则一个 flag 都不传。渲染层把本标记当作「这是远端会话，该显示 trust 条」的判据，四种展示态
+	 * （未决策 / 已信任 / 已拒绝 / 因 endpoint 变更作废）由决策表决定——**不以 pi 事件为准**：目标远端 pi
+	 * 版本没有 `project_trust` 事件，本机 pi 版本又与之不同，事件既拿不到也不可信。
+	 * 名字保留是为了跨层契约兼容（`SessionRuntimeCoordinator` 透传 + 旧 payload）；本机/WSL/DSH/生图
+	 * 会话不带它（undefined 或 false = 无此状态），旧 payload 缺字段时按「无标记」处理（不显示、不报错）。
+	 */
+	remoteTrustUnhandled?: boolean;
+	/**
+	 * 远端会话实际注入的 PiDeck 内置扩展（P4.4 扩展面）。本机/WSL/DSH/生图会话不带。
+	 * 每次 spawn / reattach 由远端运行时端口给出，随 `agents:state` 与 runtime 快照下发；
+	 * 渲染层的计划/目标/安全等级能力门只认这里的 `applied`。
+	 */
+	remoteExtensions?: RemoteSessionExtensions;
+	/** DSH agent 预设（会话「模式」）：新建/attach 时从 host 解析，回写 catalog 供头部只读展示。 */
+	agentPreset?: string;
+	wslDistro?: string;
+	wslUser?: string;
+	importedSourceId?: string;
+	noSession?: boolean;
+	/** standby 池化进程：已握手完成但尚未绑定任何会话（预热 spawn，UI 不可见）。
+	 *  被 claim 后清回 undefined；仅主进程内部使用，渲染层不应看到 standby=true 的 tab。 */
+	standby?: boolean;
+	/** Monotonic binding generation assigned by SessionRuntimeCoordinator. */
+	runtimeGeneration?: number;
+	createdAt: number;
+	/** 会话累计压缩次数，由主进程解析会话文件得到，用于前端展示“已压缩 N 次”。 */
+	compactionCount?: number;
+};
+
+export type AgentRuntimeState = {
+	modelName?: string;
+	provider?: string;
+	modelId?: string;
+	/** DSH sessions.models().routable；undefined 表示尚未确认，不能据此阻塞输入。 */
+	modelRoutable?: boolean;
+	thinkingLevel?: string;
+	/** DSH 会话当前权限预设（read-only / workspace-write / danger-full-access / custom）；
+	 *  pi 后端无此概念。 */
+	permissionPreset?: string;
+	/** DSH 会话 plan 模式是否生效（/plan 命令，可能延迟到下一条消息的步骤生效）。 */
+	planModeActive?: boolean;
+	/** DSH 当前目标（goal/change 事件投影；无目标时为 undefined）。 */
+	goal?: {
+		refId: string;
+		revision: number;
+		objective: string;
+		phase: "active" | "paused" | "blocked" | "complete";
+		maxGoalRounds: number;
+		roundsStarted: number;
+	};
+	/**
+	 * 当前待办计划（DSH 官方 `todos` projection / `todo/write` 快照的归一化形态）：
+	 * 最新一次 `todo/write` 的整表（last-wins），下一轮 `turn/start` 清为 `null`
+	 * （standing plan 语义，与 dsh-web 一致）；`undefined` 表示投影未到达/插件未挂载。
+	 * pi 后端无此字段（仍走 widget 行快照），渲染层按后端数据源分别消费。
+	 */
+	todos?: TodoItem[] | null;
+	/**
+	 * DSH agent-team 团队状态（官方 `agentTeam` projection：成员 roster + 任务板）。
+	 * 仅启用了 agent-team 实验预设的会话才会有值：members 为空数组 = 已启用但尚未
+	 * spawn 成员；null = 显式清空；undefined = 投影未到达/插件未挂载（面板隐藏）。
+	 * pi 后端无此字段。
+	 */
+	dshTeam?: DshTeamState | null;
+	/**
+	 * DSH host 侧排队中的消息（官方 `inbox` projection：next-turn/next-step 合并视图，
+	 * 按入队顺序）。补齐本地排队队列（queuedPromptQueue，waitForIdle 前的客户端暂存）
+	 * 之外的盲区：waitForIdle 判定与 host 真实状态之间的竞态窗口内，已发出的消息
+	 * 可能滞留 host inbox 而客户端无感知。pi 后端无此字段；空数组 = host 确认无排队。
+	 */
+	queuedMessages?: DshQueuedMessage[];
+	isStreaming?: boolean;
+	/**
+	 * pi 的逻辑模型回合状态（agent_start → true，agent_end → false）。
+	 * false 表示本轮回答已结束；runtime 仍可能因为上下文压缩、自动重试收尾或
+	 * 队列检查保持 busy。undefined 兼容不提供该边界的旧 pi / DSH 快照。
+	 */
+	isTurnActive?: boolean;
+	isCompacting?: boolean;
+	/** 是否正在执行工具调用（read/write/bash 等） */
+	isExecutingTool?: boolean;
+	/** 当前正在执行的工具名称，如 read、write、bash */
+	executingToolName?: string;
+	/** 工具状态事件的单调序号，用于忽略晚到的异步完整状态。 */
+	toolStateSequence?: number;
+	contextTokens?: number | null;
+	contextWindow?: number | null;
+	contextPercent?: number | null;
+	/** 最近一次请求因上下文窗口超限而失败；即使当前占用快照缺失也要保留这个恢复入口。 */
+	contextOverflow?: boolean;
+	/** 对话段 token：优先「总占用 − 系统 − 工具」差值（提供商上报的 prompt 即三段之和），
+	 *  差值不可用时为会话文件里的消息文本估算。UI 用它展示「对话 vs 系统/工具」占比。 */
+	contextMessageTokens?: number;
+	/** 系统提示词 token 估算（pi：会话文件里重放出的提示词 sections；DSH：host contextBreakdown 投影。
+	 *  缺失 = 无测量值；0 表示确实为 0）。 */
+	contextSystemTokens?: number;
+	/** 工具定义/schema token 估算（pi：会话文件里重放出的工具声明；DSH：host contextBreakdown 投影。
+	 *  缺失 = 无测量值；0 表示确实为 0）。 */
+	contextToolsTokens?: number;
+	/** DSH 会话统计（host sessionStats 投影：整段日志回合/步骤计数与墙钟汇总；
+	 *  dsh-web StatsLine 同源；pi 无此概念，pi 用「上次回复」性能组）。 */
+	dshSessionStats?: {
+		turns: number;
+		steps: number;
+		llmMs: number;
+		toolMs: number;
+		/** 平均首 token 延迟（ms；ttftMs ÷ ttftSteps），无首字样本时为 undefined */
+		ttftAvgMs?: number;
+		/** 生成速度（tokens/s；decodeTokens ÷ decode 时长），无输出样本时为 undefined */
+		tokensPerSecond?: number;
+		/** 端到端速度（tokens/s；decodeTokens ÷ (ttftMs + decodeMs)），含首 token 等待、不含工具执行 */
+		endToEndTokensPerSecond?: number;
+	};
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	cacheTotal?: number;
+	cacheHitPercent?: number | null;
+	/** 当前会话平均缓存命中率：会话文件全部 assistant 消息 usage 的算术平均 */
+	cacheHitAveragePercent?: number | null;
+	/** 参与平均统计的 assistant 消息条数（与 cacheHitAveragePercent 同源） */
+	cacheHitSampleCount?: number;
+	cost?: number;
+	/** 最近一次 assistant 回复的正文首字延迟（ms；请求起点 → 首个 text delta，无正文时用 thinking） */
+	ttftMs?: number;
+	/** 最近一次 assistant 回复的总耗时（ms；请求起点 → message_end/done/error，不含前序工具执行） */
+	totalMs?: number;
+	/** 最近一次 assistant 回复的流式速度（tokens/s；output tokens ÷ 首个有效 thinking/text delta 到回复结束的耗时）。 */
+	tps?: number;
+	/** 最近一次 assistant 回复的端到端速度（tokens/s；同一回复的 output tokens ÷ totalMs）。 */
+	endToEndTps?: number;
+	/** 会话累计平均流式速度（tokens/s；output tokens ÷ 解码活跃耗时并集，已消除派生任务并发重叠）。 */
+	sessionTps?: number;
+	/** 会话累计平均端到端速度（tokens/s；output tokens ÷ 整体活跃耗时并集，已消除派生任务并发重叠）。 */
+	sessionEndToEndTps?: number;
+	/**
+	 * 最近一次回复实际使用的供应商/模型（结算时记账，不随之后切模型变化）。
+	 * 与同一状态里的 provider/modelId（当前模型）不同：切模型后仍归属发起这次回复的那个模型。
+	 */
+	perfProvider?: string;
+	perfModelId?: string;
+	perfModelName?: string;
+	/** 性能指标结算时刻（Date.now()），渲染层据此判断是否为近期数据 */
+	perfAt?: number;
+};
+
+export type AvailableModel = {
+	id: string;
+	name?: string;
+	provider: string;
+	/** 上下文窗口（token 数，来自 pi --list-models context 列） */
+	contextWindow?: number;
+	/** 单次输出上限（token 数，来自 max-out 列） */
+	maxTokens?: number;
+	reasoning?: boolean;
+	/** Pi 已解析的完整输入模态；缺失表示旧 CLI/后端未报告。 */
+	input?: Array<"text" | "image">;
+	/** 是否支持图片输入（来自 images 列；undefined = pi 未提供该列） */
+	images?: boolean;
+	/** Pi capability hydration 已确认的可用思考档位。
+	 * undefined 表示旧 Pi / capability probe 未就绪或失败，不能当作精确能力；
+	 * 空数组则是 Pi 返回的权威空结果，必须原样保留。 */
+	thinkingLevels?: string[];
+	/** Pi capability hydration 返回的模型特有思考映射；保留给配置补全，不能由静态级别表推断。 */
+	thinkingLevelMap?: ThinkingLevelMap;
+	/** 该模型支持的思考档位（DSH models catalog 的 reasoning.efforts；
+	 *  选择器按它过滤档位——DSH deepseek 适配器只接受 off/high/max，
+	 *  pi-ai provider 按模型声明，选不支持的档位会在下次请求抛 UNSUPPORTED_REASONING_EFFORT）。 */
+	reasoningEfforts?: Array<{ id: string; name?: string; description?: string }>;
+	/** DSH 模型自己的默认思考档位（reasoning.defaultEffort）；settings.yaml 未配
+	 *  agent-default-model.reasoningEffort 时，底栏/选择器应回退到这个值。 */
+	defaultEffort?: string;
+};
+
+/** 模型列表加载失败的成因分类：供模型选择器给出差异化引导（版本过低/配置损坏/pi 未安装）。 */
+export type ModelListFailReason =
+	| "pi-not-found"
+	| "version-too-old"
+	| "config-invalid"
+	| "cli-failed"
+	/**
+	 * 端点可连通但返回了 WAF / 人机验证页（HTTP 200 但正文是 HTML 挑战页，或非 JSON）。
+	 * 与 config-invalid 的区别：配置本身没问题，是网关按 UA / 出口 IP 拦截了请求。
+	 * 可操作动作是换代理或配 UA，而不是改配置——混在一起会把用户引向错误方向。
+	 */
+	| "waf-blocked"
+	/**
+	 * DSH 会话专用：host 被用户手动停止，模型目录（host 级 llm.models）读不到。
+	 * 与 cli-failed 的区别：不是运行时故障，重试永远无效，可操作动作是「启动 host」。
+	 */
+	| "dsh-host-stopped"
+	/**
+	 * 远端会话没有任何可用的目录来源：既没装配远端目录通道（实验开关关闭/项目位置读不出来），
+	 * 也没有活着的远端 pi 进程可以问。正常情况下远端目录由主机上的 `pi --list-models` 提供，
+	 * 与「会话是否激活」无关，所以这个码不该是常态。
+	 * 绝不能回退到本机目录——那会让用户选到远端根本不存在的模型。
+	 */
+	| "remote-inactive"
+	| "empty";
+
+/** 模型列表加载报告（projects:list-models-report）：模型数组 + 为空时的失败原因与详情。
+ *  旧通道 projects:list-models 只返回数组（失败即空），选择器无法解释"为什么没模型"；
+ *  本报告让渲染层能针对不同成因给出可操作的引导（升级 pi / 修配置 / 配置 pi 路径）。 */
+export type ModelListReport = {
+	models: AvailableModel[];
+	/** 列表非空（含配置兜底成功）时为 true */
+	ok: boolean;
+	reason: ModelListFailReason | null;
+	/** pi 版本（--version 结果）；未知时为 null */
+	version: string | null;
+	/** 失败详情（CLI stderr / 配置解析错误），已截断，可直接展示 */
+	detail: string;
+	/**
+	 * 数据来源：cache / cli / config-fallback / none / remote。
+	 * remote = 远端主机自己算出来的目录：优先是该主机上的 `pi --list-models`（与本机同一个解析
+	 * 函数），失败时才可能是活着的远端 pi 进程经 `get_available_models` 回答。远端会话只会是
+	 * 这个来源——本机目录在远端没有意义（set_model 会在远端被拒）。
+	 */
+	source: "cache" | "cli" | "config-fallback" | "none" | "remote";
+	/** 报告生成时刻 */
+	at: number;
+};
+
+/** 保存 models 后的后台 pi 验证结果（config:models-verify-result）。
+ *  保存 handler 为即时反馈（解析刚写入的 models.json，不 fork），fork 真实 pi 的完整
+ *  验证在后台完成后经本事件推送；渲染层仅失败时提示，成功静默（避免每次保存都弹）。 */
+export type ModelsVerifyResult = {
+	/** pi 成功加载出非空模型列表（config-fallback 兜底不算「已加载」） */
+	ok: boolean;
+	modelCount: number;
+	reason: ModelListFailReason | "config-fallback" | null;
+	/** 失败详情（CLI stderr / 配置诊断），已截断，可直接展示 */
+	detail: string;
+	/** 触发验证的保存时刻（主进程时间戳）；渲染层可据此忽略过期结果 */
+	savedAt: number;
+};
+
+export type CreateAgentInput = {
+	projectId: string;
+	title?: string;
+	/** Canonical history location; SSH is rejected until a remote session backend is installed. */
+	sessionLocator?: SessionLocator;
+	/** Local-only compatibility path for existing runtime callers. */
+	sessionPath?: string;
+	/** 运行时后端；缺省走当前装配的默认后端（pi），旧调用方无需改动。 */
+	backend?: AgentBackend;
+	/** DSH 会话身份（DSH host 的 sessionId）：backend=dsh 且已持久化时，attach 旧会话而非新建。 */
+	dshSessionId?: string;
+	/** DSH agent 预设（会话「模式」）；ACP 后端复用本字段承载 AcpToolConfig.id（选了哪个 CLI）。 */
+	agentPreset?: string;
+	/**
+	 * ACP 会话身份（agent 侧 sessionId）：backend=acp 且已持久化时，attach 旧会话
+	 * （session/load 恢复，agent 重放历史）而非新建。与 dshSessionId 语义平行。
+	 */
+	acpSessionId?: string;
+	/**
+	 * PiDeck 会话身份（SessionRecord.id，可能为 UUID 或会话文件路径）。
+	 * 会话级安全覆盖（SecurityStore.sessionOverrides）与 PIDECK_SESSION_ID 注入都使用这个 key；
+	 * 与 pi 进程自身的 sessionId（AgentTab.sessionId / piSessionId）语义不同，不可混用。
+	 */
+	deckSessionId?: string;
+	/** standby 池预热 spawn：不绑定会话、不注入 PIDECK_SESSION_ID，创建后由 StandbyAgentPool 托管（仅 AgentManager 内部使用）。 */
+	standby?: boolean;
+	environment?: SessionEnvironment;
+	source?: SessionSource;
+	wslDistro?: string;
+	wslUser?: string;
+	importedSourceId?: string;
+	noSession?: boolean;
+};
+
+export type AgentUiResponse = {
+	/** 普通回答为 string/boolean；multi_select 多选为 string[] */
+	value?: string | boolean | string[];
+	cancelled?: boolean;
+	confirmed?: boolean;
+};
+
+export type AgentUiBatchQuestion = {
+	id: string;
+	type: "select" | "multi_select" | "confirm" | "input" | "editor";
+	question: string;
+	options?: Array<string | { label: string; value?: string; description?: string }>;
+	allowOther?: boolean;
+	placeholder?: string;
+	prefill?: string;
+};
+
+export type AgentUiRequest = {
+	agentId: string;
+	requestId: string;
+	method: string;
+	title: string;
+	options?: string[];
+	placeholder?: string;
+	prefill?: string;
+	allowOther?: boolean;
+	completed?: boolean;
+	value?: string | boolean;
+	confirmed?: boolean;
+	cancelled?: boolean;
+	message?: string;
+	notifyType?: "info" | "warning" | "error";
+	text?: string;
+	widgetKey?: string;
+	widgetLines?: string[];
+	widgetPlacement?: "aboveEditor" | "belowEditor";
+	/** A batched ask_question envelope rendered as tabs in the session timeline footer. */
+	batchQuestions?: AgentUiBatchQuestion[];
+	batchReview?: boolean;
+};
+
+/** 实时思考内容更新，用于流式展示模型推理过程。
+ *  id 与 History 的 thinking-group id 相同（msg-thinking-${assistantMessageId}），
+ *  保证 Live→History 不 remount。 */
+export type ThinkingUpdate = {
+	agentId: string;
+	/** 稳定段 id：与 buildTurnDisplay 的 msg-thinking-* 一致 */
+	id: string;
+	/** 累积的思考文本（全量快照；流式增量推送时缺省，见 delta） */
+	text?: string;
+	/** 自上次推送以来的增量（2026-08 治理：避免每 50ms 全量重推长思考文本，
+	 *  主/渲染两侧分配器被瞬时 IPC 流量抬到 GB 级 RSS）。渲染层按 id 累积。 */
+	delta?: string;
+	startedAt: number;
+	/** 0 表示仍在流式思考中 */
+	endedAt: number;
+	/** true：本段结束，渲染层可清 live 通道并回退到 History */
+	done: boolean;
+};
+
+/** 输入框发送模式：普通执行 / 只读计划 / 生图 / 生视频 / 目标自动推进。 */
+export type ComposerAgentMode = "normal" | "plan" | "imagegen" | "videogen" | "goal";

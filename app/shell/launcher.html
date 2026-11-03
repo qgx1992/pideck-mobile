@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>PiDeck</title>
+    <link rel="icon" type="image/png" href="/icons/icon-192.png" />
+    <meta name="theme-color" content="#0b0b0c" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0b0c;
+        --card: #16161a;
+        --card-hover: #1d1d22;
+        --border: #2a2a31;
+        --text: #e7e7ea;
+        --muted: #9a9aa4;
+        --accent: #6366f1;
+        --ok: #22c55e;
+        --bad: #ef4444;
+      }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        padding: calc(env(safe-area-inset-top) + 20px) 16px calc(env(safe-area-inset-bottom) + 24px);
+        max-width: 720px;
+        margin: 0 auto;
+      }
+      header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+      h1 { font-size: 22px; margin: 0; letter-spacing: 0.5px; }
+      .brand-sub { color: var(--muted); font-size: 12px; }
+      .section-title { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin: 22px 0 10px; }
+      .device {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .device.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+      .device-head { display: flex; align-items: center; gap: 8px; }
+      .device-name { font-weight: 600; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .device-url { color: var(--muted); font-size: 12px; font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #52525b; flex: none; }
+      .dot.online { background: var(--ok); }
+      .dot.offline { background: var(--bad); }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      button {
+        background: var(--card-hover);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 9px 14px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:active { transform: scale(0.98); }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.ghost { background: transparent; }
+      button.danger { color: var(--bad); border-color: #3f2329; background: transparent; }
+      input[type="text"] {
+        flex: 1 1 220px;
+        min-width: 0;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 11px 12px;
+        color: var(--text);
+        font-size: 14px;
+      }
+      input[type="text"]:focus { outline: none; border-color: var(--accent); }
+      .add-box { display: flex; gap: 8px; flex-wrap: wrap; }
+      .hint { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.6; }
+      .empty { color: var(--muted); border: 1px dashed var(--border); border-radius: 14px; padding: 22px; text-align: center; font-size: 14px; }
+      .toast {
+        position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 24px);
+        transform: translateX(-50%);
+        background: #26262d; border: 1px solid var(--border); color: var(--text);
+        padding: 10px 16px; border-radius: 999px; font-size: 13px; max-width: 85vw;
+        opacity: 0; pointer-events: none; transition: opacity 0.2s;
+      }
+      .toast.show { opacity: 1; }
+      .scan-overlay {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+        display: none; align-items: center; justify-content: center; z-index: 20;
+      }
+      .scan-overlay.show { display: flex; }
+      .scan-frame { width: 62vw; height: 62vw; max-width: 300px; max-height: 300px; border: 2px solid #fff; border-radius: 18px; box-shadow: 0 0 0 100vmax rgba(0,0,0,0.45); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>PiDeck</h1>
+      <span class="brand-sub">手机客户端</span>
+    </header>
+
+    <div class="section-title">设备</div>
+    <div id="devices"></div>
+
+    <div class="section-title">添加设备</div>
+    <div class="add-box">
+      <input id="pair-input" type="text" inputmode="url" autocomplete="off" spellcheck="false"
+        placeholder="粘贴桌面端链接，如 http://192.168.1.11:8765/?token=…" />
+      <button class="primary" id="add-btn">添加</button>
+      <button id="scan-btn">扫码</button>
+    </div>
+    <div class="hint">
+      链接在桌面端「Web 服务」面板里（二维码旁边）。只填 <code>192.168.x.x:8765</code> 也行，
+      但没令牌时只能连本机环回绑定。
+    </div>
+
+    <div class="toast" id="toast"></div>
+    <div class="scan-overlay" id="scan-overlay"><div class="scan-frame"></div></div>
+
+    <script type="module" src="/launcher.js"></script>
+  </body>
+</html>

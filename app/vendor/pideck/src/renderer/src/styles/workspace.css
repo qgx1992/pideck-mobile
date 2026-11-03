@@ -1,0 +1,905 @@
+/* ---------- 宠物选择预览（设置面板内联动画预览框） ---------- */
+.pet-chooser-preview {
+  flex: 0 0 auto;
+  width: 120px;
+  height: 130px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  overflow: hidden;
+}
+.pet-chooser-preview canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: auto;
+}
+
+/* ── Prompt Templates ── */
+.prompts-tab {
+  display: grid;
+  gap: var(--space-3);
+}
+.prompts-list {
+  display: grid;
+  gap: var(--space-2);
+}
+.prompts-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 8px var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+}
+.prompts-list-item-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+.prompts-list-item-info:hover strong {
+  color: var(--color-accent-hover);
+}
+.prompts-list-item-info strong {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-control);
+  color: var(--color-accent);
+}
+/* 内联编辑器卡片 */
+/* 编辑器弹框 */
+.prompts-editor-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-backdrop);
+  backdrop-filter: blur(3px);
+  transform: translateZ(0);
+  /* 与 shadcn Dialog 遮罩同节奏的淡入；退场仍是卸载硬切，但遮罩消失不显突兀 */
+  animation: prompts-editor-backdrop-in 150ms ease-out;
+}
+@keyframes prompts-editor-backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+.prompts-editor-modal {
+  width: min(800px, calc(100vw - 80px));
+  height: min(600px, calc(100vh - 120px));
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: var(--color-bg-panel);
+  /* 边框对齐 DialogContent（rounded-lg border）：此前只有阴影无边框，亮色下像悬浮的裸块 */
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+  /* 进场对齐全局 Dialog 的 scale+fade 节奏（180ms cubic-bezier(0.22,1,0.36,1)），此前零动画硬切 */
+  animation: prompts-editor-modal-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes prompts-editor-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(6px);
+  }
+  to {
+    /* transform: none 收尾避免 fill-mode 保留非 none transform 创建 stacking context */
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prompts-editor-backdrop,
+  .prompts-editor-modal {
+    animation: none;
+  }
+}
+/* 壁纸模式下编辑弹框是「弹框内嵌弹框」，需要独立稳定实底：
+   config-modal 等把 --color-bg-panel/--color-bg-muted 覆盖为 transparent（避免内容
+   在弹窗底色上双层透图），但编辑弹框外壳、头部和 CodeMirror 都引用这两个变量，
+   会随之完全透空。这里局部把它们重新映射到浮层色（--color-bg-popover 在壁纸模式
+   下保持 ≥90% 实底），恢复可读性。 */
+:root[data-bg-image="on"] .prompts-editor-modal {
+  --color-bg-panel: var(--color-bg-popover);
+  --color-bg-muted: var(--color-bg-popover);
+  background: var(--color-bg-popover);
+}
+.prompts-monaco-wrap {
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  overflow: hidden;
+}
+
+/* CodeMirror 6 宿主容器：编辑器铺满父容器（旧 Monaco 同名职责，类名保留以兼容布局） */
+.codemirror-host {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.codemirror-host .cm-editor {
+  height: 100%;
+}
+
+.prompt-store-tab {
+  display: grid;
+  gap: 14px;
+}
+.prompt-store-results {
+  display: grid;
+  gap: 8px;
+}
+.prompt-store-result-count {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+}
+.prompt-store-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.prompt-store-card:hover {
+  border-color: var(--color-accent);
+}
+.prompt-store-card-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.prompt-store-card-title {
+  font-size: var(--font-size-control);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.prompt-store-card-desc {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.prompt-store-card-meta {
+  display: flex;
+  gap: 8px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+.prompt-store-card-category {
+  color: var(--color-accent);
+}
+.prompt-store-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.prompt-store-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prompt-store-preview {
+  display: grid;
+  gap: 14px;
+}
+.prompt-store-preview-header h3 {
+  margin: 0 0 6px;
+  font-size: var(--font-size-body-lg);
+  color: var(--color-text-primary);
+}
+.prompt-store-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+.prompt-store-votes {
+  color: var(--color-accent);
+}
+.prompt-store-installed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+.prompt-store-preview-install-name {
+  margin-top: 8px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+.prompt-store-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.prompt-store-tag {
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: var(--font-size-caption);
+}
+.prompt-store-description {
+  margin: 8px 0 0;
+  font-size: var(--font-size-control);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+.prompt-store-preview-content {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+  overflow: auto;
+  max-height: 400px;
+}
+.prompt-store-preview-content pre {
+  margin: 0;
+  padding: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+}
+
+/* ── Yao Open Prompts（中文精选） ── */
+.store-sub-tab {
+  display: grid;
+  gap: 14px;
+}
+.yao-category-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.yao-category-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.yao-category-chip:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.yao-category-chip.active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.yao-category-chip small {
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+.yao-category-chip.active small {
+  color: var(--color-accent);
+}
+.yao-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+/* ---------- Scratch Pad（草稿本）：布局与动画复用右侧抽屉 ---------- */
+/* ---------- Markdown 渲染 ---------- */
+.scratch-pad-md {
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm, 14px);
+  line-height: var(--line-height-relaxed, 1.7);
+  letter-spacing: 0.01em;
+  word-break: break-word;
+}
+
+.scratch-pad-md h1,
+.scratch-pad-md h2,
+.scratch-pad-md h3,
+.scratch-pad-md h4,
+.scratch-pad-md h5,
+.scratch-pad-md h6 {
+  margin: 1.6em 0 0.5em;
+  line-height: 1.35;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  letter-spacing: -0.01em;
+}
+
+.scratch-pad-md h1 {
+  font-size: 2em;
+  border-bottom: 1px solid var(--color-border-subtle);
+  padding-bottom: 0.25em;
+}
+.scratch-pad-md h2 {
+  font-size: 1.6em;
+}
+.scratch-pad-md h3 {
+  font-size: 1.4em;
+  font-weight: 600;
+}
+.scratch-pad-md h4 {
+  font-size: 1.2em;
+  font-weight: 600;
+}
+.scratch-pad-md h5 {
+  font-size: 1.08em;
+  font-weight: 600;
+}
+.scratch-pad-md h6 {
+  font-size: 1em;
+  font-weight: 500;
+}
+
+.scratch-pad-md p {
+  margin: 0.6em 0;
+}
+
+.scratch-pad-md a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.scratch-pad-md a:hover {
+  text-decoration: underline;
+}
+
+.scratch-pad-md blockquote {
+  margin: 0.8em 0;
+  padding: 0.5em 1em;
+  border-left: 3px solid var(--color-border-strong);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.scratch-pad-md blockquote p {
+  margin: 0.4em 0;
+}
+
+.scratch-pad-md ul,
+.scratch-pad-md ol {
+  margin: 0.5em 0;
+  padding-left: 1.6em;
+}
+
+.scratch-pad-md li {
+  margin: 0.25em 0;
+}
+
+.scratch-pad-md li::marker {
+  color: var(--color-text-tertiary);
+}
+
+.scratch-pad-md hr {
+  margin: 1.5em 0;
+  border: none;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.scratch-pad-md code {
+  padding: 0.15em 0.4em;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono);
+  font-size: 0.92em;
+  color: var(--color-code-text);
+}
+
+.scratch-pad-md pre {
+  margin: 0.8em 0;
+  padding: 1em 1.2em;
+  background: var(--color-code-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.scratch-pad-md pre code {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  font-size: 0.9em;
+  line-height: 1.55;
+}
+
+.scratch-pad-md table {
+  margin: 0.8em 0;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.scratch-pad-md th,
+.scratch-pad-md td {
+  padding: 0.5em 0.9em;
+  border: 1px solid var(--color-border-subtle);
+}
+
+.scratch-pad-md th {
+  background: var(--color-bg-muted);
+  font-weight: 600;
+}
+
+.scratch-pad-md input[type="checkbox"] {
+  margin-right: 0.5em;
+  vertical-align: middle;
+  opacity: 0.75;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.scratch-pad-md li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1.4em;
+  padding-left: 0;
+}
+
+.scratch-pad-md li[role="button"] {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.scratch-pad-md li[role="button"]:hover {
+  background: var(--color-bg-hover);
+}
+
+.scratch-pad-md li[role="button"]:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
+
+.scratch-pad-md mark {
+  padding: 0.1em 0.25em;
+  border-radius: var(--radius-xs);
+  background: var(--color-accent-soft);
+  color: inherit;
+}
+
+html[data-theme="dark"] .scratch-pad-md mark {
+  background: color-mix(in srgb, var(--color-warning) 30%, transparent);
+  color: var(--color-warning);
+}
+
+.scratch-pad-md img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+  margin: 0.5em 0;
+}
+
+/* ── PiDeck 左侧边栏 v3 Braun 卡片化重设计 ── */
+
+.chat-list-pane.v3-braun {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.wechat-shell:not(.list-collapsed) .chat-list-pane.v3-braun {
+  background: var(--color-bg-panel);
+}
+
+/* padding / gap 由 SidebarContent 的 Tailwind 承担；这里只保留布局骨架。
+   若继续写 padding，会在 unlayered 时代压死 utility；legacy 入层后也应避免双源抢同一属性。 */
+.chat-list-pane.v3-braun .sidebar-body {
+  position: relative;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wechat-shell:not(.list-collapsed) .chat-list-pane.v3-braun .sidebar-body {
+  display: flex;
+}
+
+/* pure official：list-toolbar / search / round-add 由组件 Tailwind+shadcn 承担，
+ * 不再用 v3-braun 硬编码高度与绿色 hover。 */
+.chat-list-pane.v3-braun .sidebar-body .list-toolbar,
+.chat-list-pane.v3-braun .sidebar-body .search-row {
+  flex-shrink: 0;
+}
+
+.chat-list-pane.v3-braun .sidebar-body .conversation-list {
+  flex: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* 侧栏 body 已提供左右安全边距，滚动条不再通过负 margin 贴到分隔线上。 */
+  margin-right: 0;
+  padding-right: 0;
+}
+
+/*
+ * pure official P2-2：项目/会话行 hover/active 由组件 Tailwind（bg-accent）承担。
+ * 这里只保留透明容器，项目之间不再绘制横向分隔线，避免层级被一条线切断。
+ */
+.chat-list-pane.v3-braun .sidebar-body .project-group {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  margin-bottom: var(--space-2);
+  box-shadow: none;
+}
+
+.chat-list-pane.v3-braun .sidebar-body .project-group:last-child {
+  margin-bottom: 0;
+}
+
+.chat-list-pane.v3-braun .sidebar-body .session-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.chat-list-pane.v3-braun .sidebar-body .session-card {
+  padding: 0;
+}
+
+.chat-list-pane.v3-braun .sidebar-body .agent-row,
+.chat-list-pane.v3-braun .sidebar-body .session-row {
+  margin: 0;
+}.chat-list-pane.v3-braun .sidebar-body .project-group > .conversation:first-child.active::before, .chat-list-pane.v3-braun .sidebar-body .agent-row.active::before, .chat-list-pane.v3-braun .sidebar-body .session-row.active::before{
+  display: none;
+}
+
+.chat-list-pane.v3-braun .sidebar-body .project-avatar {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-caption);
+}
+
+/* Draft：打开与删除并列，避免嵌套可交互元素 */
+.chat-list-pane.v3-braun .sidebar-body .draft-session-delete {
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  opacity: 0;
+  pointer-events: none;
+  transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+}
+
+.chat-list-pane.v3-braun .sidebar-body .draft-session-row:hover .draft-session-delete,
+.chat-list-pane.v3-braun .sidebar-body .draft-session-row:focus-within .draft-session-delete {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-list-pane.v3-braun .sidebar-body .draft-session-delete:hover,
+.chat-list-pane.v3-braun .sidebar-body .draft-session-delete:focus-visible {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}.chat-list-pane.v3-braun .sidebar-body .agent-row .conversation-title strong, .chat-list-pane.v3-braun .sidebar-body .session-row .conversation-title strong, .chat-list-pane.v3-braun
+  .sidebar-body
+  .codex-subagent-sidebar-row
+  .conversation-title
+  strong{
+  flex: 1;
+  font-size: var(--font-size-control);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  -webkit-mask-image: none;
+  mask-image: none;
+}.chat-list-pane.v3-braun
+  .sidebar-body
+  .agent-row.active
+  .conversation-title
+  strong, .chat-list-pane.v3-braun
+  .sidebar-body
+  .session-row.active
+  .conversation-title
+  strong, .chat-list-pane.v3-braun
+  .sidebar-body
+  .codex-subagent-sidebar-row.active
+  .conversation-title
+  strong{
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.chat-list-pane.v3-braun .sidebar-body .session-more-row,
+.chat-list-pane.v3-braun .sidebar-body .agent-more-row {
+  margin: 2px 0;
+  /* 「查看更多 / 收起 / 加载更多」统一紧凑行高：26px（文字 16px + 上下 2px）。
+     用户要求分页行比会话行矮一档，且项目页与活动页两处同一个功能的行高一致；
+     旧值 padding 6px 得到 32px，与会话行齐平。横向留白交给 JSX 的 px-2。 */
+  padding: 2px 8px;
+  min-height: 26px;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  /* 辅助分页入口不应与会话行同级；同步 JSX 的 text-micro，避免 legacy 回退为 caption。 */
+  font-size: var(--font-size-micro);
+  background: var(--color-bg-panel);
+}
+
+.chat-list-pane.v3-braun .sidebar-body .worktree-sessions-more {
+  margin: 2px 0;
+  padding: 2px 8px;
+  min-height: 26px;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-micro);
+  background: var(--color-bg-panel);
+}
+
+.chat-list-pane.v3-braun .sidebar-body .session-more-row:hover,
+.chat-list-pane.v3-braun .sidebar-body .agent-more-row:hover,
+.chat-list-pane.v3-braun .sidebar-body .worktree-sessions-more:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  text-decoration: underline;
+}
+
+.chat-list-pane.v3-braun .sidebar-body .codex-subagent-sidebar-group {
+  /* 缩进由 SessionTree 的 tailwind utility（ml-3）控制，此处不再写 margin */
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}.chat-list-pane.v3-braun .sidebar-body .codex-subagent-sidebar-row{
+  margin: 0;
+  padding: 6px 8px 6px 20px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+}.chat-list-pane.v3-braun .sidebar-body .codex-subagent-sidebar-row:hover{
+  background: var(--color-bg-hover);
+}
+
+.chat-list-pane.v3-braun .sidebar-body .worktree-children {
+  margin: var(--space-1) 0 0 var(--space-6);
+  border-left: 0;
+  padding: 0;
+  background: transparent;
+}.chat-list-pane.v3-braun .sidebar-body .worktree-children .agent-row, .chat-list-pane.v3-braun .sidebar-body .worktree-children .session-row, .chat-list-pane.v3-braun
+  .sidebar-body
+  .worktree-children
+  .codex-subagent-sidebar-row{
+  margin-left: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Git panel — VS Code-style three-pane Source Control workbench
+   ═══════════════════════════════════════════════════════════════ */
+/* ── Git 面板顶部分支栏 ───────────────────── */
+/* 分支栏与下方 pane header 保持统一的底色和分隔线，构成同一个工具栏家族 */
+/* 分支下拉触发器，统一使用按钮样式 */
+/* 分支栏中未初始化 Git 时的初始化按钮 */
+/* Portal 菜单由运行时按视口定位；这里仅保留视觉样式和安全兜底。 */
+
+.git-panel {
+  --git-ui-font: var(--font-family-base);
+  /* 抽屉走画布提亮半档（--color-bg-page-raised，比正文画布稍白做区域区分）：
+     白卡（提交/筛选输入框=--git-input-bg）浮其上；暗色该档坍缩为 panel 观感不变。 */
+  --git-panel-bg: var(--color-bg-page-raised);
+  --git-panel-fg: var(--color-text-primary);
+  --git-panel-border: var(--color-border-subtle);
+  --git-panel-hover: color-mix(in srgb, var(--color-text-primary) 6%, var(--color-bg-page-raised));
+  --git-panel-active: color-mix(in srgb, var(--color-text-primary) 10%, var(--color-bg-page-raised));
+  --git-input-bg: var(--color-bg-panel);
+  --git-input-border: var(--color-border-strong);
+  --git-action-bg: var(--color-accent);
+  --git-action-fg: var(--color-text-inverse);
+  --git-desc-fg: var(--color-text-tertiary);
+  --git-added: var(--color-accent);
+  --git-modified: var(--color-warning);
+  --git-deleted: var(--color-danger);
+  --git-renamed: var(--color-info);
+  --git-conflict: var(--color-warning);
+  --git-graph-lane-1: var(--color-info);
+  --git-graph-lane-2: var(--color-accent);
+  --git-graph-lane-3: var(--color-warning);
+  --git-graph-lane-4: var(--color-brand-purple);
+  --git-graph-lane-5: var(--color-danger);
+  --git-graph-lane-6: var(--color-brand-blue);
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--git-panel-bg);
+  color: var(--git-panel-fg);
+  font-family: var(--git-ui-font);
+  font-size: var(--font-size-body);
+  font-weight: 400;
+  line-height: var(--line-height-body);
+}
+
+/* 分区（changes/graph/compare）开合动画：高度是 h-[32px] ↔ h-[calc(var(--git-pane-height)+32px)]
+   的 class 切换，过渡只挂在 togglePane 后的 180ms 窗口（data-pane-animating）内——
+   sash 拖拽经 --git-pane-height 改高时窗口不在，避免拖拽橡皮筋。 */
+.git-panel[data-pane-animating="true"] section[id^="git-pane-"] {
+  transition: height 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.git-drawer-stack {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.git-drawer-source {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.git-drawer-detail {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-bg-panel);
+}
+/* FileDiffViewer 是该 flex 容器的直接子项；显式占满可用横向空间，
+   避免编辑器按行号/变更装饰的最小内容宽度收缩成截图中的窄条。 */
+.git-drawer-detail > .file-diff-viewer {
+  flex: 1 1 100%;
+  width: 100%;
+}
+
+.git-drawer-stack[data-detail-open="true"] .git-drawer-source {
+  visibility: hidden;
+  pointer-events: none;
+}
+/* FileDiffViewer 是该 flex 容器的直接子项；显式占满可用横向空间，
+   避免编辑器按行号/变更装饰的最小内容宽度收缩成截图中的窄条。 */
+
+.git-pane.collapsed { height: 26px; }
+.git-pane:last-child { border-bottom: 0; }
+
+.git-pane-header:hover { background: var(--git-panel-hover); }
+
+.git-pane-sash {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  height: 6px;
+  flex: 0 0 6px;
+  margin: -3px 0;
+  cursor: row-resize;
+  touch-action: none;
+}
+.git-pane-sash::before {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  content: "";
+  background: var(--git-panel-border);
+  transition: background-color 120ms ease, height 120ms ease;
+}
+.git-pane-sash:hover::before,
+.git-pane-sash:focus-visible::before,
+body.is-git-pane-resizing .git-pane-sash::before {
+  height: 2px;
+  background: var(--color-accent);
+}
+.git-pane-sash:focus-visible { outline: none; }
+body.is-git-pane-resizing, body.is-git-pane-resizing * { cursor: row-resize !important; user-select: none !important; }
+
+.git-twistie::before { content: "\25B6"; display: block; transform: rotate(-90deg); }
+.git-twistie.open::before { transform: rotate(0deg); }.git-scm-input:focus-visible{ outline: none; box-shadow: var(--focus-ring); }/* 提交输入区：固定不滚动，底部有分隔线 */
+
+.git-resource-group { border-bottom: 1px solid var(--git-panel-border); }
+/* 最后一个分组不要底部边框，避免在列表末尾残留一条横线 */
+.git-resource-group:last-child { border-bottom: none; }.git-resource-group.open .git-resource-group-actions{ display: flex; }/* 变更文件树目录头 —— 点击折叠/展开 + 显示每个目录下的文件计数 */
+
+/* 行尺寸/内边距/圆角/hover 全由行上的 utility 控制（28px 行高、--space-2 基准、bg-muted），
+   与文件抽屉的树行同一套规格；legacy 层只保留随字号档位缩放的字号与字体。 */
+.git-resource-row {
+  font-family: var(--git-ui-font);
+  font-size: var(--font-size-body);
+}
+.git-resource-open.static { cursor: default; }
+.git-resource-open:disabled { cursor: progress; opacity: 0.72; }
+.git-resource-open:focus-visible { outline: none; box-shadow: inset var(--focus-ring); }.git-resource-name { min-width: 0; flex: 0 1 auto; overflow: hidden; color: var(--git-panel-fg); text-overflow: ellipsis; white-space: nowrap; }
+.git-decoration { width: 16px; flex: 0 0 16px; margin-left: 5px; color: var(--git-desc-fg); font-family: var(--git-ui-font); font-size: var(--font-size-caption); font-weight: 600; text-align: right; }
+.git-resource-row.status-modified .git-decoration { color: var(--git-modified); }
+.git-resource-row.status-added .git-decoration { color: var(--git-added); }
+.git-resource-row.status-deleted .git-decoration { color: var(--git-deleted); }
+.git-resource-row.status-renamed .git-decoration { color: var(--git-renamed); }
+.git-resource-row.status-conflicting .git-decoration { color: var(--git-conflict); }
+.git-history-row:hover, .git-history-row.expanded { background: var(--git-panel-hover); }
+.git-history-row:focus-visible { outline: none; box-shadow: inset var(--focus-ring); }
+.git-ref { max-width: 108px; overflow: hidden; padding: 0 7px; border: 1px solid currentColor; border-radius: var(--radius-pill); font-family: var(--git-ui-font); font-size: var(--font-size-caption); font-weight: 500; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.git-history-file-row:disabled { cursor: progress; opacity: 0.72; }
+.git-history-file-row:hover:not(:disabled) { background: var(--git-panel-hover); }
+.git-history-file-row:active:not(:disabled) { background: var(--git-panel-selection); }
+.git-history-file-row:focus-visible { outline: none; box-shadow: inset var(--focus-ring); }
+.git-history-file-row.status-modified .git-decoration { color: var(--git-modified); }
+.git-history-file-row.status-added .git-decoration { color: var(--git-added); }
+.git-history-file-row.status-deleted .git-decoration { color: var(--git-deleted); }
+.git-history-file-row.status-renamed .git-decoration { color: var(--git-renamed); }
+
+.git-commit-hover-author { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
+.git-commit-hover-avatar { display: inline-flex; width: 24px; height: 24px; flex: 0 0 24px; align-items: center; justify-content: center; border-radius: var(--radius-sm); background: var(--color-bg-muted); color: var(--git-panel-fg); font-family: var(--git-ui-font); font-size: var(--font-size-caption); font-weight: 600; }
+
+.git-compare-controls { display: flex; flex: 0 0 auto; align-items: end; gap: 5px; padding: 7px 10px; }
+.git-compare-controls label { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; color: var(--git-desc-fg); font-family: var(--git-ui-font); font-size: 11px; }
+
+/* Git 未安装时的提示 */
+
+/* 未初始化 Git 仓库时的提示 */
+@media (max-width: 420px) {
+  .git-history-label { gap: 6px; }
+  .git-history-author, .git-resource-path { display: none; }
+}
+
+/* accent 小圆点 */
+
+.chat-list-pane.v3-braun .sidebar-body .brand-lockup {
+  gap: 14px;
+  align-items: center;
+  /* 保留基础右移，侧栏场景不再清零 */
+  margin: 0 0 0 8px;
+  padding: 0;
+}
+
+/* ── 抽屉活动栏（activity rail）──
+ * 面板切换入口（files/git/browser）：抽屉打开期间横排在抽屉内容区顶部
+ * （pure official 横排 tab，见 WorkspaceDrawerRail），不再依赖会话 outline。 */
+/* pure official P2-4：activity rail 布局由 WorkspaceDrawerRail Tailwind 承担 */
+.drawer-activity-rail-button.active::before {
+  display: none; /* 指示条改由组件内 span 渲染 */
+}
+.detail-drawer:has(.drawer-activity-rail) .drawer-content-frame {
+  min-width: 0;
+}

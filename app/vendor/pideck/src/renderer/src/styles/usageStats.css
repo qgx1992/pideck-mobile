@@ -1,0 +1,101 @@
+/* ── 用量统计（Usage Stats）──────────────────────────────────────────
+ * 跟随新架构：语义 token + legacy 层，暗色模式由 token 自然适配。
+ */
+.usage-stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.usage-stats-card {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.usage-stats-card-label {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+.usage-stats-card-value {
+  font-size: var(--font-size-heading);
+  font-weight: 600;
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+  margin: 2px 0;
+}
+.usage-stats-card-sub {
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.usage-stats-unknown {
+  color: var(--color-warning);
+}
+.usage-stats-path {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  word-break: break-all;
+}
+.usage-stats-hint {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-control);
+  line-height: var(--line-height-control);
+  margin: 6px 0;
+}
+.usage-stats-code {
+  display: inline-block;
+  font-family: var(--font-family-business);
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin: 4px 0;
+}
+.usage-stats-not-installed p {
+  margin: 6px 0;
+}
+.usage-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-control);
+}
+.usage-stats-table th {
+  text-align: left;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.usage-stats-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-variant-numeric: tabular-nums;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-stats-chart {
+  margin-top: 4px;
+}
+.usage-stats-chart-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+/* 热力图色阶：0=表面色，1-4=accent 递增（color-mix 于语义 token，暗色自动适配） */
+.usage-heatmap-l0 { fill: var(--color-border-subtle); }
+.usage-heatmap-l1 { fill: color-mix(in srgb, var(--color-accent) 25%, transparent); }
+.usage-heatmap-l2 { fill: color-mix(in srgb, var(--color-accent) 50%, transparent); }
+.usage-heatmap-l3 { fill: color-mix(in srgb, var(--color-accent) 72%, transparent); }
+.usage-heatmap-l4 { fill: color-mix(in srgb, var(--color-accent) 95%, transparent); }
+
+/* 引导卡：安装按钮 + 命令 + 复制按钮一行 */
+.usage-stats-install-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}

@@ -1,0 +1,425 @@
+/**
+ * Streamdown 代码块 / 表格观感（必须放在 utilities 层）。
+ *
+ * 引擎：streamdown + @streamdown/code（Shiki 高亮）——项目唯一 markdown 管线，
+ * 不另引 Prism/Highlight.js。官方外壳（p-2 / 双层 border / sticky -mt-10）落在
+ * utilities 层，会压过 surfaces legacy；属性选择器同层后写即可换皮。
+ *
+ * 视觉目标：代码块与表格共用「单卡片 + 微顶栏」语言，避免盒中盒。
+ */
+
+/*
+ * 会话正文密度：Streamdown 根节点默认 space-y-4，标题 mt-6 + text-3xl，
+ * 列表 py-1 / list-inside。这些都在 utilities 层，会压过 timeline.css（legacy）
+ * 的 .markdown-body 排版，表现为「行距/段距都偏疏、标题过大」。
+ * 必须同层后写才能对齐 Codex/Cursor 聊天密度（15px / 行高 1.5 / 段距 ~0.55em）。
+ * 选择器挂 .markdown-body，避免误伤文件预览以外的其它 streamdown 用法。
+ */
+/* 只覆盖普通块（段落等）的 space-y 缝；标题/列表/引用/hr/代码/表格走各自规则。
+   选择器必须比 .space-y-4 > :not(:last-child) 更具体，否则标题上边距会被冲成 0。 */
+.markdown-body :is(.space-y-4) > :not(:last-child):not([data-streamdown^="heading-"]):not([data-streamdown$="-list"]):not([data-streamdown="horizontal-rule"]):not([data-streamdown="blockquote"]):not([data-streamdown="code-block"]):not([data-streamdown="table-wrapper"]) {
+  margin-block-start: 0;
+  /* 段间呼吸（beui 流式消息 p+p 上方 12px 同档）：0.55em（≈8px @15px）偏密，放宽到 0.7em（≈10.5px）。 */
+  margin-block-end: 0.7em;
+}
+.markdown-body :is(.space-y-4) > [data-streamdown^="heading-"] {
+  /* 标题上下留白微增（1.1/0.35→1.3/0.45），分级更醒目；行高 1.3 保持不变。 */
+  margin-top: 1.3em;
+  margin-bottom: 0.45em;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.012em;
+}
+.markdown-body :is(.space-y-4) > [data-streamdown^="heading-"]:first-child {
+  margin-top: 0;
+}
+/* 标题刻度压平（ZCode：标题不比正文响——h1 只 +4/h2 只 +2，h3 起同字号靠字重分层）：
+   旧 1.5/1.28/1.12/1.08em 在 16px 正文下 h1 冲到 24px，比 ZCode 的 +4px 比例响一截；
+   1.3/1.15/1.06/1.03em 对应 +4.8/+2.4/+1/+0.5px，层级感保留、密度与安定感提升。 */
+.markdown-body [data-streamdown="heading-1"] {
+  font-size: 1.3em;
+}
+.markdown-body [data-streamdown="heading-2"] {
+  font-size: 1.15em;
+}
+.markdown-body [data-streamdown="heading-3"] {
+  font-size: 1.06em;
+}
+.markdown-body [data-streamdown="heading-4"] {
+  font-size: 1.03em;
+}
+.markdown-body [data-streamdown="heading-5"] {
+  font-size: 1em;
+}
+.markdown-body [data-streamdown="heading-6"] {
+  font-size: 0.95em;
+}
+.markdown-body [data-streamdown="unordered-list"] {
+  list-style-position: outside;
+  /* 列表上下边距加大、缩进放宽（1.35→1.5em），多条列表更易逐条扫读（beui pl-5 + my-3）。 */
+  margin: 0.55em 0 0.75em;
+  padding-left: 1.5em;
+}
+/*
+ * 有序列表编号改用「li 内绝对定位计数器」，不再依赖 ::marker 的 outside 悬挂（issue #369）。
+ *
+ * outside marker 会被排到内容列左侧（宽度取决于编号位数与字体），一旦超出列表 padding 区，
+ * 就会被 .markdown-body 的 overflow-x: clip 裁掉：macOS 自定义字体下 1./2. 只剩右半边，
+ * 表现为「数字标题部分被覆盖」。计数器钉在 li 自己的左内边距里（left: 0），永远落在内容列内，
+ * 同时保持与原生 marker 相同的视觉：编号右对齐、正文/换行统一缩进 1.7em。
+ *
+ * 带 start（从非 1 开始，如 markdown 的 "3."）的列表保留原生 marker，由浏览器按 start 编号；
+ * 给这类列表多留悬挂空间，降低宽编号被裁切的概率。
+ */
+.markdown-body [data-streamdown="ordered-list"] {
+  list-style-position: outside;
+  margin: 0.55em 0 0.75em;
+  padding-left: 2.2em;
+}
+.markdown-body [data-streamdown="ordered-list"]:not([start]) {
+  list-style: none;
+  counter-reset: pideck-ol;
+  padding-left: 0;
+}
+.markdown-body [data-streamdown="ordered-list"]:not([start]) > [data-streamdown="list-item"] {
+  position: relative;
+  counter-increment: pideck-ol;
+  padding-left: 1.7em;
+}
+.markdown-body [data-streamdown="ordered-list"]:not([start]) > [data-streamdown="list-item"]::before {
+  content: counter(pideck-ol) ".";
+  position: absolute;
+  inset-inline-start: 0;
+  width: 1.35em;
+  text-align: end;
+}
+.markdown-body [data-streamdown="list-item"] {
+  /* 列表项行间留白略增（0.12em→0.2em）。 */
+  margin: 0.2em 0;
+  padding-block: 0;
+}
+.markdown-body [data-streamdown="horizontal-rule"] {
+  margin-block: 1.1em;
+  /* streamdown 自带 border-border（utilities 层）会压过 timeline.css（legacy），
+     颜色必须在这里同层改回语义 token，皮肤/自定义主题才能改分隔线色。 */
+  border-color: var(--color-md-hr);
+}
+.markdown-body [data-streamdown="blockquote"] {
+  margin-block: 0.7em;
+  padding: 0.45em 0.85em;
+  /* 同上：text-muted-foreground / border-muted-foreground 由 streamdown 钉在 utilities 层。
+     只换颜色（文字 + 左侧竖线），宽度 4px / italic 保留 streamdown 原观感。 */
+  color: var(--color-md-quote);
+  border-left-color: var(--color-md-quote-border);
+}
+/* 正文链接：streamdown 的 text-primary 同层覆盖，需在此改回 md 语义色。 */
+.markdown-body [data-streamdown="link"]:not([data-md-file-link]) {
+  color: var(--color-md-link);
+}
+/* 文件/本地引用链接：组件意图是 accent 色（可点开文件），但它的 text-[var(--color-accent)]
+   与 streamdown 传入的 text-primary 同层同权重，源顺序一变就被顶掉；这里显式固定为 accent，
+   同时使皮肤改 --color-md-link 时不会连带改掉文件链接。 */
+.markdown-body [data-streamdown="link"][data-md-file-link] {
+  color: var(--color-accent);
+  text-decoration-color: color-mix(in srgb, var(--color-accent) 50%, transparent);
+}
+/* 行内代码：streamdown 只给了背景/间距 utility，文字色无冲突，这里显式写出
+   以免将来 streamdown 加 text-* class 时静默失联。 */
+.markdown-body [data-streamdown="inline-code"] {
+  color: var(--color-md-code);
+  background-color: var(--color-md-inline-code-bg);
+}
+/* 加粗/斜体/删除线：CSS 默认继承正文色，皮肤要单独提色时用 md 语义色接管。
+   strong 在 streamdown 里只带 font-semibold（无 color class），放在 utilities 层
+   是为了与其余 md 覆盖同层，避免皮肤值被 legacy 默认值顶掉。 */
+.markdown-body strong,
+.markdown-body b {
+  color: var(--color-md-strong);
+}
+.markdown-body em,
+.markdown-body i {
+  color: var(--color-md-em);
+}
+.markdown-body del,
+.markdown-body s {
+  color: var(--color-md-del);
+}
+/* 图片边框：默认 transparent（零观感变化），终端皮肤给框线。 */
+.markdown-body img {
+  border: 1px solid var(--color-md-image-border);
+}
+/* 任务列表勾选：tailwind.css 把 accent-color 钉在 --color-accent，终端皮肤要绿勾。 */
+.markdown-body input[type="checkbox"] {
+  accent-color: var(--color-md-task-accent);
+}
+
+/* ── 代码块 ─────────────────────────────────────────────── */
+[data-streamdown="code-block"] {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  margin: 0.85rem 0;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-md-frame);
+  border-radius: var(--radius-xl);
+  background: var(--color-chat-muted-bg);
+  box-shadow: none;
+}
+
+[data-streamdown="code-block-header"] {
+  display: flex;
+  box-sizing: border-box;
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
+  align-items: center;
+  padding: 0 4.75rem 0 0.85rem;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-radius: 0;
+  /* 卡片头部条 = 墨水罩染弱表面（与引用/表头同档）：卡身已是白卡，
+     旧的 panel/muted 混色在浅色会混成纯白失去分层；墨水罩染在白卡上
+     渲染 #f8f8f8 档，方向跨明暗恒对。 */
+  background: var(--color-surface-ink-subtle);
+  color: var(--color-text-tertiary);
+  font: 500 var(--text-micro) / 1.4 var(--font-family-sans);
+}
+
+[data-streamdown="code-block-header"] > span {
+  margin-left: 0;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: var(--color-surface-ink);
+  font-family: var(--font-family-mono);
+  font-size: var(--text-micro);
+  letter-spacing: 0.03em;
+  text-transform: lowercase;
+  color: var(--color-text-secondary);
+}
+
+[data-streamdown="code-block"] > div:has([data-streamdown="code-block-actions"]) {
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  display: flex;
+  box-sizing: border-box;
+  width: auto;
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
+  margin: 0;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 0.45rem;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+[data-streamdown="code-block-actions"] {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  opacity: 0.5;
+  transition: opacity 0.15s ease;
+}
+
+[data-streamdown="code-block-copy-button"] {
+  order: 1;
+}
+[data-streamdown="code-block-download-button"] {
+  order: 2;
+}
+
+[data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"],
+[data-streamdown="code-block-actions"]:focus-within {
+  opacity: 1;
+}
+
+[data-streamdown="code-block-actions"] button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  box-shadow: none;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    background-color 0.12s ease;
+}
+
+[data-streamdown="code-block-actions"] button:hover,
+[data-streamdown="code-block-actions"] button:focus-visible {
+  background: var(--color-bg-hover);
+  color: var(--color-accent);
+}
+
+[data-streamdown="code-block-actions"] button:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 1px;
+}
+
+[data-streamdown="code-block-body"] {
+  margin: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  box-shadow: none;
+}
+
+[data-streamdown="code-block-body"] > pre {
+  margin: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* ── 表格（与代码块同属「单卡片」皮） ───────────────────── */
+[data-streamdown="table-wrapper"] {
+  position: relative;
+  margin: 0.85rem 0;
+  padding: 0;
+  gap: 0;
+  /* 不能用 overflow:hidden 收圆角：顶栏里复制/下载按钮的下拉菜单（复制为
+     Markdown/CSV/TSV、下载为 CSV/Markdown）是 absolute 定位，裁掉一半会与
+     表格内容叠在一起。圆角裁剪下放到顶栏与表格容器各自负责。 */
+  overflow: visible;
+  border: 1px solid var(--color-md-frame);
+  border-radius: var(--radius-xl);
+  background: var(--color-chat-muted-bg);
+  box-shadow: none;
+}
+
+[data-streamdown="table-wrapper"] > div:first-child {
+  display: flex;
+  /* 顶栏参与定位：打开的下拉菜单（内部 z-20）才能盖住表格内容。否则它是
+     普通文档流块，按顺序画在表格容器之下 → 表格文字从菜单底下透出来（字重叠）。 */
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  height: 34px;
+  min-height: 34px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0.45rem;
+  border: 0;
+  border-bottom: 1px solid var(--color-md-table-border);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  /* 与代码块头部条同档：墨水罩染弱表面（卡身白卡，头部轻退一档） */
+  background: var(--color-md-table-head-bg);
+  /* 不用 opacity 做整条半隐：opacity<1 会建立层叠上下文，鼠标移出顶栏后
+     打开的下拉菜单被压到表格内容下面（字重叠）；半隐改由按钮自身承担。 */
+}
+
+/* 顶栏图标按钮：复制/下载触发器 + 全屏按钮。
+   注意：不能把「顶栏内全部 button」一把抓 —— 复制/下载的下拉菜单
+   （Copy as Markdown/CSV/TSV、下载 CSV/Markdown）也在顶栏里，会被一起锁成
+   1.6rem 图标尺寸，三个菜单项挤在同一位置文字重叠。菜单项按钮只保留
+   streamdown 官方 class（w-full 等），这里只命中触发器结构：
+   - 全屏：顶栏直接子级 button
+   - 复制/下载：div.relative（菜单面板的兄弟）内的直接子级 button */
+[data-streamdown="table-wrapper"] > div:first-child > button,
+[data-streamdown="table-wrapper"] > div:first-child > div > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-text-tertiary);
+  /* 默认半隐、hover 亮起：透明度只加在触发器上，打开中的下拉菜单不受影响。 */
+  opacity: 0.55;
+  transition:
+    opacity 0.15s ease,
+    color 0.12s ease,
+    background-color 0.12s ease;
+}
+
+[data-streamdown="table-wrapper"]:hover > div:first-child > button,
+[data-streamdown="table-wrapper"]:hover > div:first-child > div > button,
+[data-streamdown="table-wrapper"] > div:first-child:focus-within > button,
+[data-streamdown="table-wrapper"] > div:first-child:focus-within > div > button {
+  opacity: 1;
+}
+
+[data-streamdown="table-wrapper"] > div:first-child > button:hover,
+[data-streamdown="table-wrapper"] > div:first-child > div > button:hover,
+[data-streamdown="table-wrapper"] > div:first-child > button:focus-visible,
+[data-streamdown="table-wrapper"] > div:first-child > div > button:focus-visible {
+  background: var(--color-bg-hover);
+  color: var(--color-accent);
+  opacity: 1;
+}
+
+[data-streamdown="table-wrapper"] > div:last-child {
+  margin: 0;
+  overflow: auto;
+  border: 0;
+  /* 顶栏已负责顶部圆角，表格容器负责底部圆角（裁剪斑马纹/表头底色，
+     卡片其余部分可视区域允许下拉菜单越界展示）。 */
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+  background: transparent;
+}
+
+[data-streamdown="table"] {
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  background: var(--color-chat-table-bg, var(--color-bg-panel));
+  font-size: 0.8125rem;
+}
+
+[data-streamdown="table-wrapper"] thead {
+  background: var(--color-md-table-head-bg);
+}
+
+[data-streamdown="table-wrapper"] th,
+[data-streamdown="table-wrapper"] td {
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid var(--color-md-table-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+[data-streamdown="table-wrapper"] th {
+  font-weight: 600;
+  color: var(--color-md-table-head-text);
+  white-space: nowrap;
+}
+
+[data-streamdown="table-wrapper"] tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+[data-streamdown="table-body"] tr:nth-child(even) td {
+  background: var(--color-surface-ink-subtle);
+}

@@ -16,7 +16,7 @@
     "paths": {
       "@core/*": ["../src/*"]
     },
-    "types": ["vite/client"]
+    "types": ["vite/client", "node"]
   },
-  "include": ["src/**/*.ts", "capacitor.config.ts"]
+  "include": ["shell/**/*.ts", "capacitor.config.ts"]
 }

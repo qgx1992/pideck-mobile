@@ -40,10 +40,10 @@
 > 本机 `git push` 需要显式走系统代理：`git -c http.proxy=http://127.0.0.1:7897 push ...`
 > （代理端口会随 Clash 重启变化，先 `netstat` 确认）。
 >
-> 出包流水线（`.github/workflows/android-release.yml`）在 gradle 之前会跑 `flutter pub get`，
-> 缺 `flutter_module/.android/local.properties` 时手写 `sdk.dir` / `flutter.sdk` —— add-to-app 之后
-> gradle 要求这个文件（它是 `flutter pub get` 的产物、不进 git），v0.1.35 的出包就是卡在这。
-> 流水线里还有 `flutter analyze` / `flutter test`，所以**本地先跑绿再打 tag**，否则 tag 白打。
+> 出包流水线（`.github/workflows/android-release.yml`）跑的是 `npm ci` + `npm test` + `vite build` +
+> `cap sync android` + `assembleRelease`，没有 flutter 步骤（0.3.0 起）。流水线的 runner 是 Node 22，
+> `node --test shell/*.test.ts` 依赖 Node 22.18+ 的默认 type stripping，别把 node 版本降到 22 以下。
+> 流水线里有 typecheck / test，所以**本地先跑绿再打 tag**，否则 tag 白打。
 >
 > CI 的 runner 是 en-US：任何 `toLocaleTimeString()` / `toLocaleDateString()` 之类的本地化输出
 > 都会在 CI 与本地之间分叉（踩过：消息时间是 `3:04:`）。要格式化的时间自己算，别靠 locale。
@@ -99,36 +99,52 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 页面里的二维码用 `app/scripts/gen-qr.py` 生成、`app/scripts/verify-qr.mjs --expect <地址>` 校验。
 - 静态服务器没有 deny 规则，要挡住某个文件只能让它不在这棵目录树里。
 
-## 界面栈：只有本地 Web UI（0.3.12 起，桌面网页版已删除）
+## 界面栈：vendor 桌面端的 Web 客户端（0.4.0 起）
 
-两条「借桌面端界面」的路都试过，都已拆掉：
+四条路都试过了，结论是「别自己再写一份界面」：
 
-- **0.3.0 删 Flutter add-to-app**（`flutter_module/`、`FlutterHostActivity`）——原因：同一套界面
-  维护两遍，协议再移植一份，桌面端每加字段都要两边对表。
-- **0.3.12 删桌面网页版**（`DesktopWebActivity` / `DesktopWebPlugin` / `LocalWebServer` /
-  `src/platform/desktop-web.ts` / `android/tools/localweb-test/`）——原因：桌面端那份页面是给
-  浏览器写的，系统栏、返回键、文件选择、外链全要原生补。0.3.0–0.3.11 十一个版本里有大半在修
-  「顶栏压进状态栏 / 顶栏下方多一条空白」：桌面 Web 端只给聊天主壳写了
-  `pt-[env(safe-area-inset-top)]`，侧栏抽屉、弹窗都没写，客户端只能一边按页面自报扣减、一边注入
-  CSS 补抽屉，补丁越叠越脆。用户最后的选择是**回到自家界面**。
+| 版本 | 做法 | 为什么否掉 |
+|---|---|---|
+| 0.1.x–0.2.x | 自研原生 + 自研协议 | 协议要维护两份，桌面端每加字段都得两边对表 |
+| 0.3.0 | Flutter add-to-app | 同一套界面维护两遍（`flutter_module/`） |
+| 0.3.1–0.3.11 | 借桌面端网页版（本地转发） | 那份页面是给浏览器写的：系统栏、返回键、文件选择、外链全要原生补，十一个版本大半在修安全区 |
+| 0.3.12 | 回到自研本地 UI（`app/src/**`） | 界面能用，但仍是**第二份实现**（8,995 行），桌面端升级不会传导过来 |
+| **0.4.0** | **vendor 桌面端 Web 客户端**（`app/vendor/pideck/`） | 当前方案 |
 
-所以现在 UI 只有一处：**`app/src/**`（Capacitor WebView，`npm run build` 的产物）**。
+现在的分层：
 
-- 安全区、返回键、文件选择、外链、扫码都在自己能控制的代码里（`app/src/platform/*` + 原生插件），
-  不再有「页面没给我们留位置」这一类问题。
-- 桌面端能力的边界：**壳的能力**（通知、后台看护、文件落盘、扫码、SSE）写原生；
-  **界面的能力**写 `app/src`，协议在 `src/api/`。不要再引第二种界面栈。
-- `document.visibilityState` 是可信信号：只有一个 WebView，`isAppInBackground()` 只看
-  `visibilityHidden`（`app/src/platform/run-watch.ts`）。
+```
+app/vendor/pideck/          桌面端 0.9.9 的 src/renderer/src + src/shared（原样，不改）
+app/shell/                  Capacitor 壳：设备、令牌注入、fetch/EventSource 桥、看护、外链、下载
+app/shell/launcher.html     dist/index.html —— 配对与设备管理页
+app/android/                原生插件：SsePlugin（GET/POST 流式）、RunWatchService、FileSaver、NavigationBar
+```
+
+- **界面只有一处**：`app/vendor/pideck/src/renderer/src/web/**`。改界面 = 改上游 = 下次同步带回，
+  不要在这里打本地补丁（`app/VENDORED.md` 记着 pin 的 tag 与同步步骤）。
+- **壳只做 WebView 做不到的事**：原生 SSE（POST 也能流）、后台跑完发通知、外链交给系统浏览器、
+  blob 下载转原生保存、令牌注入（`Authorization: Bearer`，不拼在网址上）。
+- 桥的接缝在 `app/shell/boot.ts`：写令牌 → `installFetchBridge` → `installEventSource` →
+  `installExternalLinks` → `installDownloadBridge` → 禁 SW → 起看护。顺序有意义：上游
+  `webApi.ts:19` 在**模块顶层**读令牌，晚一步就会被旧值盖回去。
+- `CapacitorHttp.enabled` 必须保持 `false`（`app/capacitor.config.ts`）：开了它 fetch 会被整体缓冲，
+  流式对话直接变成「等半天一次性出来」。
+- service worker 必须禁用：Capacitor 下 `sw.js` 会缓存旧 assets，表现为「更新了还是老页面」。
 
 ## 改动完成后必须跑的验证
 
 ```bash
-npm test && npm run typecheck                 # 协议核心
-cd app && npm test && npm run typecheck       # 客户端
-cd app && npm run build && npm run verify:send
+cd app && npm run verify          # typecheck + node --test shell/*.test.ts + vite build
+cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌面端（需要桌面端开着 Web 服务）
 ```
 
-出包前还要确认 Android 侧能编过：`cd app/android && ./gradlew assembleDebug`（或直接 `npm run apk:release`）。
+`npm run smoke`（`app/scripts/smoke-ui.mjs`）是唯一能在没有手机时验证「vendored 界面能不能起来」的
+手段：它用 jsdom 执行 `dist/web.html` 的产物、注入设备与令牌、把相对 `/api/*` 补成绝对地址，
+断言出现输入框。没给 `--token` 时从 `%APPDATA%/PiDeck/settings.json` 的 `webServiceToken` 读。
 
-`verify:send` 是 mock 的发送链路（14 项），能挡住「发送后不回显 / 流式块重复 / 按钮状态错」这类回归。
+出包前还要确认 Android 侧能编过：`cd app && npm run apk:release`（含 `cap sync` 与
+`assembleRelease`），然后 `npm run publish:apk -- --release`。
+
+`app/shell/*.test.ts` 覆盖的是壳自己的纯逻辑（设备存储、配对输入、SSE 分帧）。界面行为不再有
+客户端侧测试——它属于上游，上游自己有 1,862 个测试文件。
+

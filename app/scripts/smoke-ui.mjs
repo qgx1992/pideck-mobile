@@ -1,482 +1,275 @@
 #!/usr/bin/env node
 /**
  * 真机渲染冒烟（手动跑，不进 CI）：
- * 用 jsdom 执行 dist 构建产物，连**真的** PiDeck，把侧栏渲染结果打印出来。
+ * 用 jsdom 执行 `dist/web.html` 的构建产物，连**真的** PiDeck，
+ * 确认「上游 web 客户端 + 我们的令牌注入」能正常起来。
  *
  *   node scripts/smoke-ui.mjs --base http://127.0.0.1:8765 --token <token>
  *
- * 令牌不会被打日志；也可以用 PIDECK_BASE / PIDECK_TOKEN。
+ * 令牌不会被打日志；也可以给 PIDECK_BASE / PIDECK_TOKEN。
+ * 不给 token 时从桌面端设置里读（%APPDATA%/PiDeck/settings.json 的 webServiceToken），
+ * 免去每次手抄二维码链接。
  */
 
 import { readFileSync, readdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { JSDOM } from "jsdom";
 
 const APP_DIR = path.resolve(import.meta.dirname, "..");
-const DIST_ASSETS = path.join(APP_DIR, "dist", "assets");
-
-/**
- * 扫构建产物里的 CSS：不可见控制字符 + 被吞掉的 \25B8（▸）碎片。
- * 这类问题只出现在伪元素上，textContent 永远查不到。
- * @returns 命中的文件名，干净时返回 "无"
- */
-function scanBuiltCss() {
-  let files;
-  try {
-    files = readdirSync(DIST_ASSETS).filter((name) => name.endsWith(".css"));
-  } catch {
-    return "(未构建，先 npm run build)";
-  }
-  if (files.length === 0) return "(没有 css 产物)";
-  const bad = files.filter((name) => {
-    const text = readFileSync(path.join(DIST_ASSETS, name), "utf-8");
-    return /[\u0000-\u0008\u000b\u000e-\u001f]/.test(text) || /content\s*:\s*"[^"]*B8/i.test(text);
-  });
-  return bad.length === 0 ? "无" : bad.join(", ");
-}
+const DIST = path.join(APP_DIR, "dist");
 
 function arg(name) {
-  const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 ? process.argv[index + 1] : undefined;
+	const index = process.argv.indexOf(`--${name}`);
+	return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-const baseUrl = arg("base") ?? process.env.PIDECK_BASE;
-const token = arg("token") ?? process.env.PIDECK_TOKEN;
-if (!baseUrl || !token) {
-  console.error("缺少 --base / --token（或 PIDECK_BASE / PIDECK_TOKEN）");
-  process.exit(1);
+function readDesktopToken() {
+	try {
+		const file = path.join(os.homedir(), "AppData/Roaming/PiDeck/settings.json");
+		const settings = JSON.parse(readFileSync(file, "utf8"));
+		return typeof settings.webServiceToken === "string" ? settings.webServiceToken : "";
+	} catch {
+		return "";
+	}
 }
 
-const dom = new JSDOM(
-  readFileSync(path.join(APP_DIR, "index.html"), "utf-8").replace(
-    /<script type="module"[^>]*><\/script>/,
-    "",
-  ),
-  {
-    url: "http://localhost/",
-    pretendToBeVisual: true,
-  },
-);
+const baseUrl = (arg("base") ?? process.env.PIDECK_BASE ?? "http://127.0.0.1:8765").replace(/\/+$/, "");
+const token = arg("token") ?? process.env.PIDECK_TOKEN ?? readDesktopToken();
+if (!token) {
+	console.error("缺 token：--token、PIDECK_TOKEN，或桌面端 settings.json 里没有 webServiceToken");
+	process.exit(1);
+}
+
+const html = readFileSync(path.join(DIST, "web.html"), "utf8");
+const entry = [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map((match) => match[1]).find((src) => /assets\/.+\.js$/.test(src));
+if (!entry) {
+	console.error("dist/web.html 里找不到入口脚本，先跑 npm run build");
+	process.exit(1);
+}
+
+const dom = new JSDOM(html.replace(/<script[^>]*><\/script>/g, ""), {
+	url: "http://localhost/",
+	pretendToBeVisual: true,
+});
+const { window } = dom;
 const g = globalThis;
-g.window = dom.window;
-g.document = dom.window.document;
-g.HTMLElement = dom.window.HTMLElement;
-g.Node = dom.window.Node;
-g.MutationObserver = dom.window.MutationObserver;
-g.CustomEvent = dom.window.CustomEvent;
-g.Event = dom.window.Event;
-g.localStorage = dom.window.localStorage;
+
+for (const key of [
+	"window",
+	"document",
+	"navigator",
+	"location",
+	"history",
+	"localStorage",
+	"sessionStorage",
+	"HTMLElement",
+	"HTMLAnchorElement",
+	"HTMLInputElement",
+	"Element",
+	"Node",
+	"NodeList",
+	"MutationObserver",
+	"CustomEvent",
+	"Event",
+	"KeyboardEvent",
+	"MouseEvent",
+	"Blob",
+	"File",
+	"FileReader",
+	"Image",
+	"DOMRect",
+	"getComputedStyle",
+	"requestIdleCallback",
+	"cancelIdleCallback",
+	"TextDecoder",
+	"TextEncoder",
+	"DOMParser",
+	"XMLSerializer",
+	"DocumentFragment",
+	"HTMLTemplateElement",
+	"HTMLDivElement",
+	"HTMLTextAreaElement",
+	"HTMLButtonElement",
+	"HTMLCanvasElement",
+	"CSSStyleDeclaration",
+	"Range",
+	"Selection",
+	"NodeFilter",
+	"TreeWalker",
+	"PointerEvent",
+	"InputEvent",
+	"CompositionEvent",
+	"FocusEvent",
+	"WheelEvent",
+	"DragEvent",
+	"ClipboardEvent",
+	"UIEvent",
+	"AbortController",
+	"AbortSignal",
+	"Headers",
+	"Request",
+	"Response",
+	"FormData",
+	"URLSearchParams",
+]) {
+	if (key in window) {
+		try {
+			Object.defineProperty(g, key, { value: window[key], configurable: true, writable: true });
+		} catch {
+			// navigator 之类在 Node 里是只读的，已经有等价物，跳过
+		}
+	}
+}
+g.self = g;
 g.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
-dom.window.matchMedia = (query) => ({
-  matches: false,
-  media: query,
-  onchange: null,
-  addEventListener: () => undefined,
-  removeEventListener: () => undefined,
-  addListener: () => undefined,
-  removeListener: () => undefined,
-  dispatchEvent: () => false,
+g.cancelAnimationFrame = (id) => clearTimeout(id);
+g.matchMedia = window.matchMedia = (query) => ({
+	matches: false,
+	media: query,
+	onchange: null,
+	addEventListener: () => undefined,
+	removeEventListener: () => undefined,
+	addListener: () => undefined,
+	removeListener: () => undefined,
+	dispatchEvent: () => false,
+});
+window.ResizeObserver ??= class {
+	observe() {}
+	unobserve() {}
+	disconnect() {}
+};
+g.ResizeObserver = window.ResizeObserver;
+window.IntersectionObserver ??= class {
+	observe() {}
+	unobserve() {}
+	disconnect() {}
+	takeRecords() {
+		return [];
+	}
+};
+g.IntersectionObserver = window.IntersectionObserver;
+window.scrollTo = () => undefined;
+window.HTMLElement.prototype.scrollIntoView = () => undefined;
+window.Element.prototype.scrollTo = () => undefined;
+window.Element.prototype.scroll = () => undefined;
+
+// 设备注册表 + 上游令牌：等价于 boot.ts 在真机上做的事
+const deviceId = baseUrl.replace(/^https?:\/\//, "");
+window.localStorage.setItem(
+	"pideck.devices",
+	JSON.stringify([{ id: deviceId, name: "smoke", baseUrl, token, addedAt: Date.now() }]),
+);
+window.localStorage.setItem("pideck.activeDevice", deviceId);
+window.localStorage.setItem("pideck-web-token", token);
+
+// 上游所有请求都是相对路径；Node 的 fetch 不认相对 URL，这里补成绝对地址并带鉴权头
+const nativeFetch = globalThis.fetch;
+const toAbsolute = (raw) => {
+	if (/^https?:\/\/(localhost|127\.0\.0\.1)([:/]|$)/.test(raw)) return baseUrl + raw.replace(/^https?:\/\/(localhost|127\.0\.0\.1)/, "");
+	if (raw.startsWith("/")) return `${baseUrl}${raw}`;
+	return raw;
+};
+window.fetch = (input, init = {}) => {
+	const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+	const headers = { ...(init.headers ?? {}), authorization: `Bearer ${token}` };
+	return nativeFetch(toAbsolute(raw), { ...init, headers });
+};
+g.fetch = window.fetch;
+
+// jsdom 没有 EventSource：用真实 fetch 流做一个够用的实现（上游只用 onopen/onmessage/onerror）
+class SmokeEventSource extends window.EventTarget {
+	constructor(url) {
+		super();
+		this.url = toAbsolute(url);
+		this.readyState = 0;
+		this.onopen = null;
+		this.onmessage = null;
+		this.onerror = null;
+		this.abort = new AbortController();
+		void this.#connect();
+	}
+	async #connect() {
+		try {
+			const response = await window.fetch(this.url, { headers: { accept: "text/event-stream" }, signal: this.abort.signal });
+			if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+			this.readyState = 1;
+			this.dispatchEvent(Object.assign(new window.Event("open"), {}));
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = "";
+			for (;;) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				let index;
+				while ((index = buffer.search(/\r\n\r\n|\n\n|\r\r/)) >= 0) {
+					const raw = buffer.slice(0, index);
+					buffer = buffer.slice(index + buffer.slice(index).match(/^(\r\n\r\n|\n\n|\r\r)/)[0].length);
+					this.#handle(raw.trim() ? raw : "");
+				}
+			}
+			this.readyState = 2;
+		} catch (error) {
+			if (this.abort.signal.aborted) return;
+			this.readyState = 2;
+			this.dispatchEvent(Object.assign(new window.Event("error"), { message: String(error) }));
+		}
+	}
+	#handle(raw) {
+		let name = "message";
+		const data = [];
+		for (const line of raw.split(/\r\n|\n|\r/)) {
+			if (!line || line.startsWith(":")) continue;
+			const colon = line.indexOf(":");
+			const field = colon < 0 ? line : line.slice(0, colon);
+			const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
+			if (field === "event") name = value;
+			else if (field === "data") data.push(value);
+		}
+		if (data.length === 0) return;
+		this.dispatchEvent(Object.assign(new window.Event(name), { data: data.join("\n") }));
+	}
+	close() {
+		this.readyState = 2;
+		this.abort.abort();
+	}
+}
+window.EventSource = SmokeEventSource;
+g.EventSource = SmokeEventSource;
+
+await import(pathToFileURL(path.join(DIST, entry)).href);
+
+async function waitFor(check, timeoutMs = 15_000) {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		try {
+			if (check()) return true;
+		} catch {
+			// 渲染中间态，继续等
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	return false;
+}
+
+const ok = await waitFor(() => {
+	const composer = window.document.querySelector("textarea");
+	const text = window.document.body.textContent ?? "";
+	return Boolean(composer) && text.length > 0;
 });
 
-g.localStorage.setItem(
-  ["pideck", "pairing", "v1"].join("-"),
-  JSON.stringify({ baseUrl, token, savedAt: Date.now() }),
-);
-// 侧栏默认分段已经是「活动」（扁平列表，没有 .project-head），这个烟测断言的是
-// 「聊天」分段的项目分组，固定切过去，否则一进来就等到超时。
-g.localStorage.setItem(["pideck", "ui", "sidebarTab", "v1"].join("-"), "projects");
-
-const entry = readdirSync(DIST_ASSETS).find((name) => /^index-.*\.js$/.test(name));
-if (!entry) {
-  console.error("dist/assets 里找不到 index-*.js，先跑 npm run build");
-  process.exit(1);
-}
-await import(pathToFileURL(path.join(DIST_ASSETS, entry)).href);
-
-async function waitFor(check, timeoutMs = 8000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (check()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return false;
-}
-
-const ok = await waitFor(() => dom.window.document.querySelectorAll(".project-head").length > 0);
-const doc = dom.window.document;
-
 if (!ok) {
-  console.error("✗ 8 秒内没有渲染出侧栏。页面当前内容：");
-  console.error((doc.getElementById("app")?.textContent ?? "").slice(0, 500));
-  process.exit(1);
+	console.error("✗ 15 秒内没渲染出输入框。页面当前内容：");
+	console.error((window.document.body.textContent ?? "").slice(0, 600));
+	console.error("控制台错误：", (dom.window.__smokeErrors ?? []).slice(0, 5));
+	process.exit(1);
 }
 
-const groups = [...doc.querySelectorAll(".project-group")];
-console.log(`✓ 已渲染 ${groups.length} 个项目分组、${doc.querySelectorAll(".session").length} 个会话\n`);
-
-for (const group of groups.slice(0, 8)) {
-  const name = group.querySelector(".pname")?.textContent;
-  const count = group.querySelector(".pcount")?.textContent;
-  console.log(`  ${name}  (${count})`);
-  for (const session of [...group.querySelectorAll(".session")].slice(0, 3)) {
-    console.log(`     · ${session.querySelector(".sname")?.textContent}`);
-  }
-}
-
-const header = doc.querySelector(".header")?.textContent?.trim();
-console.log(`\nheader: ${header || "(空态)"}`);
-
-// 运行状态行里的吞吐指标（跑完之后仍保留）
-{
-  const stats = [...doc.querySelectorAll(".run-stats .run-stat")].map((el) => el.textContent);
-  console.log(`
-吞吐指标: ${stats.join(" · ") || "(无：这个会话最近没有可用的指标)"}`);
-}
-
-// 首屏：侧栏不该自动展开，应停在会话界面并显示带图标的空态
-{
-  const body = doc.querySelector(".body");
-  const sidebarOpen = body?.classList.contains("show-sidebar") ?? false;
-  const state = doc.querySelector(".empty-state");
-  const icon = state?.querySelector("svg.empty-state-icon");
-  const text = state?.querySelector(".empty-state-text")?.textContent ?? "";
-  console.log(
-    `
-首屏空态: 侧栏展开=${sidebarOpen} 有图标=${Boolean(icon)} 有文案=${Boolean(text)} 尺寸=${icon?.getAttribute("width") ?? "-"}`,
-  );
-  console.log(`  文案: ${JSON.stringify(text)}`);
-}
-
-// 打开第一个会话，检查历史消息是否真的渲染出来
-const firstSession = doc.querySelector(".session");
-if (firstSession) {
-  firstSession.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  const rendered = await waitFor(() => doc.querySelectorAll(".history .msg, .history .tool").length > 0, 6000);
-  const count = doc.querySelectorAll(".history .msg, .history .tool").length;
-  const tools = doc.querySelectorAll(".history .tool").length;
-  const bubble = doc.querySelector(".history .msg-body")?.textContent ?? "";
-  console.log(`
-历史消息：${count} 条（其中工具 ${tools} 条）—— ${rendered ? "✓ 已渲染" : "✗ 空"}`);
-  if (bubble) console.log(`首条正文：${bubble.slice(0, 60).replace(/\s+/g, " ")}…`);
-}
-
-// 回到 pi 会话，确认 chips 显示真实模型与思考档位
-const piSession = [...doc.querySelectorAll(".session")].find(
-  (el) => !(el.querySelector(".smeta")?.textContent ?? "").includes("dsh"),
-);
-if (piSession) {
-  piSession.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => doc.querySelectorAll(".history .msg").length > 0, 6000);
-  const visibleChips = () =>
-    [...doc.querySelectorAll(".composer-chips .chip")]
-      .filter((el) => !el.classList.contains("is-hidden"))
-      .map((el) => el.textContent);
-  // 安全级别面板：点 chip 能否列出「跟随全局 + 各等级」（只读检查，不真的切等级）
-  const securityChip = [...doc.querySelectorAll(".composer-chips .chip")].find((el) => (el.textContent ?? "").startsWith("安全"));
-  if (securityChip) {
-    securityChip.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 400));
-    const items = [...doc.querySelectorAll(".sheet-backdrop .sheet-item")];
-    console.log(`安全级别面板: 项=${items.length} 首项=${JSON.stringify(items[0]?.querySelector(".conn-name")?.textContent ?? items[0]?.textContent ?? "")}`);
-    doc.querySelector(".sheet-backdrop")?.remove();
-  }
-
-  const piChips = visibleChips();
-  const hasSecurity = piChips.some((text) => text.startsWith("安全"));
-  const hasDsh = piChips.includes("DSH");
-  console.log(`
-pi 会话 chips: ${piChips.join(" | ")}
-  安全 chip=${hasSecurity ? "显示 OK" : "缺失 FAIL"}  DSH chip=${hasDsh ? "不该显示 FAIL" : "隐藏 OK"}`);
-
-  // DSH 会话：DSH chip 出现、安全 chip 隐藏（桌面端只给 pi 会话发安全级别）
-  const dshSession = [...doc.querySelectorAll(".session")].find((el) =>
-    (el.querySelector(".smeta")?.textContent ?? "").includes("dsh"),
-  );
-  if (dshSession) {
-    dshSession.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 600));
-    const dshChips = visibleChips();
-    console.log(`DSH 会话 chips: ${dshChips.join(" | ") || "(无)"}
-  DSH chip=${dshChips.includes("DSH") ? "显示 OK" : "缺失 FAIL"}  安全 chip=${dshChips.some((t) => t.startsWith("安全")) ? "不该显示 FAIL" : "隐藏 OK"}`);
-    // 点开「DSH」面板，看三段是否渲染（接口 500 时要给出人话提示而不是空白）
-    const dshBtn = [...doc.querySelectorAll(".composer-chips .chip")].find((el) => el.textContent === "DSH");
-    dshBtn?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 800));
-    const sheetText = doc.querySelector(".sheet-backdrop .sheet")?.textContent ?? "";
-    console.log(`  DSH 面板: ${sheetText ? sheetText.slice(0, 120).replace(/\s+/g, " ") : "没打开 FAIL"}`);
-    doc.querySelector(".sheet-backdrop")?.remove();
-    piSession.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 400));
-  } else {
-    console.log("  （当前列表里没有 dsh 会话，跳过 DSH chip 检查）");
-  }
-}
-
-// 验证「执行过程」折叠：历史里的工具/思考应被收进少数几个折叠块
-if (doc.querySelectorAll(".history .process").length > 0) {
-  const groups = doc.querySelectorAll(".history .process");
-  const tools = doc.querySelectorAll(".history .process .tool").length;
-  const reasonings = doc.querySelectorAll(".history .process .reasoning").length;
-  const topLevelTools = doc.querySelectorAll(".history > .tool, .history > .reasoning").length;
-  console.log("");
-  console.log(`执行过程折叠: ${groups.length} 个折叠块，内含 ${tools} 个工具 / ${reasonings} 段思考`);
-  console.log(`  顶层未折叠的工具/思考: ${topLevelTools} (应为 0)`);
-  const titles = [...groups].slice(0, 3).map((g) => g.querySelector(".process-title")?.textContent);
-  console.log(`  标题示例: ${titles.join(" | ")}`);
-}
-
-// 再点一个 DSH 会话，验证「读不到历史」时错误卡是否给对人话
-const dshSession = [...doc.querySelectorAll(".session")].find((el) =>
-  (el.querySelector(".smeta")?.textContent ?? "").includes("dsh"),
-);
-if (dshSession) {
-  dshSession.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  const shown = await waitFor(() => doc.querySelector(".error-card") !== null, 6000);
-  const title = doc.querySelector(".error-card .error-title")?.textContent ?? "";
-  const detail = doc.querySelector(".error-card .error-detail")?.textContent ?? "";
-  console.log("");
-  console.log(`DSH 会话：${shown ? "✓ 显示了错误卡" : "✗ 没有错误卡"}`);
-  if (title) console.log(`  ${title}  (${detail})`);
-} else {
-  console.log("（这个列表里没有 DSH 会话，跳过降级验证）");
-}
-
-// 验证顶部栏随会话切换刷新（回归：之前切会话标题不动）
-const allSessions = [...doc.querySelectorAll(".session")];
-if (allSessions.length >= 2) {
-  allSessions[0].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => (doc.querySelector(".header .title")?.textContent ?? "") !== "PiDeck", 6000);
-  const t1 = doc.querySelector(".header .title")?.textContent;
-  const s1 = doc.querySelector(".header .sub")?.textContent;
-
-  allSessions[1].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  await new Promise((r) => setTimeout(r, 600));
-  const t2 = doc.querySelector(".header .title")?.textContent;
-  const s2 = doc.querySelector(".header .sub")?.textContent;
-
-  console.log("");
-  console.log("顶部栏随会话刷新:");
-  console.log(`  会话A: ${t1}  |  ${s1}`);
-  console.log(`  会话B: ${t2}  |  ${s2}`);
-  console.log(`  ${t1 !== t2 ? "OK 标题已变化" : "FAIL 标题没变"}`);
-}
-
-// 右侧工作区抽屉：能打开、能切 Tab、能看到 Git 数据
-const wsBtn = [...doc.querySelectorAll(".header .icon-btn")].find((b) => (b.title || "").includes("工作区"));
-console.log("");
-console.log(`工作区按钮: ${wsBtn ? "存在" : "缺失"}`);
-if (wsBtn) {
-  wsBtn.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  const opened = await waitFor(() => doc.querySelector(".body.show-workspace") !== null, 3000);
-  console.log(`  抽屉打开: ${opened ? "OK" : "FAIL"}`);
-  const tabs = [...doc.querySelectorAll(".ws-tab")].map((t) => t.textContent);
-  console.log(`  Tab: ${tabs.join(" / ")}`);
-  // 等「读取中…」消失（真正结果出来）
-  await waitFor(() => {
-    const loading = doc.querySelector(".ws-content .ws-empty");
-    if (loading && (loading.textContent ?? "").includes("读取")) return false;
-    return doc.querySelectorAll(".ws-content .ws-branch, .ws-content .ws-empty").length > 0;
-  }, 6000);
-  const branch = doc.querySelector(".ws-branch-name")?.textContent;
-  const fileCount = doc.querySelectorAll(".ws-content .ws-file").length;
-  const commits = doc.querySelectorAll(".ws-content .ws-commit").length;
-  const empty = doc.querySelector(".ws-content .ws-empty")?.textContent;
-  console.log(`  Git: 分支=${branch ?? "-"} 变更项=${fileCount} 提交=${commits} ${empty ? `提示=${empty}` : ""}`);
-
-  // 切到「文件」Tab
-  const filesTab = [...doc.querySelectorAll(".ws-tab")].find((t) => t.textContent === "文件");
-  filesTab?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => doc.querySelectorAll(".ws-content .ws-file").length > 0, 4000);
-  const entries = doc.querySelectorAll(".ws-content .ws-file").length;
-  const crumb = doc.querySelector(".ws-crumb")?.textContent;
-  const mentions = doc.querySelectorAll(".ws-content .ws-mention").length;
-  const dirs = [...doc.querySelectorAll(".ws-content .ws-file")].filter((r) => r.querySelector(".ws-mention") === null).length;
-  console.log(`  文件: 根=${crumb} 条目=${entries} 其中可引用(@)=${mentions} 目录=${dirs}`);
-  doc.querySelector(".workspace-scrim")?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-}
-
-// 跳转历史：点一条能否真的定位到 DOM
-// 注意：.composer-fabs 里「排队」按钮排在「历史」前面，必须显式排除
-const fabSel = ".composer-fab:not(.composer-fab--queue)";
-const hasFab = doc.querySelector(fabSel) !== null;
-const fabInInput = Boolean(doc.querySelector(".composer-input " + fabSel));
-console.log("");
-console.log(`历史按钮: ${hasFab ? "存在" : "缺失"}  在输入框内=${fabInInput}`);
-if (hasFab) {
-  doc.querySelector(fabSel).dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  await new Promise((r) => setTimeout(r, 400));
-  const head = doc.querySelector(".sheet-backdrop .sheet h2")?.textContent;
-  const items = doc.querySelectorAll(".sheet-backdrop .jump-item").length;
-  console.log(`  面板标题: ${head}`);
-  console.log(`  可跳转条数: ${items}`);
-
-  // 取面板里第 3 条的预览，点它，再看对应元素是否被高亮
-  const rows = [...doc.querySelectorAll(".sheet-backdrop .jump-item")];
-  const target = rows[2] ?? rows[0];
-  const preview = target?.querySelector(".jump-text")?.textContent ?? "";
-  target?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  await new Promise((r) => setTimeout(r, 500));
-  const flashed = doc.querySelectorAll(".history .msg.is-flash").length;
-  console.log(`  点击「${preview.slice(0, 24)}…」→ 高亮元素数: ${flashed} ${flashed === 1 ? "OK" : "FAIL"}`);
-  const flashText = doc.querySelector(".history .msg.is-flash .msg-body")?.textContent ?? "";
-  console.log(`  高亮内容匹配: ${preview.startsWith(flashText.trim().slice(0, 12)) || flashText.includes(preview.slice(-12)) ? "是" : "否"} (${flashText.slice(0, 30)})`);
-  doc.querySelector(".sheet-backdrop")?.remove();
-}
-
-// 检查 composer 上的模型 / 思考 chip 是否按会话渲染（隐藏的不算，否则看不出条件显示对不对）
-const chips = [...doc.querySelectorAll(".composer-chips .chip")]
-  .filter((el) => !el.classList.contains("is-hidden"))
-  .map((el) => el.textContent);
-console.log(`
-composer chips: ${chips.join(" | ") || "(无)"}`);
-
-// 启动动画：必须自己收起，否则整块 fixed 遮罩会把界面挡死
-{
-  const gone = await waitFor(() => !doc.getElementById("splash"), 4000);
-  const el = doc.getElementById("splash");
-  console.log(`
-启动动画: 已移除=${gone} 残留=${el ? el.className : "(无)"}`);
-}
-
-// 任务清单：切到「这个」会话（本身带 todo 的会话才有清单）再验一次
-{
-  const target = [...doc.querySelectorAll(".session")].find((el) =>
-    (el.querySelector(".sname")?.textContent ?? "").includes("开发PiDeck手机端"),
-  );
-  if (target) {
-    target.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-    await waitFor(() => !doc.querySelector(".todo-strip.is-hidden"), 6000);
-    const strip = doc.querySelector(".todo-strip");
-    const items = strip?.querySelectorAll(".todo-item") ?? [];
-    const running = strip?.querySelectorAll(".todo-item.is-in_progress").length ?? 0;
-    const done = strip?.querySelectorAll(".todo-item.is-completed").length ?? 0;
-    console.log(
-      `
-任务清单（带 todo 的会话）: 可见=${!strip?.classList.contains("is-hidden")} 条目=${items.length} 已完成=${done} 进行中=${running} 进度=${strip?.querySelector(".todo-progress")?.textContent ?? ""}`,
-    );
-    console.log(`  首条: ${strip?.querySelector(".todo-text")?.textContent ?? "(无)"}`);
-  }
-}
-
-// 任务清单条带
-{
-  const strip = doc.querySelector(".todo-strip");
-  const items = doc.querySelectorAll(".todo-item");
-  const done = doc.querySelectorAll(".todo-item.is-completed").length;
-  const running = doc.querySelectorAll(".todo-item.is-in_progress").length;
-  const hidden = strip?.classList.contains("is-hidden");
-  const progress = doc.querySelector(".todo-progress")?.textContent ?? "";
-  console.log(
-    `
-任务清单: 存在=${Boolean(strip)} 隐藏=${hidden} 条目=${items.length} 已完成=${done} 进行中=${running} 进度=${progress}`,
-  );
-  const spinner = doc.querySelector(".run-status .run-spinner");
-  console.log(`  运行中动画标识: ${Boolean(spinner)}`);
-}
-
-// Markdown：助手回答里应出现粗体 / 代码块 / 列表
-{
-  const bodies = [...doc.querySelectorAll(".msg-body--md")];
-  const strong = doc.querySelectorAll(".md strong").length;
-  const code = doc.querySelectorAll(".md-codeblock").length;
-  const inlineCode = doc.querySelectorAll(".md-inline-code").length;
-  const lists = doc.querySelectorAll(".md-list").length;
-  const tables = doc.querySelectorAll(".md-table").length;
-  const tokens = doc.querySelectorAll(".md-code .tok").length;
-  const cursors = doc.querySelectorAll(".md .md-p").length;
-  const sample = [...doc.querySelectorAll(".md strong")].slice(0, 3).map((el) => el.textContent);
-  console.log(
-    `
-Markdown: 助手气泡=${bodies.length} 粗体=${strong} 代码块=${code} 行内代码=${inlineCode} 列表=${lists} 表格=${tables} 段落=${cursors} 高亮token=${tokens}`,
-  );
-  console.log(`  粗体样例: ${sample.join(" / ") || "(无)"}`);
-}
-// 折叠箭头：必须是 14px 的 SVG，且不能残留字面量 B8
-{
-  const heads = [...doc.querySelectorAll(".project-head .chev-icon")];
-  const sizes = heads.map((el) => el.getAttribute("width"));
-  const moreChevs = [...doc.querySelectorAll(".sessions-more .chev-icon")];
-  const rotated = heads.filter((el) => el.classList.contains("is-expanded")).length;
-  console.log(
-    `
-折叠箭头: 分组头=${heads.length} 尺寸=${[...new Set(sizes)].join("/") || "(无)"} 展开态=${rotated} 展开按钮箭头=${moreChevs.length}`,
-  );
-  console.log(`  残留 B8 文案=${(doc.body.textContent ?? "").includes("B8")}`);
-  const proc = doc.querySelector(".process summary .chev-icon");
-  console.log(`  执行过程箭头=${Boolean(proc)}`);
-  // 伪元素不进 textContent，上面那条查不到；构建出来的 CSS 必须单独查
-  console.log(`  构建 CSS 残留=${scanBuiltCss()}`);
-}
-
-// 布局：@ / 必须嵌在输入框里，而不是下方工具行
-{
-  const inline = doc.querySelector(".composer-input .composer-inline-tools");
-  const labels = inline ? [...inline.querySelectorAll("button")].map((el) => el.textContent.trim()) : [];
-  console.log(`
-inline tools: ${labels.join(" | ") || "(无)"}  在输入框内=${Boolean(inline)}`);
-
-  const wrap = doc.querySelector(".composer-input");
-  const rowChips = [...doc.querySelectorAll(".composer-row .chip")]
-    .filter((el) => !el.classList.contains("is-hidden"))
-    .map((el) => el.textContent.trim());
-  console.log(`composer-row chips: ${rowChips.join(" | ") || "(无)"}`);
-
-  const ctxChip = doc.querySelector(".chip--ctx");
-  const ctxText = ctxChip?.querySelector(".ctx-text")?.textContent?.trim() ?? "";
-  const ctxHidden = ctxChip ? ctxChip.classList.contains("is-hidden") : true;
-  const ring = ctxChip?.querySelector(".ctx-ring");
-  const pct = ring?.style.getPropertyValue("--ctx-pct") ?? "";
-  console.log(`上下文 chip: 文本=${JSON.stringify(ctxText)} 隐藏=${ctxHidden} 环百分比=${pct || "(空)"} title=${ctxChip?.title ?? ""}`);
-  const fab = doc.querySelector(fabSel);
-  console.log(`布局自检: 输入框包裹=${Boolean(wrap)} @在包裹内=${Boolean(wrap?.querySelector(".composer-inline-tools"))} 历史在包裹内=${Boolean(wrap?.querySelector(".composer-fab"))} 行内不再有@=${!rowChips.includes("@")} 历史文字=${JSON.stringify(fab?.textContent ?? "")}`);
-}
-
-// 模型面板：搜索能过滤
-{
-  const modelBtn = [...doc.querySelectorAll(".composer-row .chip")].find((el) => !el.classList.contains("chip--ctx") && !el.textContent.includes("思考"));
-  modelBtn?.click();
-  const ok = await waitFor(() => doc.querySelector(".sheet-search"), 6000);
-  if (!ok) {
-    console.log("  面板内容: " + JSON.stringify((doc.querySelector(".sheet")?.textContent ?? "").slice(0, 160)));
-    console.log("模型面板: 未打开搜索框");
-  } else {
-    // 只统计当前这个模型面板，别被残留的旧面板干扰
-    const search = doc.querySelector(".sheet-search");
-    const scope = search.closest(".sheet");
-    // 取消按钮也是 .sheet-item，统计时要排除
-    const items = () => scope.querySelectorAll(".sheet-item:not(.sheet-item--cancel)").length;
-
-    // 打开面板时不能自动聚焦搜索框，否则手机会立刻弹出键盘挡住列表
-    console.log(`  搜索框自动聚焦=${doc.activeElement === search}`);
-    search.blur();
-
-    const total = items();
-    search.value = "kimi";
-    search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 50));
-    const filtered = items();
-
-    search.value = "zzzznope";
-    search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 50));
-    const none = items();
-    const noteVisible = ![...scope.querySelectorAll(".sheet-note")].every((el) => el.classList.contains("is-hidden"));
-
-    console.log(`模型面板搜索: 全部=${total} 「kimi」=${filtered} 「zzzznope」=${none} 空提示可见=${noteVisible}`);
-    doc.querySelector(".sheet-backdrop")?.remove();
-  }
-}
-
-// 上下文面板：点 chip 应出明细
-{
-  doc.querySelector(".chip--ctx")?.click();
-  const ok = await waitFor(() => doc.querySelector(".ctx-rows li"), 4000);
-  const rows = [...doc.querySelectorAll(".ctx-row")].map((el) => el.textContent.replace(/\s+/g, " ").trim());
-  console.log(`上下文面板: 已打开=${Boolean(ok)} 明细=${rows.join(" | ") || "(无)"}`);
-  doc.querySelector(".sheet-backdrop")?.remove();
-}
-
-dom.window.close();
-process.exit(0);
+const doc = window.document;
+const sessions = await waitFor(() => (doc.body.textContent ?? "").includes("会话") || doc.querySelectorAll("button").length > 3, 5_000);
+console.log(`✓ 已渲染输入框（textarea=${doc.querySelectorAll("textarea").length}），按钮 ${doc.querySelectorAll("button").length} 个`);
+console.log(`✓ 侧栏/会话：${sessions ? "有内容" : "空（这台机器可能还没有会话）"}`);
+console.log(`✓ CSS 产物：${readdirSync(path.join(DIST, "assets")).filter((name) => name.endsWith(".css")).join(", ") || "无"}`);

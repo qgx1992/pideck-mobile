@@ -45,9 +45,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 换成原生 HttpURLConnection 读流之后：SSE 与其它请求同一条栈，
  * 没有 CORS 概念，也不再依赖 WebView 的线程调度。
  *
- * ## 协议（与 `app/src/platform/sse-stream.ts` 一一对应）
+ * ## 协议（与 `app/shell/native-sse.ts` 一一对应）
  *
- *   open({id,url,headers,connectTimeoutMs,readTimeoutMs})  → 立即 resolve，开始连接
+ *   open({id,url,method,headers,body,connectTimeoutMs,readTimeoutMs})  → 立即 resolve，开始连接
+ *
+ * `method` 默认 GET；`body` 非空时用 POST/自定义方法，并把正文原样写出去
+ * （上游 web 的 `/api/chat` 就是 POST + SSE 响应）。
  *   sseOpen  {id, status, headers}      响应头到手（含 4xx/5xx，错误体照样往下灌）
  *   sseData  {id, data}                 正文增量（**已按 UTF-8 解码成字符串**，不会切坏多字节字符）
  *   sseEnd   {id, status}               对端正常关闭
@@ -103,6 +106,10 @@ public class SsePlugin extends Plugin {
             }
         }
 
+        String method = call.getString("method", "GET");
+        if (method == null || method.isEmpty()) method = "GET";
+        String body = call.getString("body", null);
+
         int connectTimeoutMs = call.getInt("connectTimeoutMs", DEFAULT_CONNECT_TIMEOUT_MS);
         int readTimeoutMs = call.getInt("readTimeoutMs", DEFAULT_READ_TIMEOUT_MS);
 
@@ -110,7 +117,7 @@ public class SsePlugin extends Plugin {
         SseConnection stale = connections.remove(id);
         if (stale != null) stale.abort();
 
-        SseConnection connection = new SseConnection(id, url, headers, connectTimeoutMs, readTimeoutMs);
+        SseConnection connection = new SseConnection(id, url, method, headers, body, connectTimeoutMs, readTimeoutMs);
         connections.put(id, connection);
         io.execute(connection);
         call.resolve();
@@ -157,6 +164,8 @@ public class SsePlugin extends Plugin {
 
         private final String id;
         private final String url;
+        private final String method;
+        private final String body;
         private final Map<String, String> headers;
         private final int connectTimeoutMs;
         private final int readTimeoutMs;
@@ -174,9 +183,12 @@ public class SsePlugin extends Plugin {
         private volatile InputStream stream;
         private volatile int status;
 
-        SseConnection(String id, String url, Map<String, String> headers, int connectTimeoutMs, int readTimeoutMs) {
+        SseConnection(String id, String url, String method, Map<String, String> headers, String body,
+                      int connectTimeoutMs, int readTimeoutMs) {
             this.id = id;
             this.url = url;
+            this.method = method;
+            this.body = body;
             this.headers = headers;
             this.connectTimeoutMs = connectTimeoutMs;
             this.readTimeoutMs = readTimeoutMs;
@@ -188,7 +200,11 @@ public class SsePlugin extends Plugin {
             try {
                 HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
                 connection = conn;
-                conn.setRequestMethod("GET");
+                conn.setRequestMethod(method);
+                if (body != null && !body.isEmpty()) {
+                    // 必须在 connect 之前置位；写入正文后 getResponseCode 才发请求
+                    conn.setDoOutput(true);
+                }
                 conn.setConnectTimeout(connectTimeoutMs);
                 conn.setReadTimeout(readTimeoutMs);
                 conn.setUseCaches(false);
@@ -199,6 +215,15 @@ public class SsePlugin extends Plugin {
                 conn.setRequestProperty("Cache-Control", "no-cache");
                 for (Map.Entry<String, String> header : headers.entrySet()) {
                     conn.setRequestProperty(header.getKey(), header.getValue());
+                }
+
+                if (body != null && !body.isEmpty() && !"GET".equalsIgnoreCase(method)) {
+                    byte[] payload = body.getBytes(StandardCharsets.UTF_8);
+                    conn.setFixedLengthStreamingMode(payload.length);
+                    java.io.OutputStream out = conn.getOutputStream();
+                    out.write(payload);
+                    out.flush();
+                    out.close();
                 }
 
                 int code = conn.getResponseCode();

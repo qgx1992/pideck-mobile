@@ -1,0 +1,36 @@
+/*
+ * Cascade 契约（#115 / UI 2.0）——层序是迁移的关键，写错会「整站样式消失」。
+ *
+ * 正确优先级（后写的层更高）：
+ *   theme < base(preflight) < components < vendor < legacy(旧手写) < utilities(Tailwind)
+ *
+ * 为什么 legacy 必须夹在 base 和 utilities 之间：
+ * 1) 若 legacy 低于 base：preflight 的 button/margin 重置会压掉全部手写外观
+ *    → 表现为「CSS 一朝回到解放前 / 很多样式没了」（曾踩坑）。
+ * 2) 若 legacy 保持 unlayered：旧规则永远压过 utilities
+ *    → 表现为「组件上改 Tailwind 不生效」。
+ * 3) legacy 高于 base、低于 utilities：旧语义 class 仍负责默认长相；
+ *    你在 JSX 上写的 utility 能盖同属性，无需 !important。
+ *
+ * vendor（streamdown / file-icons）低于 legacy：
+ * 我们在 surfaces 等处的观感覆盖必须能压过第三方默认皮；二者都低于 utilities。
+ *
+ * 旧规则里的 !important 仍会反转层优先级，收口时应逐步去掉。
+ */
+@layer theme, base, components, vendor, legacy, utilities;
+
+@import "streamdown/styles.css" layer(vendor);
+@import "./file-icons.css" layer(vendor);
+
+@import "./styles/foundation.css" layer(legacy);
+@import "./styles/timeline.css" layer(legacy);
+@import "./styles/surfaces.css" layer(legacy);
+@import "./styles/integrations.css" layer(legacy);
+@import "./styles/workspace.css" layer(legacy);
+@import "./styles/usageStats.css" layer(legacy);
+@import "./styles/tailwind.css";
+/* Streamdown 官方 utility 皮 → 必须同层后写才能压掉双层边框 / sticky 动作条 */
+@import "./styles/streamdownChrome.css" layer(utilities);
+/* 皮肤专属 chrome（终端皮肤的消息标记/方框线细节）→ 同层最后，压过 tailwind 的布局 utility */
+@import "./styles/terminalSkin.css" layer(utilities);
+/* 玻璃皮肤（毛玻璃/液态玻璃）的画布层 / 侧栏与浮层 backdrop-filter / 边缘高光 → 同层最后 */

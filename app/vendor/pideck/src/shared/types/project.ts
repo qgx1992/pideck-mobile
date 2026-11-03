@@ -1,0 +1,110 @@
+import type { SessionEnvironment } from "./session";
+
+export type ProjectLocation = { kind: "local"; environment: SessionEnvironment; wslDistro?: string; wslUser?: string; wslHostId?: string } | { kind: "ssh"; hostId: string };
+
+export type ProjectLocator = { kind: "local"; environment: SessionEnvironment; localPath: string; wslDistro?: string; wslUser?: string; wslHostId?: string } | { kind: "ssh"; hostId: string; remotePath: string };
+
+export type ProjectFileTarget = {
+	projectId: string;
+	/** Slash-separated path relative to the project root; the empty string denotes the root. */
+	relativePath: string;
+};
+
+export type LegacyProjectLocationFields = {
+	path: string;
+	environment?: "windows" | "wsl";
+	wslDistro?: string;
+};
+
+export type ProjectMetadata = {
+	id: string;
+	name: string;
+	lastOpenedAt: number;
+	pinned?: boolean;
+	sortOrder?: number;
+	/** 项目目录在磁盘上不存在（被删除/移动/未挂载）。列表保留记录并标记。 */
+	missing?: boolean;
+};
+
+export type LocalProject = ProjectMetadata & {
+	kind?: "chat";
+	path: string;
+	worktreeEnabled?: boolean;
+	worktreeParentId?: string;
+	wslDistro?: string;
+	/** 第 11 步：项目引用的 WSL 连接档案；缺省表示旧数据（运行时回退 distro/user）。 */
+	wslUser?: string;
+	wslHostId?: string;
+	environment?: "windows" | "wsl";
+};
+
+export type RemoteProject = ProjectMetadata & {
+	kind?: never;
+	/** 远端位置：只有 hostId 与远端路径，没有可交给本机 `node:fs` 的 `path`。 */
+	locator: Extract<ProjectLocator, { kind: "ssh" }>;
+	path?: never;
+	environment?: never;
+	wslDistro?: never;
+	wslUser?: never;
+	wslHostId?: never;
+	worktreeEnabled?: never;
+	worktreeParentId?: never;
+};
+
+export type Project = LocalProject | RemoteProject;
+
+/**
+ * 渲染层读取项目文件时携带的最小授权上下文。
+ * 主进程只信任 projectId，并从 ProjectStore 重新取得根目录；不接受渲染层直接声明可信根路径。
+ */
+export type ProjectFileAccessScope = {
+	projectId: string;
+};
+
+export const SUPPORTED_EXTERNAL_EDITORS = [
+	{ id: "vscode", name: "Visual Studio Code" },
+	{ id: "cursor", name: "Cursor" },
+	{ id: "zed", name: "Zed" },
+	{ id: "idea", name: "IntelliJ IDEA" },
+	{ id: "webstorm", name: "WebStorm" },
+	{ id: "phpstorm", name: "PhpStorm" },
+	{ id: "pycharm", name: "PyCharm" },
+] as const;
+
+export type ExternalEditorId = (typeof SUPPORTED_EXTERNAL_EDITORS)[number]["id"];
+
+export type ExternalEditorDetectedFrom = "path" | "common-path" | "manual";
+
+export type ExternalEditorSetting = {
+	enabled: boolean;
+	command: string;
+	detectedFrom?: ExternalEditorDetectedFrom;
+	updatedAt?: number;
+};
+
+export type ExternalEditorSettings = Record<ExternalEditorId, ExternalEditorSetting>;
+
+export function createDefaultExternalEditorSettings(): ExternalEditorSettings {
+	return Object.fromEntries(SUPPORTED_EXTERNAL_EDITORS.map((editor) => [editor.id, { enabled: false, command: "" }])) as ExternalEditorSettings;
+}
+
+export type ExternalEditor = {
+	id: ExternalEditorId;
+	name: string;
+	command: string;
+	args?: string[];
+	detectedFrom: ExternalEditorDetectedFrom;
+};
+
+/**
+ * 平台可用的文件管理器（「打开方式」下拉的补充入口）。
+ * id 供渲染层选择 logo 与本地化名称；command 为启动命令；
+ * name 为 Linux 文件管理器本名（Dolphin/Files/Thunar 等专名不翻译）。
+ */
+export type FileManagerInfo = {
+	id: "windows-explorer" | "finder" | "nautilus" | "dolphin" | "nemo" | "thunar" | "pcmanfm" | "konqueror";
+	name: string;
+	command: string;
+	/** 系统图标 data URL（Windows 取 explorer.exe 真实图标；其余平台缺省走内联 SVG） */
+	iconDataUrl?: string;
+};

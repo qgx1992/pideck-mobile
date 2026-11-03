@@ -19,7 +19,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(RunWatchPlugin.class);
         registerPlugin(FileSaverPlugin.class);
         // SSE 走原生栈：CapacitorHttp 不支持流式响应体，所以自己读流
-        // （见 platform/sse-stream.ts 与 SsePlugin.java 的注释）
+        // （见 app/shell/native-sse.ts 与 SsePlugin.java 的注释）
         registerPlugin(SsePlugin.class);
         super.onCreate(savedInstanceState);
 

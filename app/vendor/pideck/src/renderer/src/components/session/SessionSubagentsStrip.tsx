@@ -1,0 +1,527 @@
+import { useAtomValue } from "jotai";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Ban, Bot, ChevronDown, ChevronUp, CornerUpRight, ExternalLink, FileText, Loader2, Square, X } from "lucide-react";
+import { sessionRecordByIdAtomFamily, sessionRuntimeBySessionIdAtomFamily } from "../../atoms";
+import { desktopApi } from "../../desktopApi";
+import { t } from "../../i18n";
+import type { PiSubagentEntry } from "../../../../shared/types";
+import { useSessionSubagents } from "../../hooks/useSessionSubagents";
+import { useToolDerivedActivity } from "../../hooks/useToolDerivedActivity";
+import { Button } from "../ui-shadcn/button";
+import { VirtualStack, VIRTUAL_STACK_MIN_ROWS } from "../ui-shadcn/virtual-stack";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui-shadcn/dialog";
+import { MarkdownStream } from "./MarkdownStream";
+import { Collapsible, CollapsibleContent } from "../ui-shadcn/collapsible";
+import { ComposerWidgetFrame, useComposerWidgetCollapsed } from "./ComposerWidgetLayout";
+import { isFailureSubagentStatus, isSubagentRunLost, subagentIconKind, subagentStatusLabelSuffix } from "./subagentStatus";
+import { DSH_SUBAGENT_TRANSCRIPT_PAGE_SIZE, dshTranscriptRowFromMessage, mergeOlderDshTranscriptPage, type DshTranscriptRow } from "./sessionSubagentTranscript";
+
+/**
+ * composer 上方的「子代理」常驻条（移植自 dsh-web 的 agent 状态灯）。
+ *
+ * 形态：与输入框同宽同列的折叠卡（36px 高：图标 + 标题 + 运行中计数 + 状态灯 + chevron），
+ * 点击展开子代理列表（运行中状态灯实时刷新）。两后端兼容：
+ * - pi：useSessionSubagents 三源合并（record + 桥接 widget + 工具调用推导）；
+ * - DSH：listDshSubagents 轮询拉取，运行中 3s 刷新，空闲降频 15s（不停表，兜住晚 spawn 的子代理）。
+ * 无任何子代理时整体不渲染（「有那个显示那个」）。
+ */
+
+/* ------------------------------------------------------------------ */
+/* 状态字形与徽标                                                       */
+/* ------------------------------------------------------------------ */
+
+function CompletedGlyph() {
+	return (
+		<svg width={16} height={16} viewBox="-1 -1 16 16" fill="none" aria-hidden="true" className="overflow-visible text-[var(--color-success)]">
+			<circle cx="7" cy="7" r="6.4" stroke="currentColor" strokeWidth="1.2" />
+			<path
+				d="M10.9631 5.71411L7.70154 8.97571C7.48011 9.19714 7.27736 9.40099 7.09229 9.54993C6.89742 9.70669 6.66314 9.85279 6.3634 9.90027C6.2049 9.92534 6.04339 9.92534 5.88489 9.90027C5.58515 9.85279 5.35087 9.70669 5.15601 9.54993C4.97093 9.40099 4.76818 9.19714 4.54675 8.97571L3.03516 7.46411L3.96313 6.53613L5.47473 8.04773C5.7169 8.28989 5.86196 8.43389 5.97888 8.52795C6.08597 8.61409 6.10875 8.60701 6.08997 8.604C6.11259 8.60758 6.13571 8.60758 6.15833 8.604C6.13954 8.60701 6.16232 8.61409 6.26941 8.52795C6.38633 8.43389 6.53139 8.28989 6.77356 8.04773L10.0352 4.78613L10.9631 5.71411Z"
+				fill="currentColor"
+			/>
+		</svg>
+	);
+}
+
+function SubagentStatusIcon({ status }: { status: string }) {
+	const kind = subagentIconKind(status);
+	if (kind === "completed") return <CompletedGlyph />;
+	if (kind === "active") return <Loader2 size={14} className="animate-pideck-spin text-[var(--color-accent)]" />;
+	if (kind === "error") return <X size={14} className="text-[var(--color-danger)]" />;
+	// 非成功终态必须可明确区分：stopped/aborted 用红色系图形，绝不允许看起来像完成/未知
+	if (kind === "stopped") return <Square size={11} strokeWidth={2.5} className="text-[var(--color-danger)]" />;
+	if (kind === "aborted") return <Ban size={13} className="text-[var(--color-warning)]" />;
+	if (kind === "steered") return <CornerUpRight size={13} className="text-[var(--color-info)]" />;
+	return <span className="flex size-3.5 items-center justify-center rounded-full border border-text-tertiary" />;
+}
+
+/** 状态徽标配色：失败类红、steered 蓝、completed 绿、运行中琥珀、其余中性。 */
+function subagentStatusBadgeClass(status: string): string {
+	switch (subagentIconKind(status)) {
+		case "completed":
+			return "bg-success/15 text-success";
+		case "active":
+			return "bg-warning/15 text-warning";
+		case "error":
+		case "stopped":
+		case "aborted":
+			return "border border-danger/30 bg-danger-soft text-danger";
+		case "steered":
+			return "bg-info/15 text-info";
+		default:
+			return "bg-muted text-text-secondary";
+	}
+}
+
+/**
+ * 时长格式化（子代理行与详情共用）。
+ *
+ * 必须带小时/天档位：子代理是长任务，只到分钟档会输出「3120m 0s」这种读不出来的数字
+ * （用户反馈「几千分钟」）。秒级只保留在 1 分钟内，避免长任务末尾抖动。
+ */
+function formatDuration(ms: number): string {
+	if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+	const totalMinutes = Math.floor(ms / 60000);
+	if (totalMinutes < 60) return `${totalMinutes}m ${Math.round((ms % 60000) / 1000)}s`;
+	const totalHours = Math.floor(totalMinutes / 60);
+	if (totalHours < 24) return `${totalHours}h ${totalMinutes % 60}m`;
+	return `${Math.floor(totalHours / 24)}d ${totalHours % 24}h`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Pi 子代理行                                                          */
+/* ------------------------------------------------------------------ */
+
+/** 单条 pi 子代理：点击行展开详情（描述 / 错误 / 结果预览 / 元信息 / 打开子会话）。 */
+export const PiSubagentEntryRow = (props: {
+	entry: PiSubagentEntry;
+	/** 行标签：短列表路径给 li（父是 ul），虚拟化路径给 div（父是 div[data-index]，li 在那里非法）。 */
+	as?: "li" | "div";
+	/** 所属会话：打开结果 Dialog 时从会话文件 record 拉取全文 */
+	sessionId: string;
+	onOpenChildSession?: (sessionId: string) => void;
+}) => {
+	const { entry, as } = props;
+	const RowTag = as ?? "li";
+	const now = Date.now();
+	// 失联判定：runner 进程已死但记录仍是 running/queued（父进程换代/被杀后
+	// 永远等不到终态写盘）时，按「已停止」呈现——否则条目永远亮着「运行中」，
+	// 时长还会一直涨到几千分钟。仅改展示，不回写数据。
+	const lost = isSubagentRunLost(entry, now);
+	const effectiveStatus = lost ? "stopped" : entry.status;
+	// 失败类终态默认展开，让失败原因一眼可见；其余默认收起。
+	// 本组件在 ComposerWidgetLayoutProvider 内，行级折叠走 composer 通道记忆
+	const { collapsed, toggleCollapsed } = useComposerWidgetCollapsed(`subagent-entry:${entry.id}`, !isFailureSubagentStatus(effectiveStatus));
+	const isActive = !lost && (entry.status === "running" || entry.status === "queued");
+	const [resultDialogOpen, setResultDialogOpen] = useState(false);
+	// 运行中时长平滑走秒：时长是 Date.now() - startedAt 的派生值，仅靠 bridge 事件
+	// 推送重渲染会"一会儿蹦一下"；运行中的行自己挂 1s 心跳，终态/卸载时清理
+	const [, tickNow] = useState(0);
+	useEffect(() => {
+		if (!isActive) return;
+		const timer = window.setInterval(() => tickNow((n) => n + 1), 1000);
+		return () => window.clearInterval(timer);
+	}, [isActive]);
+	// 「查看完整结果」每次打开现拉 record 全文：bridge 实时预览截断 2000 字符，
+	// 只有会话文件里的 record 承载全文；record 尚未落盘（刚完成的瞬间）回落
+	// 到截断文本并提示。只在 Dialog 打开期间拉一次，长文本由 MarkdownStream
+	// 按 block memo 渲染，容器限高滚动。
+	const [fullResult, setFullResult] = useState<string | null>(null);
+	useEffect(() => {
+		// 工具调用推导条目（ACP）没有 record 可查：会话文件/归档里不存在对应全文，
+		// 每次打开都发一次必然落空的 IPC 只会白等，直接用卡片自带的结果预览。
+		if (!resultDialogOpen || entry.source === "toolcall") return;
+		let cancelled = false;
+		desktopApi.sessions
+			.listSessionSubagents(props.sessionId)
+			.then((entries) => {
+				if (cancelled) return;
+				setFullResult(entries.find((e) => e.id === entry.id)?.result ?? null);
+			})
+			.catch(() => undefined);
+		return () => {
+			cancelled = true;
+		};
+	}, [resultDialogOpen, entry.id, props.sessionId]);
+	const hasLongText = Boolean(entry.result || entry.error);
+	const displayResult = fullResult ?? entry.result ?? undefined;
+	// 失联条目也要显示已运行的时长（就是用户看到的那个「几千分钟」），
+	// 所以与运行中同样取 now - startedAt，只在有 startedAt 时展示。
+	const duration = entry.completedAt && entry.startedAt ? formatDuration(entry.completedAt - entry.startedAt) : entry.startedAt && (isActive || lost) ? formatDuration(now - entry.startedAt) : null;
+
+	return (
+		<RowTag className={`rounded ${isActive ? "bg-muted/40" : ""}`}>
+			<button type="button" className="flex min-w-0 w-full items-center gap-2 rounded px-2 py-1.5 text-left text-control leading-5 transition-colors hover:bg-muted/60" aria-expanded={!collapsed} onClick={toggleCollapsed}>
+				<span className="grid size-5 shrink-0 place-items-center">
+					<SubagentStatusIcon status={effectiveStatus} />
+				</span>
+				<span className="shrink-0 font-medium text-foreground">{entry.type}</span>
+				<span className="min-w-0 flex-1 truncate text-text-secondary">{entry.description}</span>
+				{duration && <span className="shrink-0 tabular-nums text-text-tertiary">{duration}</span>}
+				{entry.tokens != null && entry.tokens > 0 && <span className="shrink-0 tabular-nums text-xs text-text-tertiary">{entry.tokens.toLocaleString()} tk</span>}
+				<ChevronDown size={13} className={`shrink-0 text-text-tertiary transition-transform ${collapsed ? "" : "rotate-180"}`} aria-hidden="true" />
+			</button>
+			<Collapsible open={!collapsed}>
+				<CollapsibleContent>
+					<div className="flex flex-col gap-1.5 px-2 pb-2 pl-9 text-xs leading-5 text-text-secondary">
+						{/* 元信息行：本地化状态徽标 + 起止时间与量化指标 */}
+						<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-text-tertiary">
+							<span className={`rounded px-1.5 py-0.5 text-micro font-medium ${subagentStatusBadgeClass(effectiveStatus)}`}>{t(lost ? "sessionSubagents.status.lost" : `sessionSubagents.status.${subagentStatusLabelSuffix(effectiveStatus)}`)}</span>
+							{entry.toolUses != null && entry.toolUses > 0 && <span>{t("sessionSubagents.detailToolUses", { count: entry.toolUses })}</span>}
+							{entry.tokens != null && entry.tokens > 0 && <span>{t("sessionSubagents.detailTokens", { count: entry.tokens.toLocaleString() })}</span>}
+							{entry.startedAt != null && <span>{t("sessionSubagents.detailStartedAt", { time: new Date(entry.startedAt).toLocaleTimeString() })}</span>}
+							{entry.completedAt != null && <span>{t("sessionSubagents.detailCompletedAt", { time: new Date(entry.completedAt).toLocaleTimeString() })}</span>}
+						</div>
+						{lost && <p className="rounded border border-danger/30 bg-danger-soft px-2 py-1.5 text-danger">{t("sessionSubagents.lostHint")}</p>}
+						{entry.description && <p className="whitespace-pre-wrap break-words">{entry.description}</p>}
+						{entry.error && <div className="whitespace-pre-wrap break-words rounded border border-danger/30 bg-danger-soft px-2 py-1.5 text-danger">{entry.error}</div>}
+						{/* scroll-ok: text —— 单一文本块（pre / markdown 正文），没有行列表可切，虚拟化无从下手。 */}
+						{entry.result && <div className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded bg-muted/50 px-2 py-1.5">{entry.result}</div>}
+						{(entry.childSessionId || hasLongText) && (
+							<div className="flex flex-wrap items-center gap-2 pt-0.5">
+								{entry.childSessionId && props.onOpenChildSession && (
+									<Button variant="outline" size="sm" className="h-6 gap-1 px-2 text-xs text-text-secondary hover:text-foreground" onClick={() => props.onOpenChildSession?.(entry.childSessionId ?? "")}>
+										<ExternalLink size={12} />
+										{t("sessionSubagents.openChildSession")}
+									</Button>
+								)}
+								{hasLongText && (
+									<Button variant="ghost" size="sm" className="h-6 gap-1 px-2 text-xs text-text-secondary hover:text-foreground" onClick={() => setResultDialogOpen(true)}>
+										<FileText size={12} />
+										{t("sessionSubagents.viewFullResult")}
+									</Button>
+								)}
+							</div>
+						)}
+					</div>
+				</CollapsibleContent>
+			</Collapsible>
+			{/* 完整结果 Dialog：长结果/无子会话文件时的完整终态文本与元信息 */}
+			{hasLongText && (
+				<Dialog open={resultDialogOpen} onOpenChange={setResultDialogOpen}>
+					<DialogContent className="max-w-2xl">
+						<DialogHeader>
+							<DialogTitle>{t("sessionSubagents.dialogTitle", { type: entry.type })}</DialogTitle>
+						</DialogHeader>
+						<div
+							/* scroll-ok: transient —— 子代理详情弹窗的正文：一次交互、一个子代理的元信息 + 结果文本，随弹窗生命周期存在。 */
+							className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto overscroll-contain"
+						>
+							<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-tertiary">
+								<span className={`rounded px-1.5 py-0.5 text-micro font-medium ${subagentStatusBadgeClass(entry.status)}`}>{t(`sessionSubagents.status.${subagentStatusLabelSuffix(entry.status)}`)}</span>
+								{entry.toolUses != null && entry.toolUses > 0 && <span>{t("sessionSubagents.detailToolUses", { count: entry.toolUses })}</span>}
+								{entry.tokens != null && entry.tokens > 0 && <span>{t("sessionSubagents.detailTokens", { count: entry.tokens.toLocaleString() })}</span>}
+								{entry.startedAt != null && <span>{t("sessionSubagents.detailStartedAt", { time: new Date(entry.startedAt).toLocaleTimeString() })}</span>}
+								{entry.completedAt != null && <span>{t("sessionSubagents.detailCompletedAt", { time: new Date(entry.completedAt).toLocaleTimeString() })}</span>}
+							</div>
+							{entry.description && <p className="whitespace-pre-wrap break-words text-xs text-text-secondary">{entry.description}</p>}
+							{entry.error && <div className="whitespace-pre-wrap break-words rounded border border-danger/30 bg-danger-soft px-2 py-1.5 text-xs text-danger">{entry.error}</div>}
+							{displayResult && (
+								// 完整结果按 Markdown 渲染：子代理返回普遍是 md 文本，与会话正文
+								// /FileDiffViewer 预览共用同一 Streamdown 引擎（code/mermaid/math）。
+								// 优先 record 全文（fullResult），record 未落盘时回落 bridge 截断预览
+								<div className="markdown-body break-words rounded bg-muted/50 px-3 py-2 text-xs text-text-secondary">
+									<MarkdownStream text={displayResult} onOpenExternal={() => undefined} />
+								</div>
+							)}
+							{!fullResult && entry.source === "bridge" && entry.result && entry.result.length >= 2000 && <p className="text-micro text-text-tertiary">{t("sessionSubagents.fullResultPending")}</p>}
+						</div>
+					</DialogContent>
+				</Dialog>
+			)}
+		</RowTag>
+	);
+};
+
+/* ------------------------------------------------------------------ */
+/* DSH 子代理                                                           */
+/* ------------------------------------------------------------------ */
+
+export type DshSubagentEntry = {
+	id: string;
+	label?: string;
+	activity: "running" | "inactive";
+	hasChildren: boolean;
+	mode: "one-shot" | "continuable";
+	kind: "child" | "diagnostic";
+};
+
+/** DSH 子代理轮询节奏：运行中 3s 跟状态灯；空闲降到 15s 慢轮询。完全停表会让
+ * 「先开会话、后 spawn 子代理」的场景永远等不到第一盏灯亮（2026-10 用户反馈
+ * 状态不实时）；空闲期只多承担一条本地 RPC。 */
+const DSH_SUBAGENT_ACTIVE_POLL_MS = 3000;
+const DSH_SUBAGENT_IDLE_POLL_MS = 15000;
+
+/**
+ * DSH 子代理轮询：挂载拉一次；运行中 3s 快轮询跟状态灯，全空闲降频慢轮询兜住
+ * 晚 spawn 的子代理；文档隐藏时跳过网络但保持调度，回到前台立即补拉一次。
+ */
+function useDshSubagents(agentId: string | undefined): DshSubagentEntry[] {
+	const [entries, setEntries] = useState<DshSubagentEntry[]>([]);
+	useEffect(() => {
+		if (!agentId) return;
+		let cancelled = false;
+		let timer = 0;
+		const load = async () => {
+			timer = 0;
+			if (cancelled) return;
+			// 后台不空转：隐藏期间只保持慢节拍，回前台由 visibilitychange 立即补拉
+			if (document.hidden) {
+				timer = window.setTimeout(load, DSH_SUBAGENT_IDLE_POLL_MS);
+				return;
+			}
+			const items = await desktopApi.sessions.listDshSubagents(agentId).catch(() => [] as DshSubagentEntry[]);
+			if (cancelled) return;
+			setEntries(items);
+			timer = window.setTimeout(load, items.some((e) => e.activity === "running") ? DSH_SUBAGENT_ACTIVE_POLL_MS : DSH_SUBAGENT_IDLE_POLL_MS);
+		};
+		const onVisibilityChange = () => {
+			// 在飞的 load 自己会续表；只有已有挂起定时器时才打断提前拉
+			if (document.hidden || cancelled || timer === 0) return;
+			window.clearTimeout(timer);
+			timer = 0;
+			void load();
+		};
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		void load();
+		return () => {
+			cancelled = true;
+			if (timer) window.clearTimeout(timer);
+			document.removeEventListener("visibilitychange", onVisibilityChange);
+		};
+	}, [agentId]);
+	return entries;
+}
+
+/** 单条 DSH 子代理：点击行展开只读 transcript（readDshSubagentHistory，分页带「加载更早」）。 */
+export const DshSubagentEntryRow = (props: { agentId: string; entry: DshSubagentEntry /** 行标签：同 PiSubagentEntryRow。 */; as?: "li" | "div" }) => {
+	const { entry, as } = props;
+	const RowTag = as ?? "li";
+	const { collapsed, toggleCollapsed } = useComposerWidgetCollapsed(`dsh-subagent:${entry.id}`, true);
+	const [transcript, setTranscript] = useState<DshTranscriptRow[] | null>(null);
+	// 分页游标：oldestSeq = 当前已渲染最早事件的 seq，回传 beforeSeq 拉更早一页；
+	// 旧实现不传参吃主进程 100 条缺省且丢弃 hasMore，长子会话永远只见尾部一段。
+	const [pageInfo, setPageInfo] = useState<{ hasMore: boolean; oldestSeq?: number }>({ hasMore: false });
+	const [transcriptLoading, setTranscriptLoading] = useState(false);
+	const [olderLoading, setOlderLoading] = useState(false);
+	const [transcriptError, setTranscriptError] = useState(false);
+	const transcriptRef = useRef<HTMLDivElement | null>(null);
+	const restoreScrollOffsetRef = useRef<number | null>(null);
+
+	const toggle = useCallback(async () => {
+		if (!collapsed) {
+			toggleCollapsed();
+			return;
+		}
+		// 展开前现拉 transcript：与工具面板一致，避免先展开再补数据造成跳动
+		setTranscriptLoading(true);
+		setTranscriptError(false);
+		const fetched = await desktopApi.sessions.readDshSubagentHistory(props.agentId, entry.id, undefined, DSH_SUBAGENT_TRANSCRIPT_PAGE_SIZE).catch(() => null);
+		setTranscriptLoading(false);
+		if (fetched) {
+			setTranscript(fetched.messages.map(dshTranscriptRowFromMessage));
+			setPageInfo({ hasMore: fetched.hasMore === true && fetched.messages.length > 0, oldestSeq: fetched.oldestSeq });
+		} else {
+			setTranscriptError(true);
+		}
+		toggleCollapsed();
+	}, [collapsed, entry.id, props.agentId, toggleCollapsed]);
+
+	const loadOlder = useCallback(async () => {
+		if (!transcript || olderLoading || !pageInfo.hasMore || pageInfo.oldestSeq === undefined) return;
+		// 记住「内容底到视口顶」的距离：新页插在上方后按内容高度差补偿 scrollTop，视口不跳
+		const el = transcriptRef.current;
+		restoreScrollOffsetRef.current = el ? el.scrollHeight - el.scrollTop : null;
+		setOlderLoading(true);
+		const fetched = await desktopApi.sessions.readDshSubagentHistory(props.agentId, entry.id, pageInfo.oldestSeq, DSH_SUBAGENT_TRANSCRIPT_PAGE_SIZE).catch(() => null);
+		setOlderLoading(false);
+		if (!fetched) return;
+		const merged = mergeOlderDshTranscriptPage(transcript, fetched);
+		setTranscript(merged.rows);
+		setPageInfo({ hasMore: merged.hasMore, oldestSeq: merged.oldestSeq });
+	}, [transcript, olderLoading, pageInfo.hasMore, pageInfo.oldestSeq, entry.id, props.agentId]);
+
+	// 「加载更早」把新页插在列表上方：transcript 变化后按记录的偏移补偿滚动位置
+	useLayoutEffect(() => {
+		const el = transcriptRef.current;
+		const anchor = restoreScrollOffsetRef.current;
+		if (!el || anchor === null) return;
+		restoreScrollOffsetRef.current = null;
+		el.scrollTop = el.scrollHeight - anchor;
+	}, [transcript]);
+
+	return (
+		<RowTag className="rounded hover:bg-muted/40">
+			<button type="button" className="flex min-w-0 w-full items-center gap-2 rounded px-2 py-1.5 text-left text-control leading-5 transition-colors hover:bg-muted/60" aria-expanded={!collapsed} onClick={() => void toggle()}>
+				<span className="grid size-5 shrink-0 place-items-center">{entry.activity === "running" ? <Loader2 size={14} className="animate-pideck-spin text-[var(--color-accent)]" /> : <span className="size-2 rounded-full bg-muted-foreground/60" aria-hidden="true" />}</span>
+				<span className="min-w-0 flex-1 truncate font-medium text-foreground">{entry.label ?? entry.id}</span>
+				{entry.activity === "running" && (
+					<span className="inline-flex shrink-0 items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-micro font-medium text-primary">
+						<Loader2 size={11} className="animate-pideck-spin" aria-hidden="true" />
+						{t("dshTools.subagentRunning")}
+					</span>
+				)}
+				{entry.kind === "diagnostic" && <span className="shrink-0 inline-flex items-center rounded bg-warning/15 px-1.5 py-0.5 text-micro font-medium text-warning">{t("dshTools.subagentDiagnostic")}</span>}
+				<span className="shrink-0 text-micro text-text-tertiary">{entry.mode === "continuable" ? t("dshTools.subagentContinuable") : t("dshTools.subagentOneShot")}</span>
+				<ChevronDown size={13} className={`shrink-0 text-text-tertiary transition-transform ${collapsed ? "" : "rotate-180"}`} aria-hidden="true" />
+			</button>
+			<Collapsible open={!collapsed}>
+				<CollapsibleContent>
+					{/* scroll-ok: bounded —— DSH 子代理转录是受控分页的只读列表：每次只拉一页
+					    （DSH_SUBAGENT_TRANSCRIPT_PAGE_SIZE），「加载更多」前插旧页还要保滚动位置，
+					    且整体限高 max-h-56；虚拟化会与「前插 + 高度未测」直接冲突（见 docs/virtualization-audit.md）。 */}
+					<div ref={transcriptRef} className="flex max-h-56 flex-col gap-1 overflow-y-auto border-t border-border-subtle px-2 py-1.5">
+						{!transcriptLoading && pageInfo.hasMore && (transcript?.length ?? 0) > 0 && (
+							<button type="button" className="shrink-0 self-start rounded px-1 py-0.5 text-micro text-text-tertiary transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-60" disabled={olderLoading} onClick={() => void loadOlder()}>
+								{/* 沿用 timeline 的「加载更多对话」文案（会话转录同一语义） */}
+								{t("timeline.loadMoreTurns")}
+							</button>
+						)}
+						{transcriptLoading && (
+							<p className="flex items-center gap-1.5 px-1 text-xs text-text-tertiary">
+								<Loader2 size={13} className="animate-pideck-spin" aria-hidden="true" />
+								{t("dshTools.loading")}
+							</p>
+						)}
+						{!transcriptLoading && transcriptError && <p className="px-1 text-xs text-[var(--color-danger)]">{t("dshTools.subagentTranscriptError")}</p>}
+						{!transcriptLoading && !transcriptError && (transcript?.length ?? 0) === 0 && <p className="px-1 text-xs text-text-tertiary">{t("dshTools.subagentTranscriptEmpty")}</p>}
+						{!transcriptLoading &&
+							transcript?.map((row) => (
+								// 消息 id 由投影保证唯一（appendMessageOnce 去重）且跨页稳定，可直接作 key
+								<div key={row.id} className={`flex flex-col gap-0.5 rounded-md px-2 py-1 ${row.role === "user" ? "bg-accent/30" : "bg-bg-panel"}`}>
+									<span className="text-micro text-text-tertiary">{row.role === "user" ? t("dshTools.roleUser") : t("dshTools.roleAssistant")}</span>
+									<span className="whitespace-pre-wrap break-words text-xs text-foreground">{row.text || "…"}</span>
+								</div>
+							))}
+					</div>
+				</CollapsibleContent>
+			</Collapsible>
+		</RowTag>
+	);
+};
+
+/* ------------------------------------------------------------------ */
+/* 数据通道（横栏与右侧边栏「会话状态」面板共用）                         */
+/* ------------------------------------------------------------------ */
+
+export type SessionSubagentList = {
+	isDsh: boolean;
+	agentId: string | undefined;
+	/** 非 DSH 后端（pi / ACP）的行数据：两者共用 PiSubagentEntry 与行组件。 */
+	entries: PiSubagentEntry[];
+	dshEntries: DshSubagentEntry[];
+	total: number;
+	running: number;
+	/** acp_delegate（billion-context）委托条目无子会话文件与完整结果文本，展开时提示产出位置 */
+	hasAcpEntries: boolean;
+	loading: boolean;
+};
+
+/**
+ * pi：三源合并；DSH：轮询；ACP：工具调用推导（CLI 把子代理当普通工具调用上报，
+ * 协议层没有子代理字段——见 shared/toolActivityDerivation.ts）。
+ * 三条数据通道只取其一，渲染层不区分后端。
+ */
+export function useSessionSubagentList(sessionId: string): SessionSubagentList {
+	const runtime = useAtomValue(sessionRuntimeBySessionIdAtomFamily(sessionId));
+	// 冷会话（历史 ACP）没有 runtime，后端只能从 catalog 记录读
+	const record = useAtomValue(sessionRecordByIdAtomFamily(sessionId));
+	const isDsh = runtime?.backend === "dsh";
+	const isAcp = (runtime?.backend ?? record?.backend) === "acp";
+	const agentId = runtime?.agentId;
+	const piSubs = useSessionSubagents(sessionId);
+	const dshEntries = useDshSubagents(isDsh ? agentId : undefined);
+	// ACP 走工具推导；pi 走三源合并；DSH 两者都不用
+	const derived = useToolDerivedActivity(sessionId, isAcp && !isDsh);
+	const entries = isDsh ? [] : isAcp ? derived.subagents : piSubs.entries;
+	return {
+		isDsh,
+		agentId,
+		entries,
+		dshEntries,
+		total: isDsh ? dshEntries.length : entries.length,
+		running: isDsh ? dshEntries.filter((e) => e.activity === "running").length : entries.filter((e) => e.status === "running" || e.status === "queued").length,
+		hasAcpEntries: entries.some((e) => e.via === "acp-delegate"),
+		loading: !isDsh && !isAcp && piSubs.loading,
+	};
+}
+
+/* ------------------------------------------------------------------ */
+/* 横栏本体                                                             */
+/* ------------------------------------------------------------------ */
+
+export function SessionSubagentsStrip(props: {
+	sessionId: string;
+	/** 打开子会话只读视图（SessionView 透传 openSidebarSessionById 通路） */
+	onOpenChildSession?: (sessionId: string) => void;
+}) {
+	const { collapsed, toggleCollapsed } = useComposerWidgetCollapsed(`subagents:${props.sessionId}`, true);
+	const { isDsh, agentId, entries: piEntries, dshEntries, total, running, hasAcpEntries } = useSessionSubagentList(props.sessionId);
+
+	// 两种后端的行压成同一条扁平行序列：虚拟栈只吃扁平数组，而 isDsh 决定的是「每行画什么」，
+	// 不是「有几行列表」。两个后端互斥，合并后顺序与原 map 一致。
+	type StripRow = { kind: "dsh"; id: string; entry: DshSubagentEntry } | { kind: "pi"; id: string; entry: PiSubagentEntry };
+	const rows = useMemo<StripRow[]>(() => (isDsh ? dshEntries.map((entry) => ({ kind: "dsh" as const, id: entry.id, entry })) : piEntries.map((entry) => ({ kind: "pi" as const, id: entry.id, entry }))), [isDsh, dshEntries, piEntries]);
+	// 与虚拟栈内部的判定同值：只决定容器要不要保留 flex/gap 行距（虚拟行是 absolute，不参与 flex）。
+	const virtualizeRows = rows.length > VIRTUAL_STACK_MIN_ROWS;
+	const listRef = useRef<(HTMLUListElement & HTMLDivElement) | null>(null);
+	// 行组件自己带 key：短列表路径不再套一层外层 li —— 行根就是 li 时再包一层会变成
+	// 非法的 li > li（轨迹视图在 2026-10 恰好从相反方向修过同一个错，别再来一遍）。
+	const renderRow = (row: StripRow, as: "li" | "div") => (row.kind === "dsh" ? <DshSubagentEntryRow key={row.id} as={as} agentId={agentId ?? ""} entry={row.entry} /> : <PiSubagentEntryRow key={row.id} as={as} entry={row.entry} sessionId={props.sessionId} onOpenChildSession={props.onOpenChildSession} />);
+	// 虚拟化分支的行是 div[data-index] 的子节点：ul > div 是非法 HTML，列表语义也丢。
+	// 两条路径各用合法标签（同 SessionTodoStrip）：短列表 ul > li，虚拟化 div[role=list] > div[role=listitem]。
+	const ListTag: "ul" | "div" = virtualizeRows ? "div" : "ul";
+	const ItemTag: "li" | "div" = virtualizeRows ? "div" : "li";
+
+	// 无子代理：不渲染（「有那个显示那个」）。pi 空态细分（插件未装等）在展开
+	// 列表内用现有文案表达，折叠卡本身不常显空条
+	if (total === 0) return null;
+
+	return (
+		<ComposerWidgetFrame data-testid="session-subagents-strip" aria-label={t("sessionSubagents.title")}>
+			{/* 受控呈现：折叠状态归 composer 通道单一持有，Radix 只承载高度动画（同 todo/team 条取舍）。 */}
+			<Collapsible open={!collapsed}>
+				<div className="flex h-9 w-full items-center gap-2.5 px-3">
+					<button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" aria-expanded={!collapsed} onClick={toggleCollapsed}>
+						<Bot size={14} aria-hidden="true" className="shrink-0 text-text-tertiary" />
+						<span className="shrink-0 text-control font-medium leading-6 text-foreground">{t("sessionSubagents.title")}</span>
+						{/* 运行中计数徽标 + 状态灯：dsh-web 的 agent 状态灯语义 */}
+						{running > 0 && (
+							<span className="inline-flex shrink-0 items-center gap-1.5 rounded bg-warning/15 px-1.5 py-0.5 text-micro leading-none font-medium text-warning">
+								<span className="size-1.5 rounded-full bg-current animate-pulse" aria-hidden="true" />
+								{running}
+							</span>
+						)}
+						<span className="min-w-0 flex-1" />
+						<span className="shrink-0 text-text-tertiary" aria-hidden="true">
+							{collapsed ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+						</span>
+					</button>
+				</div>
+				<CollapsibleContent>
+					<ListTag ref={listRef} className={`mb-2 ${virtualizeRows ? "" : "flex flex-col gap-1 "}max-h-[240px] overflow-y-auto [contain:layout_paint] [scrollbar-gutter:stable] px-3`}>
+						{virtualizeRows ? (
+							<VirtualStack
+								items={rows}
+								getKey={(row) => row.id}
+								scrollRef={listRef}
+								minRows={VIRTUAL_STACK_MIN_ROWS}
+								// 单行 = 图标 + 名称 + 状态 + 一行摘要，约 40px；实测随即覆盖。
+								estimateHeight={40}
+								// 虚拟行不参与 flex，原 gap-1（4px）改由行自带下边距提供。
+								rowClassName="pb-1"
+								// 行是 div：列表语义靠 role 补。role 挂在虚拟栈的内容盒上（containerProps），
+								// 不在外层容器上——中间夹着栈自己的内容盒，挂外面等于跨了一层，与轨迹视图两种写法。
+								containerProps={{ role: "list" }}
+								rowProps={() => ({ role: "listitem" })}
+								renderItem={(row) => renderRow(row, ItemTag)}
+							/>
+						) : (
+							rows.map((row) => renderRow(row, "li"))
+						)}
+					</ListTag>
+					{hasAcpEntries && <p className="-mt-1 px-3 pb-2 text-micro leading-4 text-text-tertiary">{t("sessionSubagents.acpDelegateHint")}</p>}
+				</CollapsibleContent>
+			</Collapsible>
+		</ComposerWidgetFrame>
+	);
+}

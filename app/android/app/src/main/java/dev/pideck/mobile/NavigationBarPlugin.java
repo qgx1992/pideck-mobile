@@ -1,6 +1,8 @@
 package dev.pideck.mobile;
 
+import android.content.Intent;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.view.Window;
 
@@ -20,6 +22,9 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * 而 Android 15 起 navigationBarColor 在强制 edge-to-edge 下会被忽略——
  * 本项目已在 styles.xml 里通过 windowOptOutEdgeToEdgeEnforcement 退出该强制行为，
  * 所以这里设置的颜色与图标明暗才会生效。
+ *
+ * 同时兼一个「用系统浏览器打开外链」的入口：WebView 里 window.open(_blank)
+ * 要么被吞掉、要么把会话顶掉，所以由 JS 拦下改走 Intent。
  *
  * 图标明暗用 WindowInsetsControllerCompat.setAppearanceLightNavigationBars：
  *   true  = 浅色背景 → 深色图标
@@ -57,5 +62,24 @@ public class NavigationBarPlugin extends Plugin {
                 call.reject("设置导航栏颜色失败: " + error.getMessage(), error);
             }
         });
+    }
+
+    /** 用系统浏览器 / 对应 App 打开链接（http/https/mailto…）。 */
+    @PluginMethod
+    public void openUrl(PluginCall call) {
+        final String url = call.getString("url", "");
+        if (url == null || url.isEmpty()) {
+            call.reject("url required");
+            return;
+        }
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception error) {
+            String message = error.getMessage();
+            call.reject(message != null && !message.isEmpty() ? message : "没有可处理该链接的 App");
+        }
     }
 }

@@ -1,0 +1,550 @@
+import type { PiSkillLocation, PiSkillSummary } from "./skills";
+
+// ── Pi / NPM / Config ──────────────────────────────────────────────────
+
+export type PiCommand = {
+	name: string;
+	description?: string;
+	source?: string;
+};
+
+export type PiInstallStatus = {
+	installed: boolean;
+	command?: string;
+	version?: string;
+	searchedDirs: string[];
+	error?: string;
+	/**
+	 * WSL 模式下解析出的 Linux 绝对路径（如 /home/dev/.nvm/versions/node/v22/bin/pi）。
+	 * `command` 是给人看的 `wsl -d … -u … <path>` 形式，本字段留给设置页做可复制的诊断信息。
+	 */
+	piPath?: string;
+};
+
+/**
+ * pi 安装来源。用于「检测到多个安装时让用户自己选」：
+ * - managed：pi 官方安装器（curl install.sh / PowerShell install.ps1）的安装，
+ *   实体在 `<agentDir>/install/releases/<ver>`
+ * - package-manager：npm / pnpm / yarn / bun / volta / mise / asdf / nvm 等包管理器的全局 bin
+ * - portable：PiDeck 引导安装写进 `<userData>/pi-runtime/pi-global` 的便携副本
+ * - custom：用户在设置里自己指定的路径（不在上面任何已知落点）
+ * - path：其余来源（系统 PATH、`~/.local/bin`、/usr/local/bin 等）
+ */
+export type PiInstallationSource = "managed" | "package-manager" | "portable" | "custom" | "path";
+
+/** 一次探测到的 pi 安装；列表由主进程给出，渲染层只做展示与选择。 */
+export type PiInstallation = {
+	/** 可直接执行的入口（managed 安装是指向启动器脚本的软链，或启动器本身） */
+	path: string;
+	/** 解析软链后的真实入口；用于去重与诊断 */
+	realPath: string;
+	version?: string;
+	/** 版本探测失败原因（入口存在但跑不起来，例如残留的旧垫片） */
+	versionError?: string;
+	source: PiInstallationSource;
+	/** managed 安装的 install 根目录（含 managed-install.json） */
+	managedRoot?: string;
+	/** 当前 resolveCommand（含用户自定义路径）选中的就是它 */
+	isActive: boolean;
+	/** 用户在设置里自己添加的候选路径（可编辑/移除；自动发现的项不带此标记） */
+	userAdded?: boolean;
+	/**
+	 * 用户添加的路径当前不存在（文件被删/盘未挂载）。
+	 * 仍然列出来让用户能改或删，不静默从列表里消失。
+	 */
+	missing?: boolean;
+	/**
+	 * 用户交互式登录 shell 里 `command -v pi` 解析出的那份（终端里敲 pi 用的）。
+	 * 官方安装器只把 PATH 写进当前 shell 的 rc 文件，非交互探测读不到，因此单独反查。
+	 */
+	shellDefault?: boolean;
+	/** 多个安装中版本最高的那份（版本无法比较时不标记） */
+	isNewest?: boolean;
+};
+
+/**
+ * 设置页「验证并保存」的 WSL 连接结果。
+ * piVersion / piPath 由与 agent 启动同一条探测链路产出，避免「验证通过但启动失败」。
+ */
+export type WslConnectionValidation = {
+	ok: boolean;
+	whoami: string;
+	piVersion: string;
+	piPath: string;
+	error: string;
+};
+
+/** 安装命令执行结果 */
+export type PiInstallExecResult = {
+	success: boolean;
+	exitCode: number | null;
+	stdout: string;
+	stderr: string;
+	/**
+	 * 引导安装被拦下时的现场：本机已经检测到这些 pi 安装，因此**没有再装第二份**。
+	 * 用户要求「已经有了就不要再安装」，这是最后一道硬约束（UI 不展示引导只是第一道）。
+	 */
+	alreadyInstalled?: PiInstallation[];
+};
+
+/** npm 可用性检测结果 */
+export type NpmAvailabilityResult = {
+	available: boolean;
+	version?: string;
+	error?: string;
+};
+
+export type ConfigFileDiagnostic = {
+	fileName: string;
+	message: string;
+	line?: number;
+	column?: number;
+	snippet?: string;
+	docsUrl: string;
+};
+
+export type ConfigFileReadResult<T> = {
+	raw: string;
+	parsed: T;
+	diagnostic?: ConfigFileDiagnostic;
+};
+
+// ── Project Resources / Extensions ─────────────────────────────────────
+
+export type ProjectResourceOverrides = {
+	/** 当前项目禁用的全局扩展 source；不修改全局启用状态。 */
+	disabledGlobalExtensions: string[];
+	/** 当前项目禁用的全局技能稳定键（sourceId:name）。 */
+	disabledGlobalSkills: string[];
+	/** 当前项目禁用的全局提示词稳定键（规范化 name）。 */
+	disabledGlobalPrompts: string[];
+};
+
+export type ProjectInheritedResourceToggleInput = {
+	projectId: string;
+	kind: "extension" | "skill" | "prompt";
+	key: string;
+	enabled: boolean;
+};
+
+export type ProjectResourceListResult = {
+	skills: PiSkillSummary[];
+	extensions: PiExtensionSummary[];
+	skillLocations: PiSkillLocation[];
+	overrides: ProjectResourceOverrides;
+};
+
+/** 运行时发现的资源（packages / settings 显式路径 / 祖先 .agents/skills）的只读描述。 */
+export type ProjectResourceDiscoveryResult = {
+	/** Whether project-scoped resources may be suggested under the current trust decision. */
+	projectResourcesAllowed: boolean;
+	overrides: ProjectResourceOverrides;
+	skills: Array<{
+		id: string;
+		name: string;
+		path: string;
+		dir: string;
+		sourceId: string;
+		sourceLabel: string;
+		description: string;
+		userOnly?: boolean;
+		enabled: boolean;
+		managed: boolean;
+	}>;
+	prompts: Array<{
+		name: string;
+		path: string;
+		sourceId: string;
+		sourceLabel: string;
+		description: string;
+		enabled: boolean;
+		managed: boolean;
+	}>;
+	extensions: Array<{
+		source: string;
+		path: string;
+		sourceId: string;
+		sourceLabel: string;
+		physicalScope: "user" | "project";
+		enabled: boolean;
+		managed: boolean;
+		/** 包版本（package.json 就近向上查）；settings-* 行恒缺省。 */
+		version?: string;
+	}>;
+};
+
+export type ProjectResourceDirectoryKind = "project-pi" | "project-agents" | "prompts";
+
+export type CreateProjectSkillInput = {
+	projectId: string;
+	name: string;
+	description: string;
+	locationId: Extract<PiSkillLocation["id"], "project-pi" | "project-agents">;
+};
+
+export type PiExtensionSummary = {
+	id: string;
+	source: string;
+	path?: string;
+	/** 非 npm/git 安装的本地文件扩展，通过文件系统自动发现 */
+	scope: "user" | "project" | "unknown";
+	/** PiDeck 内置扩展，不可卸载 */
+	builtIn?: boolean;
+	/** 过滤式安装（pi list 的 "(filtered)" 标记）：包完整安装但只选择性加载指定资源 */
+	filtered?: boolean;
+	/**
+	 * pi list 的 source 是本地路径（`pi install <dir>` / `./pkg` / `/opt/pkg`）而非 npm/git 协议：
+	 * 这类包由用户目录直接加载，版本取自包自身 package.json，更新走 `pi update --extensions`。
+	 */
+	local?: boolean;
+	/** 是否启用（未在 disabledExtensions 列表中） */
+	enabled?: boolean;
+	currentVersion?: string;
+	latestVersion?: string;
+	hasUpdate?: boolean;
+	updateError?: string;
+};
+
+export type PiPackageInfo = {
+	name: string;
+	description: string;
+	installCmd: string;
+	tags: string[];
+	downloads: string;
+	updated: string;
+	npmUrl: string;
+	repoUrl?: string;
+	/** pi.dev 详情页的 name 查询参数；部分包名和扩展展示名不完全一致。 */
+	piPackageName?: string;
+};
+
+export type PiExtensionListResult = {
+	extensions: PiExtensionSummary[];
+	raw: string;
+	/** 检测到的扩展冲突：内置扩展因与三方扩展同名而被自动禁用 */
+	conflicts?: { builtIn: string; thirdParty: string }[];
+};
+
+export type PiCliUpdateResult = {
+	command: string;
+	output: string;
+	updated: boolean;
+};
+
+export type PiUpdateCheckResult = {
+	currentVersion?: string;
+	latestVersion?: string;
+	hasUpdate: boolean;
+	error?: string;
+	/** 当前选中的 pi 可执行路径（自更新分派用；未安装时无）。 */
+	command?: string;
+	/** pi.dev 版本接口返回的包名（改名迁移期可能与默认包名不同；自更新 spec 用）。 */
+	packageName?: string;
+};
+
+export type PiProxyTestResult = {
+	success: boolean;
+	url: string;
+	elapsedMs: number;
+	statusCode?: number;
+	message?: string;
+	error?: string;
+	bypassed?: boolean;
+};
+
+// ── App Info / Updates / Logging ───────────────────────────────────────
+
+export type AppInfo = {
+	version: string;
+	releasesUrl: string;
+	/** 当前运行平台：win32 / darwin / linux，用于 UI 中按平台条件渲染（如 WSL 选项仅在 Windows 显示） */
+	platform: NodeJS.Platform;
+	/** 用户 home 目录，供扩展读取本地文件（如 memory-store.json） */
+	homeDir: string;
+	/** PiDeck 数据目录（app.getPath("userData")）：配置、会话、诊断等数据所在，跨平台实际路径由主进程解析 */
+	userDataDir: string;
+	/** 开发态 git 分支名（多 worktree 并行时区分窗口）；正式包/共享分支为空。 */
+	devBranch?: string;
+	/** pi CLI 版本（探测失败/未安装时缺省，UI 显示 —）；进程生命周期内缓存。 */
+	piVersion?: string;
+	/** 当前启用的 DSH 运行时版本（bundled manifest）；未启用/开发态缺省。 */
+	dshRuntimeVersion?: string;
+	/** 内置 pi-ai 目录清单 source.packageVersion；不含 overlay。 */
+	piAiVersion?: string;
+	electronVersion?: string;
+	chromeVersion?: string;
+	nodeVersion?: string;
+	/** 打包构建时间（ISO）：app.asar 的 mtime；开发态为 package.json mtime。 */
+	buildTime?: string;
+	/** 安装时间（ISO，仅打包态）：安装/升级时写入的 exe mtime。 */
+	installedAt?: string;
+};
+
+export type FeedbackEnvironment = {
+	appVersion: string;
+	platform: NodeJS.Platform;
+	arch: string;
+	electronVersion: string;
+	chromeVersion: string;
+	nodeVersion: string;
+	pi: PiInstallStatus;
+};
+
+/** 应用更新生命周期阶段（由 electron-updater 事件映射）。 */
+export type AppUpdatePhase = "idle" | "checking" | "available" | "downloading" | "ready" | "installing" | "error";
+
+/** 更新交付能力：automatic=应用内下载/安装；manual=仅检测并提供设备匹配的安装包下载。 */
+export type AppUpdateDeliveryMode = "automatic" | "manual";
+
+/**
+ * 无法应用内更新时的具体原因（UI 用它选择说明文案）：
+ * - mac-unsigned：macOS 无 Developer ID 签名；
+ * - linux-arm64：Linux arm64 没有可用的 latest-linux.yml；
+ * - linux-package-format：deb / tar.gz 等非 AppImage 安装形态无法自更新；
+ * - unsupported：未识别的平台/架构。
+ */
+export type AppUpdateDeliveryReason = "automatic" | "mac-unsigned" | "linux-arm64" | "linux-package-format" | "unsupported";
+
+/** 手动更新推荐安装包的格式（按设备匹配后的类型）。 */
+export type AppManualUpdateAssetKind = "dmg" | "zip" | "nsis" | "portable" | "appimage" | "deb" | "tar.gz";
+
+/**
+ * 手动更新交付时按当前设备匹配到的安装包。
+ * 检查更新阶段由主进程从 Release 资产中选出，渲染层据此展示「一键下载」。
+ */
+export interface AppManualUpdateRelease {
+	version: string;
+	/** 安装包文件名（展示 + 下载落盘名）。 */
+	assetName: string;
+	/** 安装包 https 直链。 */
+	assetUrl: string;
+	/** 字节大小（发布源提供时）。 */
+	assetSize?: number;
+	/** GitHub 资产 digest（形如 "sha256:hex"，可选字段；缺失则跳过校验）。 */
+	digestSha256?: string;
+	kind: AppManualUpdateAssetKind;
+	platform: "darwin" | "win32" | "linux";
+	arch: "x64" | "arm64";
+	/** 当前进程跑在 ARM64 转译层（macOS Rosetta）下，推荐原生 arm64 包。 */
+	translated?: boolean;
+	/** 发布页（查看全部下载 / 无匹配时的兜底入口）。 */
+	releasePageUrl: string;
+}
+
+/**
+ * 应用更新下载/安装状态（随 app:update-status-changed 快照推送）。
+ * 语义对齐 Netcatty/electron-updater：检测到新版本后 autoDownload 开启时
+ * 自动进入 checking→downloading→ready 全链路，UI 无需弹窗打断。
+ */
+export type AppUpdateDownloadState = {
+	/** 当前阶段。idle = 无活动（已最新 / 从未检查）；error 时 error 字段有值。
+	 * installing 表示已请求退出并等待安装器接管；ready + error 表示安装未启动，可重试。 */
+	phase: AppUpdatePhase;
+	/** 目标版本（available / downloading / ready 时存在）。 */
+	version?: string;
+	/** 下载进度 0-100（downloading 时存在）。 */
+	percent?: number;
+	bytesPerSecond?: number;
+	transferred?: number;
+	total?: number;
+	/** 失败原因（phase=error，或 phase=ready 但上次安装启动失败）。 */
+	error?: string;
+	/**
+	 * 失败种类：check = 还没开始下包（含 macOS 只查不装）；download = 下包装失败。
+	 * 渲染层据此选「检查失败」或「下载失败」，缺省按检查失败处理，避免误报下载。
+	 */
+	errorKind?: "check" | "download";
+};
+
+/**
+ * 应用更新通道：dev 构建跟踪 dev 预发布，stable 构建跟踪正式版。
+ * 编译期由 __PIDECK_DEV_BUILD__ 决定，运行期不变（见 main/update/channelIdentity.ts）。
+ */
+export type UpdateChannel = "stable" | "dev";
+
+/**
+ * 二进制是谁构建的（与 UpdateChannel 正交：通道 = 跟踪哪条发布线，来源 = 这个包从哪来）。
+ * 编译期由 __PIDECK_RELEASE_BUILD__ + 打包态决定（见 main/buildIdentity.ts）。
+ */
+export type AppBuildOrigin = "release" | "local-package" | "dev-run";
+
+/** 当前更新通道与应用版本（update:get-channel 返回，通道相关下载源选择用）。 */
+export interface UpdateChannelInfo {
+	channel: UpdateChannel;
+	currentVersion: string;
+	/** 开发构建（未打包 npm run dev 或 dev 通道安装包）：仅用于呈现当前构建身份，不再作为功能入口门控。 */
+	devBuild: boolean;
+	/**
+	 * 构建来源：release = CI 发布流水线产物；local-package = 本机打包（pack:dev / pack / dist:* 直跑）；
+	 * dev-run = 未打包运行。渲染层据此给「本地构建」徽章与版本号说明——本机包的版本号抄
+	 * package.json，与发布版同号，不标出来会被误认为官方发布版。
+	 */
+	buildOrigin: AppBuildOrigin;
+}
+
+/** 跨通道切换的目标发布（GitHub Release 经 selectTargetRelease 归一化后的形状）。 */
+export interface TargetChannelRelease {
+	version: string;
+	/** Release 说明截断摘要（300 字符）。 */
+	notesExcerpt: string;
+	/** 平台匹配的安装包下载直连（仅 https）。 */
+	assetUrl: string;
+	/** 安装包文件名（临时目录内落盘名，渲染层不得传入路径分隔符）。 */
+	assetName: string;
+	/** GitHub 资产 digest（形如 "sha256:hex"，可选字段；缺失则下载后跳过校验）。 */
+	digestSha256?: string;
+	/** 发布页地址（html_url，缺失回退仓库 releases 页），查询失败/未匹配时的退化入口。 */
+	releasePageUrl: string;
+}
+
+/** 通道切换全流程快照（query/download 状态机推送 + get-status 拉取，渲染层据此渲染切换向导）。 */
+export interface ChannelSwitchSnapshot {
+	phase: "idle" | "querying" | "available" | "up-to-date" | "downloading" | "ready" | "error";
+	target?: TargetChannelRelease;
+	/** up-to-date 阶段的目标通道（目标最新版不高于当前版本，无需切换）。 */
+	targetChannel?: UpdateChannel;
+	/** up-to-date 阶段的当前客户端版本（与 targetChannel 一起构成「已是最新版本」文案）。 */
+	currentVersion?: string;
+	/** 下载进度（0-100 整数，单调不减；无法取得 content-length 时只在开始/结束时出现）。 */
+	percent?: number;
+	/** ready 阶段的安装包落盘路径（仅限本服务临时目录内，launch 前缀校验用）。 */
+	installerPath?: string;
+	/** error 阶段的失败说明；查询类失败附 releases 页地址作手动下载退化入口。 */
+	error?: string;
+}
+
+/** 通道切换动作结果（query/download/launch 共用）：失败附 error，成功按动作带 release / installerPath。 */
+export type ChannelSwitchActionResult = { ok: true; release?: TargetChannelRelease; installerPath?: string } | { ok: false; error: string };
+
+/**
+ * 主进程后台更新检查推送给渲染层的状态快照（齿轮角标 / toast / 设置页卡片用）。
+ * 由主进程 UpdateService 定时检查后通过 app:update-status-changed 推送。
+ */
+export type AppUpdateStatusSnapshot = {
+	/** 最后一次后台检查完成时间（毫秒时间戳）；缺省 = 尚未检查。 */
+	lastCheckAt?: number;
+	/** 当前平台的更新交付能力。macOS 无 Developer ID 签名、Linux arm64 / deb / tar.gz 为 manual。 */
+	deliveryMode: AppUpdateDeliveryMode;
+	/** 手动交付的具体原因；automatic 时为 automatic。 */
+	deliveryReason?: AppUpdateDeliveryReason;
+	/** 自动下载偏好；manual 交付模式为 null（该开关不适用）。 */
+	autoDownload?: boolean | null;
+	/** PiDeck 应用更新状态；null = 尚未触发检查且无活动状态。 */
+	app: {
+		latestVersion?: string;
+		hasUpdate: boolean;
+		/** 用户跳过的版本（该版本不再主动提示，手动检测仍可查看）。 */
+		skippedVersion?: string;
+		/** 最近一次已提示过的版本（“每版本只提示一次”判定）。 */
+		notifiedVersion?: string;
+		/** 下载/安装状态机（electron-updater 事件驱动；manual 交付时为本地下载状态机）。 */
+		download: AppUpdateDownloadState;
+		/** manual 交付：按当前设备匹配到的推荐安装包；null/缺省 = 无匹配，退化到发布页。 */
+		recommendedDownload?: AppManualUpdateRelease | null;
+	} | null;
+	/** Pi CLI 更新状态；null = 尚未成功检查过。 */
+	piCli: {
+		currentVersion?: string;
+		latestVersion?: string;
+		hasUpdate: boolean;
+		/** 最近一次已提示过的版本。 */
+		notifiedVersion?: string;
+		error?: string;
+	} | null;
+	/** 内置模型目录（pi-ai-catalog）更新状态；null = 尚未成功检查过。 */
+	catalog: {
+		/** 当前生效版本（覆盖层优先，否则内置）；无有效目录为 null。 */
+		localVersion?: string | null;
+		/** 远端（GitHub main 分支）最新版本；检查成功时存在。 */
+		latestVersion?: string;
+		hasUpdate: boolean;
+		error?: string;
+	} | null;
+};
+
+export type AppLogLevel = "debug" | "info" | "warn" | "error";
+
+export type AppLogEntry = {
+	id: string;
+	time: number;
+	level: AppLogLevel;
+	scope: string;
+	message: string;
+	detail?: unknown;
+};
+
+export type AppLogQuery = {
+	level?: AppLogLevel | "all";
+	search?: string;
+	/** 起始时间（含），毫秒时间戳 */
+	from?: number;
+	/** 截止时间（含），毫秒时间戳 */
+	to?: number;
+	/** 兼容旧调用：返回最近 N 条 */
+	limit?: number;
+	/** 分页页码（0 基），与 pageSize 同时传入时走分页模式 */
+	page?: number;
+	pageSize?: number;
+};
+
+/** 分页日志结果：服务端按过滤条件分页，避免一次性拉全量/截断旧日志。 */
+export type AppLogPage = {
+	/** 当前页条目（时间倒序，最新在前） */
+	entries: AppLogEntry[];
+	/** 符合过滤条件的总条数 */
+	total: number;
+	/** 当前页码（0 基） */
+	page: number;
+	pageSize: number;
+	/** 是否还有下一页 */
+	hasMore: boolean;
+};
+
+export type PiRuntimeEvent = {
+	agentId: string;
+	event: unknown;
+};
+
+/**
+ * 更新日志拉取结果。
+ *
+ * markdown 为 null 表示所有源都失败、内容校验不通过且**没有本地缓存可兜底**——
+ * 此时 UI 应降级为「在浏览器打开」，不要向用户报网络错。
+ * pageUrl 始终有值，正是给这个降级路径用的。
+ */
+export type ChangelogPayload = {
+	/** markdown 正文；失败为 null。 */
+	markdown: string | null;
+	/** 实际取到内容的源；失败为 null。 */
+	source: "atomgit" | "github" | null;
+	/** 正文解析出的版本条目数（诊断用）。 */
+	versionCount: number;
+	/** CHANGELOG 网页地址，供降级「在浏览器打开」。 */
+	pageUrl: string;
+	/** 内容抓取时间（ISO）。缓存命中=当时；网络直取=本次；无内容=null。 */
+	fetchedAt: string | null;
+	/** 本次内容来自本地缓存（TTL 内复用，或网络失败兜底），未发生成功的网络请求。 */
+	fromCache: boolean;
+	/** 网络失败退回旧缓存：内容可能不是最新，UI 应提示「刷新」取最新。 */
+	stale: boolean;
+};
+
+/**
+ * pi CLI 更新日志拉取结果（用户点「更新详情」时按需拉取，见 main/pi/PiChangelogService）。
+ * markdown 为 null 表示所有源都失败或内容校验不通过——UI 降级为「在浏览器打开」；
+ * pageUrl 始终有值，正是给降级路径用的。
+ */
+export type PiReleaseNotesPayload = {
+	/** (current, latest] 区间的 markdown 正文；失败或区间为空为 null。 */
+	markdown: string | null;
+	/** 实际取到内容的源；失败为 null。 */
+	source: "jsdelivr" | "unpkg" | "github" | null;
+	/** 区间内的版本条目数。 */
+	versionCount: number;
+	/** CHANGELOG 网页地址，供降级「在浏览器打开」。 */
+	pageUrl: string;
+	/** 内容抓取时间（ISO）；内存缓存命中为当时时间，无内容为 null。 */
+	fetchedAt: string | null;
+	/** 区间因条数/字符上限被截断（截在版本边界）。 */
+	truncated: boolean;
+};

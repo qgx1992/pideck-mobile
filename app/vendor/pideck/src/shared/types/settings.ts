@@ -1,0 +1,1329 @@
+import type { AgentBackend } from "./agent";
+import type { AcpToolConfig } from "./acp";
+import type { SessionSortModeId } from "./session";
+import type { BusySendDelivery } from "../busySendDelivery";
+import type { SessionStatusPlacement } from "../sessionStatusPlacement";
+import { SESSION_TAB_MAX_WIDTH_DEFAULT } from "../sessionTabWidth";
+import { createDefaultExternalEditorSettings, type ExternalEditorSettings } from "./project";
+import type { RemoteProjectTrustRecord } from "./remoteTrust";
+import type { SecurityConfig } from "./security";
+import type { CustomThemeSnapshot } from "../customThemes";
+import { createDefaultSoundAlertSettings, type SoundAlertSettings } from "./soundAlert";
+
+export type SendShortcutMode = "enter-send" | "ctrl-enter-send" | "shift-enter-send";
+/** TPS 展示口径：流式生成速度 / 含首 token 等待的单次模型调用速度。 */
+export type TpsDisplayMode = "streaming" | "endToEnd";
+
+export type AppThemeMode = "system" | "light" | "dark" | "schedule";
+/** 主题色预设：data-accent 属性驱动 foundation.css 的 accent/logo 变量 */
+export type AppAccentMode = "default" | "green" | "blue" | "purple" | "amber" | "rose";
+/**
+ * 外观样式：只管形状与排版（字体、圆角、消息标记、额外 chrome），不决定颜色。
+ * 内置样式在 themePresets.ts STYLE_PRESETS 定义，CSS 走 `[data-appearance="<id>"]`：
+ * - classic：出厂默认，无任何形状覆盖；
+ * - terminal：等宽正文 + 直角框线 + `❯`/`⏺` 消息标记（terminalSkin.css）。
+ */
+export type AppStyleId = "classic" | "terminal";
+
+/**
+ * 外观配色：一套完整的颜色方案（表面/文字/边框/会话面板/Markdown/状态色 + 自带推荐主色），
+ * 与样式正交。CSS 走 `[data-palette="<id>"]`，classic-green 为出厂默认（无覆盖块 = :root 中性色板）。
+ * custom = 颜色完全来自自定义主题包 / customThemeOverrides，不套内置色板。
+ */
+export type AppPaletteId = "classic-green" | "fresh-green" | "graphite" | "sea-blue" | "warm-beige" | "tui" | "custom";
+
+/**
+ * @deprecated 单维外观主题 id（样式与配色合一的旧模型，含已下线的 glass / liquid-glass）。
+ * 仅供旧 settings.json 迁移使用，见 shared/themeSkinMigration.ts；新代码不要再读写 themeSkin。
+ */
+export type AppSkinId = "classic-green" | "fresh-green" | "graphite" | "sea-blue" | "warm-beige" | "terminal" | "glass" | "liquid-glass" | "custom";
+/** Logo 风格：pi-tui = pi 官方 TUI 三色像素标（coral/blue/yellow，默认）；classic = PiDeck 四块拼图 π；custom = 用户自备图片（logoCustomImage）。 */
+export type LogoStyle = "classic" | "pi-tui" | "custom";
+
+/** 解析 logo 风格：仅已知枚举视为显式选择；其余（null/undefined/未知旧值）一律回落默认 pi-tui。主进程窗口图标与渲染层 UI 共用。 */
+export function resolveLogoStyle(value: string | null | undefined): LogoStyle {
+	if (value === "classic" || value === "custom") return value;
+	return "pi-tui";
+}
+
+/** 应用显示名称的出厂值（品牌区、关于弹层同源）。 */
+export const APP_DISPLAY_NAME_DEFAULT = "PiDeck";
+/** 显示名称长度上限：品牌区是 18px 单行字标，再长会把项目分支名挤掉。 */
+export const APP_DISPLAY_NAME_MAX_LENGTH = 24;
+
+/**
+ * 解析应用显示名称：留空/纯空白/超长一律回落默认 PiDeck。
+ *
+ * 越界值回落而不是截断：名称是纯展示项，截断会产生「用户没写过的半截名字」这种更难理解的状态。
+ */
+export function resolveAppDisplayName(value: string | null | undefined): string {
+	const trimmed = typeof value === "string" ? value.trim() : "";
+	if (trimmed === "" || trimmed.length > APP_DISPLAY_NAME_MAX_LENGTH) return APP_DISPLAY_NAME_DEFAULT;
+	return trimmed;
+}
+
+/** 自定义 logo 图片（data URL）长度上限：设置文件要能随手备份/同步，base64 图片必须封顶（≈1.5MB）。 */
+export const CUSTOM_LOGO_DATA_URL_MAX_LENGTH = 1_500_000;
+export type AppLanguageMode = "system" | "zh-CN" | "zh-TW" | "en-US" | "pseudo";
+
+/**
+ * 判断语言标签是否属于繁体中文（zh-TW / zh-HK / zh-MO 与 zh-Hant-*）。
+ * 主进程与渲染层共用同一份判定：大小写与下划线都要归一，因为「system」模式下拿到的
+ * 既可能是 Electron 的 app.getLocale()（zh-TW）也可能是浏览器的 navigator.language（zh-Hant-TW）。
+ */
+export function isTraditionalChineseLanguageTag(language: string): boolean {
+	const normalized = language.trim().replace(/_/g, "-").toLowerCase();
+	return normalized.includes("hant") || /^zh-(tw|hk|mo)\b/.test(normalized);
+}
+export type LinkOpenMode = "external" | "internal";
+
+/** 主进程枚举出的可用于手机访问 Web 服务的局域网入口。 */
+export type WebNetworkAddress = {
+	address: string;
+	interfaceName: string;
+	cidr: string | null;
+	isPrivate: boolean;
+	family: "IPv4" | "IPv6";
+};
+/** 文件/Git Diff 在中间栏的默认打开方式：分屏与会话并排，或占满中间栏 */
+export type WorkspaceContentOpenMode = "split" | "maximize";
+/** 会话 Tab 打开模式：preview=单击为临时预览（发消息后自动晋升常驻），permanent=单击即常驻共存 */
+export type SessionTabOpenMode = "preview" | "permanent";
+/** 草稿本作用域：project=每个项目一份（默认，列表同时可读写全局草稿）；global=所有项目共用一份。 */
+export type ScratchPadScopeMode = "project" | "global";
+export type AppFontSizeMode = "compact" | "medium" | "large" | "xlarge";
+
+/** 更新源：atomgit = 国内 AtomGit 源（默认首选）；github = 官方 GitHub Release。 */
+export type UpdateSourceId = "atomgit" | "github";
+
+/** 内置镜像体检状态：ok=检测+下载预检全通；slow=通但实测速度低于阈值；broken=失败/超时/响应异常。 */
+export type MirrorHealthStatus = "ok" | "slow" | "broken";
+
+/** 单镜像体检结果（主进程探测，经 IPC 透传给设置页「更新源」展示）。 */
+export type MirrorHealthResult = {
+	id: UpdateSourceId;
+	status: MirrorHealthStatus;
+	/** latest.yml 响应耗时（ms）。 */
+	latencyMs: number;
+	/** Range 分片实测速度（KB/s）；探测失败时为 0。 */
+	speedKBps: number;
+	/** broken 原因摘要（不含敏感信息）。 */
+	error?: string;
+	/** 探测完成时间戳（ms）。 */
+	checkedAt: number;
+};
+
+/** 宠物缩放默认值：0.3 = 设置滑块 30%。出厂 100% 太大，新用户/缺省回退都用此值。 */
+export const DEFAULT_PET_SCALE = 0.3;
+/** toast 展示时长（ms）出厂值：全局统一时长，与渲染层 notice.ts 常量一致。 */
+export const DEFAULT_TOAST_DURATION_MS = 4000;
+/**
+ * toast 时长「常驻（不自动消失）」哨兵值。
+ * 必须用有限数：设置落盘走 settings.json，`JSON.stringify(Infinity)` 会变成 null，
+ * 升级后读回即丢失。渲染层在 configureNoticeDefaults 里把哨兵映射回 POSITIVE_INFINITY。
+ */
+export const TOAST_DURATION_STICKY_MS = -1;
+export type AppFontBaseMode = "system" | "sans" | "serif" | "custom";
+export type AppFontMonoMode = "system-mono" | "custom";
+
+/** 终端配色主题 id：inherit 是实现概念（跟随应用明暗取 pi-soft 亮/暗版），其余为固定配色 */
+export type TerminalThemeId = "inherit" | "solarized-light" | "solarized-dark" | "one-dark" | "monokai";
+/** 关闭终端标签的确认策略：never=从不问；running=有前台进程才问；always=总问 */
+export type TerminalConfirmCloseMode = "never" | "running" | "always";
+/** xterm 光标形状 */
+export type TerminalCursorStyle = "block" | "bar" | "underline";
+/** 主窗口启动尺寸预设：last=上次关闭时的窗口大小（读不到时顺延默认）；fullscreen 占满屏幕，maximized 最大化，其余为固定窗口 */
+export type StartupWindowMode = "last" | "fullscreen" | "maximized" | "normal-large" | "normal-medium" | "normal-compact";
+
+/**
+ * 一条扩展禁用记录：作用域区分 user/project 同名 source 的独立状态。
+ * scope 与 PiExtensionSummary.scope 对齐（user=全局 pi，project=项目 .pi）。
+ */
+export type DisabledExtensionEntry = {
+	scope: "user" | "project" | "unknown";
+	source: string;
+};
+
+export type AppSettings = {
+	useNativeTitleBar: boolean;
+	showNativeMenu: boolean;
+	sendShortcut: SendShortcutMode;
+	/**
+	 * 提示词增强用的模型；null/缺省 = 跟随会话模型（记录 > 引导页 > 部署/主进程默认）。
+	 * 非法形态（缺字段/非字符串）在 SettingsStore.update 时归一为 null。
+	 */
+	enhanceModel?: { provider: string; modelId: string } | null;
+	/** 增强时携带当前会话最近正文；缺省关闭，只有显式 true 才发送。 */
+	enhanceIncludeContext?: boolean;
+	/**
+	 * 输入预测：每轮答完后用一次模型调用预测用户下一句输入，空输入框里以 ghost 文案展示。
+	 * 缺省开启（老设置无此字段按开启处理）；显式 false 才关闭——关掉即完全不发请求。
+	 */
+	promptSuggestionEnabled?: boolean;
+	/**
+	 * 输入预测用的模型；null/缺省 = 跟随会话模型（与 enhanceModel 同一条优先级链，但两者互不影响）。
+	 * 非法形态（缺字段/非字符串）在 SettingsStore 加载与 update 时归一为 null。
+	 */
+	promptSuggestionModel?: { provider: string; modelId: string } | null;
+	/**
+	 * 全局快捷键用户覆盖：ShortcutId → accelerator（Electron 语法子集，见 shared/shortcuts.ts）。
+	 * 缺省键 = 平台默认值（macOS ⌘, 打开设置 / F12 开发者工具等）；设置页「快捷键管理」
+	 * 修改后写这里，主进程 before-input-event 匹配实时读取（无需重启）。
+	 * 可选以兼容旧 settings.json；未知 id / 非法 accelerator 的条目在保存时丢弃。
+	 */
+	shortcuts?: Record<string, string>;
+	/** 界面主题：system 跟随系统；schedule 按本地时钟在浅色/暗色之间切换 */
+	theme: AppThemeMode;
+	/** 跟随时间：浅色开始（HH:mm，含）。仅 theme=schedule 时生效。 */
+	themeScheduleLightStart: string;
+	/** 跟随时间：暗色开始（HH:mm，含）。仅 theme=schedule 时生效。 */
+	themeScheduleDarkStart: string;
+	/** 主题色（accent）预设，data-accent 驱动；新增预设只需扩充 AppAccentMode 与色板 */
+	accent: AppAccentMode;
+	/** 外观样式（形状/排版）：内置样式见 themePresets.ts STYLE_PRESETS，CSS 走 data-appearance */
+	themeStyle: AppStyleId;
+	/** 外观配色（颜色方案）：内置配色见 themePresets.ts PALETTE_PRESETS，CSS 走 data-palette；custom 走 customThemeOverrides/customTheme */
+	themePalette: AppPaletteId;
+	/**
+	 * @deprecated 旧版单维外观主题；读取旧 settings.json 时由 normalizeThemeAppearance 迁移到
+	 * themeStyle/themePalette，新写入不再产生该字段。
+	 */
+	themeSkin?: AppSkinId;
+	/** Logo 风格：可选以兼容旧 settings.json，缺省按默认 pi-tui 处理；启动画面经 localStorage 提前生效 */
+	logoStyle?: LogoStyle;
+	/**
+	 * 自定义 logo 图片（data URL，仅 data:image/*）：logoStyle="custom" 时窗口/托盘图标与界面落点都用它。
+	 * 可选以兼容旧 settings.json；空串 = 未设置（各落点回落默认标）。内嵌进设置文件是刻意的——
+	 * 跨机器/备份/重置都不会丢引用，也无需为读图新增 IPC 通道。
+	 */
+	logoCustomImage?: string;
+	/** 应用显示名称（品牌区与「关于」弹层）：留空 = 默认 PiDeck，见 resolveAppDisplayName */
+	appDisplayName?: string;
+	/** 自定义主题：CSS 变量名 → 值（键不含 -- 前缀），叠加在内置皮肤之上 */
+	customThemeOverrides: Record<string, string>;
+	/**
+	 * 自定义主题包快照（设置页「自定义主题」应用时写入）：优先于 customThemeOverrides，
+	 * 按当前亮暗选档注入；切换回内置皮肤时清除。快照内嵌于设置文件，主题文件被删后观感不丢。
+	 */
+	customTheme?: CustomThemeSnapshot;
+	/** 背景图文件名（userData/backgrounds/ 目录下），空串=不启用 */
+	backgroundImage: string;
+	/** 背景图可见度 0-1：0=背景色完全遮住图片，1=图片全显；面板/弹层会按语义分档透出 */
+	backgroundImageOpacity: number;
+	/** Wallpaper Engine 工坊目录（steamapps/workshop/content/431960），空串=未设置 */
+	weWorkshopDir: string;
+	/** 选中的 Wallpaper Engine 视频壁纸工坊 ID（纯数字），空串=不启用；与 backgroundImage 同时存在时视频优先 */
+	weWallpaperId: string;
+	/** 界面语言，system 跟随系统语言；pseudo 用于长文案布局压力测试 */
+	language: AppLanguageMode;
+	/** 启动时主窗口几何预设，默认 last（上次窗口位置和大小，读不到时顺延 maximized） */
+	startupWindowMode: StartupWindowMode;
+	piEnvironmentChecked: boolean;
+	/** 最近一次 pi 环境检测成功的结果缓存（命令路径 + 版本），打开设置直接显示，不重复检测 */
+	piInstall?: { command: string; version: string };
+	/** 会话 Tab 打开模式：preview=单击为临时预览（发消息后自动晋升常驻），permanent=单击即常驻共存 */
+	sessionTabOpenMode: SessionTabOpenMode;
+	/** 草稿本作用域：project=每个项目一份（默认）；global=所有项目共用一份。 */
+	scratchPadScope: ScratchPadScopeMode;
+	/**
+	 * 是否在首轮 agent 成功结束后，用当前 pi 模型异步生成会话标题。
+	 * 默认开启，让侧栏自动获得可读标题；会额外消耗一次模型调用和少量 token（设置说明已写明）。
+	 * 设置只在新建或重启 Agent 进程时注入，关闭不影响已有会话的主 agent。
+	 */
+	autoSessionTitle: boolean;
+	/**
+	 * Agent 忙碌时发送消息的默认投递行为。
+	 * "steer"=插入当前回合（模型在本次回合内尽快看到）；"followUp"=排队，当前回合结束后自动发送。
+	 * 仅决定渲染层入队后的默认投递语义；pi/dsh 主进程各自映射到 wire 协议
+	 * （pi streamingBehavior / DSH sessions.prompt mode）。缺省 "steer"，解析见 shared/busySendDelivery.ts。
+	 */
+	busySendDelivery: BusySendDelivery;
+	/** TPS 默认流式；仅切换展示，两个数值都由运行时计算，无需重启。 */
+	tpsDisplayMode: TpsDisplayMode;
+	/**
+	 * **遗留字段**：输入框底栏「快捷消息」的条目曾存在这里。
+	 * 现已改为独立配置文件 userData/quick-messages.json（主进程 QuickMessageStore，读写都操作该文件），
+	 * 出厂清单在随包资源 resources/quick-messages.default.json。
+	 * 保留此字段只为升级时作「首次迁移种子」：用户升级后已改过的条目不能丢；
+	 * 渲染层不再读写它（改走 quickMessages:get / quickMessages:save）。
+	 */
+	quickMessages: string[];
+	/** 是否启用会话右侧的 Git 源代码管理入口与面板，默认开启以保持升级前行为。 */
+	enableGitManagement: boolean;
+	/** Git 提交摘要生成提示词模板，{diff} 会被替换为实际 diff 内容 */
+	gitCommitMessagePrompt: string;
+	/** Git 提交摘要使用的 pi provider；为空时生成前提示用户配置 */
+	gitCommitMessageProvider: string;
+	/** Git 提交摘要使用的模型 ID；为空时生成前提示用户配置 */
+	gitCommitMessageModel: string;
+	/**
+	 * Git 可执行文件绝对路径（如 C:\Program Files\Git\cmd\git.exe）。
+	 * 为空表示自动解析：优先 PATH 中的 git，回退到各平台已知安装位置。
+	 * 用户显式配置后，所有 git 子进程（含 worktree）都使用该路径。
+	 */
+	gitExecutablePath: string;
+	/**
+	 * DSH 沙箱 runner 用的本机 Node 绝对路径（Windows 必须是 CUI node.exe）。
+	 * 空串 = 自动探测 PATH / 版本管理器 / 应用数据目录里的专用副本。
+	 * 不随包分发，避免安装包再涨 ~86MB；可在开发设置里一键下载到 userData。
+	 */
+	dshRunnerNodePath: string;
+	/** 关闭窗口时隐藏到系统托盘而不是退出 */
+	closeToTray: boolean;
+	/**
+	 * 单实例模式：再次打开应用时复用已有窗口（托盘隐藏也会唤起）。
+	 * 默认 true；关闭后允许同时跑多个 PiDeck 进程。
+	 */
+	singleInstance: boolean;
+	/** 会话结束时发送系统通知 */
+	enableNotifications: boolean;
+	/**
+	 * 声音提醒（会话完成/异常/等待输入时播放提示音）。
+	 * 独立于系统通知 enableNotifications：通知关闭仍可只听声音，反之亦然。
+	 * 缺省用 DEFAULT_SOUND_ALERT_SETTINGS（见 shared/types/soundAlert.ts）。
+	 */
+	soundAlert: SoundAlertSettings;
+	/**
+	 * 非聚焦会话收到 Ask 提问（select/confirm/input/editor/batch_ask）时发送系统通知。
+	 * 默认关闭：与通用 enableNotifications 解耦，用户可单独控制提问提醒，避免打扰。
+	 */
+	askNotificationEnabled: boolean;
+	/**
+	 * 仅失焦提醒：PiDeck 窗口有焦点（用户正在看）时不弹系统通知、不播提示音，只有窗口失焦时才提醒。
+	 * 默认关闭 = 只要会话有结果就提醒，与窗口是否在前台无关。
+	 * 门控范围：主进程系统通知（会话完成/Ask 提问，见 AgentManager 与 index.ts 定时任务通知）
+	 * + 提示音（主进程 SoundAlertService 判定后推 `sounds:play`）；应用内 toast 不受影响，它本来就只在窗口里可见。
+	 */
+	alertOnlyWhenUnfocused: boolean;
+	/** 激活 Agent 数量提醒（人文关怀）：激活数达到阈值时，启动时提示关闭空闲会话释放内存。默认开启。 */
+	agentCountReminderEnabled: boolean;
+	/**
+	 * 公告通知：拉取到新未读公告时在右上角弹 toast 提醒（默认开启）。
+	 * 关闭后仅保留侧栏公告入口的红点（公告中心随时可看），不再主动弹窗；
+	 * 弹出时机由渲染层忙碌检测控制（输入中/模态打开/窗口隐藏时延迟），与本开关解耦。
+	 */
+	announcementNotificationEnabled: boolean;
+	/**
+	 * 应用内 toast 的展示时长（ms），全局统一口径：所有提示（含调用方显式传入的时长、
+	 * error/warning/question 档）都按此值停留，只有调用方要求「常驻」的提示不受影响。
+	 * 起因是扩展 ctx.ui.notify 等提示硬编码 1500ms，用户普遍反馈来不及看。
+	 * 取值：有限正数毫秒（主进程钳制 1000–60000）或 TOAST_DURATION_STICKY_MS(-1)=常驻；
+	 * 非法值读取时钳回默认。渲染层把哨兵映射为 Number.POSITIVE_INFINITY。
+	 */
+	toastDurationMs: number;
+	/** 是否在会话中显示模型思考过程，默认开启 */
+	showThinking: boolean;
+	/**
+	 * 流式对话时是否自动展开中间过程（思考/工具详情）。
+	 * false（默认）：对话过程中保持折叠（历史轮与最新轮都不自动撑开），手动展开的仍可查看；
+	 * true：最新轮流式输出时自动展开。手动开合状态始终优先于本设置。
+	 */
+	expandInterimDuringStream: boolean;
+	/**
+	 * 时间线是否按「过程组」显示（实验特性）。
+	 * true（默认）：一轮里连续的思考与工具调用合并成过程组，点开组头才展开明细；
+	 * false：保持平铺显示（连续思考/工具调用逐条铺开）。
+	 */
+	processGroupDisplay: boolean;
+	/** 是否开启开发者控制台（DevTools） */
+	showDevTools: boolean;
+	/**
+	 * 开发诊断：内存 CSV、事件循环延迟、关键路径耗时。
+	 * 默认 false（生产零开销）；打开后写入 userData/diagnostics/，设置页可看快照。
+	 * 用来追查「点开会话整窗卡死」这类主进程阻塞，不必改环境变量重启。
+	 */
+	developerDiagnostics: boolean;
+	/**
+	 * Electron Chromium 渲染进程沙箱（与 pi Agent 无关）。
+	 * false（默认）：关闭沙箱，兼容 Windows 安全软件/旧 GPU 驱动；
+	 * true：启用 Chromium 沙箱，需重启 PiDeck 后生效。
+	 */
+	electronChromiumSandbox: boolean;
+	/** 是否给 pi agent 子进程注入代理环境变量，不影响 desktop 自身网络请求 */
+	piProxyEnabled: boolean;
+	/** pi agent 使用的代理地址，例如 http://127.0.0.1:7890 */
+	piProxyUrl: string;
+	/** pi agent 代理绕过列表，对应 NO_PROXY 环境变量 */
+	piProxyBypass: string;
+	/**
+	 * @deprecated 旧版「按供应商走代理」白名单（2026-03 被 piProxyModels 模型级白名单取代，
+	 * 设置 UI 已移除供应商选项）。字段保留并以供应商名单兜底读取：升级前已配置的旧数据仍生效，
+	 * 避免行为突变（见 sessionProxyPolicy 的 resolveListedProxyMode）。供应商名与 models.json 的 provider key 一致。
+	 */
+	piProxyProviders: string[];
+	/**
+	 * 按模型过滤的 pi 代理白名单（比 piProxyProviders 更细的粒度）：非空时仅名单内模型强制走代理
+	 * （复用 piProxyUrl），名单外强制直连；空数组 = 不按模型过滤（回落供应商名单 / 全局设置）。
+	 * 条目格式为 `provider/modelId`（如 "openai/gpt-4o"），与会话记录 model.provider + model.modelId 拼接一致，
+	 * 避免不同 provider 下同名模型互相误伤；新建会话首条请求即按模型自动匹配代理，无需先激活再手动切。
+	 */
+	piProxyModels: string[];
+	/**
+	 * 是否给 ACP CLI 子进程注入代理环境变量（CodeBuddy / Claude / Codex 等）。
+	 * 与 pi 代理分开配置：ACP CLI 的模型请求走它们自己的端点，出口常与 pi 不同。
+	 * 关闭 = 不注入（继承系统环境变量，与引入该设置前的行为一致）。
+	 */
+	acpProxyEnabled: boolean;
+	/** ACP CLI 使用的代理地址，例如 http://127.0.0.1:7890 */
+	acpProxyUrl: string;
+	/** ACP CLI 代理绕过列表，对应 NO_PROXY 环境变量 */
+	acpProxyBypass: string;
+	/** 是否给桌面端自身网络请求启用代理，不影响已启动的 pi agent 子进程 */
+	desktopProxyEnabled: boolean;
+	/** 桌面端自身网络请求使用的代理地址，例如 http://127.0.0.1:7890 */
+	desktopProxyUrl: string;
+	/** 桌面端代理绕过列表，对应 Electron proxyBypassRules */
+	desktopProxyBypass: string;
+	/** 用户手动指定的 pi CLI 命令路径，自动检测不到时用于兜底；同时也是「当前使用」的指针 */
+	customPiPath: string;
+	/**
+	 * 用户自己添加的 pi 候选路径（设置页列表里可随时切换）。
+	 * 与 customPiPath 的分工：本字段只是“备选池”，只影响列表展示与切换；
+	 * 真正生效的永远只有 customPiPath 那一条——启动 pi / 更新 / 扩展管理都只读它。
+	 */
+	piCustomPaths: string[];
+
+	/** 是否发送匿名、低频、最小字段的使用统计 */
+	telemetryEnabled: boolean;
+	/** 是否开启局域网 Web 服务 */
+	webServiceEnabled: boolean;
+	/**
+	 * Web 服务监听地址。默认 0.0.0.0（绑定到所有网卡）：同网段任意主机可访问，
+	 * 需配合 webServiceRequiresAuth 强制令牌校验，避免未授权调用。
+	 */
+	webServiceHost: string;
+	/** Web 服务监听端口 */
+	webServicePort: number;
+	/**
+	 * 鉴权开关。开 = 所有 /api/*（/api/health 除外）需携带访问令牌，环回地址也不例外；
+	 * 默认 true，与默认 0.0.0.0 绑定配合，阻断局域网未授权访问。
+	 */
+	webServiceRequiresAuth: boolean;
+	/**
+	 * 固定访问令牌。持久化：重启服务/应用不换新，远程设备已保存的链接不失效；
+	 * 缺省时首次启动自动生成并回写。可由设置页手动修改或重新生成。
+	 */
+	webServiceToken?: string;
+	/** 令牌生成/最后修改时刻（epoch ms），过期计时的基准；不随重启重置 */
+	webServiceTokenGeneratedAt?: number;
+	/** 令牌有效期（ms），0 = 永不过期（默认）；从 generatedAt 起算，到期后请求 401 */
+	webServiceTokenExpiresIn?: number;
+	/**
+	 * cloudflared 隧道传输协议：http2 = TCP 443（默认，规避国内 UDP QoS 限速）、
+	 * quic = UDP、auto = cloudflared 自行回退。用户环境差异大，允许调整。
+	 */
+	webRemoteCloudflaredProtocol?: WebRemoteCloudflaredProtocol;
+	/** cloudflared 额外启动参数（空白切分后数组直传子进程，无 shell 注入面）；如 "--edge-ip-version 6" */
+	webRemoteCloudflaredExtraArgs?: string;
+	/**
+	 * EasyTier 虚拟 IPv4 手动兜底：EasyTier GUI 默认模式不开放本地管理端口时，
+	 * easytier-cli 读不到节点，由用户从客户端抄写虚拟 IP；空 = 不启用手动地址。
+	 */
+	webRemoteEasyTierIp?: string;
+	/**
+	 * 用户指定的 easytier-cli 可执行文件路径（解压版 CLI / 非默认目录安装时自动检测可能找不到）；
+	 * 空 = 只用自动检测。填写后优先使用该路径。
+	 */
+	webRemoteEasyTierCliPath?: string;
+	/**
+	 * 由 PiDeck 托管的 EasyTier 网络标识。三者齐备时组件接管 core 的启动与配置生成，
+	 * 缺任意一项都退回只读探测（网络仍由用户自己的客户端管理）。
+	 */
+	webRemoteEasyTierNetworkName?: string;
+	/** 由 PiDeck 托管的 EasyTier 网络密钥；明文存储，仅在本机 settings.json 中，不经 Web API 投影。 */
+	webRemoteEasyTierNetworkSecret?: string;
+	/** 共享节点列表（tcp/udp/ws/wss 等 URL）；可为空，为空时只能与局域网内节点互联。 */
+	webRemoteEasyTierPeers?: string[];
+	/** 本地生成的匿名安装标识，不包含账号、路径或机器名 */
+	telemetryInstallId?: string;
+	/** 最近一次发送 app_heartbeat 的本地日期，格式 YYYY-MM-DD */
+	telemetryLastHeartbeatDate?: string;
+	/**
+	 * 「请作者喝咖啡」的稳定用户标识（首次查询余额时生成，只在本机持久化）。
+	 * 不是账号：换机/重装即换新 ID，未消耗完的次数留在旧 ID 下。
+	 */
+	watchaUserId?: string;
+	/** 应用安装类型：portable（便携版）或 installed（安装版），启动时自动检测并持久化 */
+	installationType?: "portable" | "installed";
+	/** RPC 调用超时时间（毫秒），默认 600000（10 分钟），用于长时间运行的命令 */
+	rpcTimeout: number;
+	/** 外部链接打开方式：external 使用系统默认浏览器，internal 使用应用内独立窗口 */
+	linkOpenMode: LinkOpenMode;
+	/**
+	 * 从文件树 / Git 打开文件或 Diff 时，中间栏默认布局。
+	 * split=与会话分屏；maximize=占满中间栏（会话暂时收起，不进侧栏）。
+	 */
+	workspaceContentOpenMode: WorkspaceContentOpenMode;
+	/**
+	 * 内容区最大宽度（px），0 表示不限制（填满 chat-pane）。用于限制消息行宽，左右留白。
+	 * @deprecated 由 chatContentWidthPct 取代：保留字段以兼容旧 settings.json，新代码不再读取。
+	 */
+	contentMaxWidth: number;
+	/**
+	 * 聊天内容区宽度占聊天面板的百分比（60–100，100=无留白全宽）。
+	 * 消息与输入框共享同一留白（--chat-content-pct），分屏窄栏时由容器查询自动收敛到 100%。
+	 */
+	chatContentWidthPct: number;
+	/**
+	 * 会话状态（待办 / 修改文件 / 子代理）显示位置：右侧边栏下半区或输入框上方，二选一。
+	 * 缺省 composer；解析见 shared/sessionStatusPlacement.ts。
+	 */
+	sessionStatusPlacement: SessionStatusPlacement;
+	/**
+	 * 发送消息后是否把时间线滚动到最新（缺省开启；显式 false 才关闭）。
+	 * 关闭后发送不动视口：用户上翻读历史时不会被拽回底部；停在底部时仍由跟底引擎跟随新回复。
+	 * 消费方是 useSessionTimelineController 的发送定位 effect（决策时刻读 atom 镜像）。
+	 */
+	scrollToLatestOnSend?: boolean;
+	/**
+	 * 会话 Tab 最大宽度（px，80–400，默认 104=旧硬编码值）。仅封顶不设下限宽度：
+	 * Tab 按内容收缩（w-fit），短标题的 Tab 不受影响；有前置徽标时上限另加
+	 * SESSION_TAB_BADGE_EXTRA_WIDTH（28px，旧 132px 差值）。外观设置滑杆可调。
+	 */
+	/** Navigation presentation only; does not change session identities. */
+	navigationMode: "tabs" | "simple";
+	sessionTabMaxWidth: number;
+	/** 编辑器最大文件大小（MB），超过此大小的文件不加载编辑器。默认 5MB。 */
+	maxEditorFileSizeMB: number;
+	/** 外部编辑器配置：首次异步检测后保存，用户可在设置中手动覆盖路径。 */
+	externalEditors: ExternalEditorSettings;
+	/** 是否启用 WSL fallback：在 Windows 自动检测不到 pi 时，尝试从 WSL 启动 pi */
+	wslEnabled: boolean;
+	/** WSL 发行版名称，如 Debian、Ubuntu */
+	wslDistro: string;
+	/** WSL 用户名，如 piuser */
+	wslUser: string;
+
+	// ── 桌面宠物（全局聚合单宠，默认关闭，不破坏现状） ──
+	/** 是否启用桌面宠物悬浮窗，默认 false：关闭后应用与现状完全一致 */
+	petEnabled: boolean;
+	/** 当前选中的宠物包 id，默认内置水獭 */
+	petId: string;
+	/** 宠物窗是否始终置顶，默认 true */
+	petAlwaysOnTop: boolean;
+	/** 宠物缩放比例 0.3-2.0，默认 DEFAULT_PET_SCALE(0.3=30%)，控制窗口与 sprite 渲染尺寸 */
+	petScale: number;
+	/** 是否启用 idle 巡游（无任务时沿屏幕底部左右走动），默认 true；
+	 *  巡游为低优先级 UI 行为，running/failed/review/逗弄 时自动让位。 */
+	petPatrolEnabled: boolean;
+	/** 巡游碰边后 idle 停顿时长（分钟），默认 5，范围 1–30 */
+	petPatrolPauseMin: number;
+
+	// ── 悬浮球（floater）：主窗口隐藏后屏幕角落的常驻小圆点，点开进入小任务浮窗/工作台 ──
+	/** 是否启用悬浮球，默认 false：开启后主窗口可隐藏为 64px 悬浮球，不挡屏 */
+	floatingBallEnabled: boolean;
+	/** 悬浮球点击后的展开目标：mini=极简浮窗（状态+快捷输入+最近会话），compact=小任务紧凑模式（主窗口紧凑化） */
+	floatingBallExpandTarget: "mini" | "compact";
+	/** 悬浮球是否始终置顶，默认 true */
+	floatingBallAlwaysOnTop: boolean;
+	/** 悬浮球是否显示运行中任务数量角标，默认 true：关闭后球面不再叠加数字徽章 */
+	floatingBallShowRunningBadge: boolean;
+	/** 悬浮球边缘吸附：拖动松手后是否自动贴到屏幕左右边缘，默认 true */
+	floatingBallSnapToEdge: boolean;
+
+	// ── 闲置 Agent 内存优化：自动释放长时间闲置的 agent 进程，降低多会话内存占用 ──
+	/** 是否自动释放闲置 agent，默认 true：开关关闭后闲置 agent 常驻内存不释放 */
+	idleAgentAutoRelease: boolean;
+	/** 保留的闲置 agent 数量，默认 5：超出该数量的闲置 agent（且满足闲置时长）按闲置最久优先释放 */
+	idleAgentKeepCount: number;
+	/** 闲置判定时长（分钟），默认 60：agent 连续闲置超过该时长才可被释放 */
+	idleAgentTimeoutMin: number;
+
+	// ── standby 预热池：空闲时预先启动一个已握手的 pi 进程，新建/草稿会话激活近即时 ──
+	/** 是否启用 standby 预热（默认 true）：每项目最多一个，约 300MB 内存，10 分钟未使用自动回收。
+	 *  修改后只影响下一次预热/认领（进程 spawn 参数无法热更，指纹不匹配自动回退正常创建）。 */
+	standbyRuntimeEnabled?: boolean;
+
+	// ── session-store sidecar 开关（默认 true）──
+	/** 是否让会话历史读取优先问 Go sidecar 的条目表。
+	 *  Wave 2（只做进程内缓存）时收益门禁未过：sidecar 冷解析 251–343ms，比 TS 冷建表 99–188ms 慢；
+	 *  Wave 2b 把条目表落盘后，重启后首次打开 19–31MiB 会话只需 14–20ms（含进程 boot），
+	 *  比 TS 冷建表快 5–12×，因此默认开启（无 UI，可在 settings.json 置 false 回退纯 TS 解析）。
+	 *  详见 docs/archive/plans/session-data-plane-plan.md §8.11。 */
+	sessionStoreEnabled?: boolean;
+
+	// ── CUA（Computer Use Agent）：让 Agent 观察屏幕并注入鼠标/键盘输入 ──
+	/**
+	 * 是否启用 CUA 能力，默认 false。
+	 * 开启后主进程才会监听本地 MCP HTTP 端点并把 `pideck-cua` 写入
+	 * ~/.pi/agent/mcp.json；关闭时不监听、不改动 pi 配置（默认姿态为「关」）。
+	 * 真实输入受全局/会话杀开关保护；关闭自动审批后，每次写操作需显式确认。
+	 */
+	cuaEnabled: boolean;
+	/**
+	 * CUA 免审批（自动放行），默认 true；保留用户显式关闭的选择。
+	 * 开启后写操作（点击/输入/滚动）跳过逐次审批对话框直接执行；
+	 * 全局/会话杀开关仍然生效（关掉 CUA 仍一律拒绝）。风险自担型开关。
+	 */
+	cuaAutoApprove: boolean;
+
+	// ── 浏览器 Agent：让 Agent 观察并操作内置浏览器当前页面（browser-use） ──
+	/**
+	 * 是否启用内置浏览器 Agent 能力，默认 false。
+	 * 开启后 `browser_*` 工具注册到主进程 MCP host（与 CUA 共用端点与 mcp.json 条目）；
+	 * 关闭时不注册工具；若 CUA 也关闭则端点不监听、不改动 pi 配置。
+	 * 写动作默认逐次审批；只读工具（状态/快照/查找/等待）免审批。
+	 */
+	browserAgentEnabled: boolean;
+	/**
+	 * 浏览器 Agent 自动审批（免审批），默认 true（与 CUA 一致）。
+	 * 内置浏览器使用用户真实登录态，风险自担；关闭后每次写操作逐次确认。
+	 */
+	browserAgentAutoApprove: boolean;
+
+	// ── 智能体记忆：跨后端（pi / DSH / ACP）共享的长期记忆 ──
+	/**
+	 * 是否启用智能体记忆，默认 false。
+	 * 开启后启动时把 `pideck-agent-memory`（本地 stdio MCP 服务器）写进
+	 * ~/.pi/agent/mcp.json，并作为 mcpServers 挂给 ACP 会话；关闭时只删自己那一项，
+	 * 不改动用户在 mcp.json 里的其它服务器。记忆文件在 <userData>/agent-memory/，关掉不删除。
+	 */
+	agentMemoryEnabled: boolean;
+	/**
+	 * 记忆学习循环：回合结算后按阈值让模型从会话里提炼记忆（默认关）。
+	 * 会产生模型调用与费用，因此与「启用记忆」分开一格开关。
+	 */
+	agentMemoryAutoLearnEnabled: boolean;
+
+	// ── 模型收藏：ModelPicker 中用 ☆ 标记，收藏的模型在列表中置顶 ──
+	/** 收藏的模型 ID 列表 */
+	favoriteModels: string[];
+
+	// ── 提供商与模型显示开关：隐藏后模型页卡片列表与模型选择器都不再展示 ──
+	/**
+	 * 用户主动隐藏的提供商 key 列表（与 models.json 的 provider key 一致）。
+	 * 隐藏后：Pi 模型页卡片移入页面底部「已隐藏」折叠区，模型选择器不再显示其模型；
+	 * 配置本身不删除，恢复显示即可继续使用。可选以兼容旧 settings.json。
+	 */
+	hiddenProviders?: string[];
+	/**
+	 * 用户主动隐藏的模型标识列表（格式为 "provider/modelId"）。
+	 * 隐藏后：配置页移入该 provider 下的「已隐藏模型」折叠区，模型选择器不再显示；
+	 * 配置本身不删除，恢复显示即可继续使用。可选以兼容旧 settings.json。
+	 */
+	hiddenModels?: string[];
+	/**
+	 * 用户主动隐藏的认证供应商 key 列表（与 auth.json 的 provider key 一致）。
+	 * 隐藏后：Pi 认证页卡片移入页面底部「已隐藏」折叠区；
+	 * 配置本身不删除（仍正常保存于 auth.json 并供 pi 加载），恢复显示即可继续展开编辑。可选以兼容旧 settings.json。
+	 */
+	hiddenAuthProviders?: string[];
+
+	// ── 功能模块显示开关：外观设置里按需收起不用的模块 UI 入口 ──
+	/**
+	 * 用户主动隐藏的功能模块 id 列表（清单与语义见 shared/hiddenModules.ts）。
+	 * 隐藏后：对应设置 tab 从侧栏消失；`dsh` 还会收起配置管理的 DSH 分页与新建会话的 DSH 选项，
+	 * `imagegen` 还会收起输入框的生图入口。只隐藏入口，不清配置、不停已启用的后台功能；
+	 * 命令面板仍可搜到并一键恢复显示。默认 `[]` 全部显示；可选以兼容旧 settings.json。
+	 */
+	hiddenModules?: string[];
+
+	/**
+	 * 用户主动隐藏的输入框功能入口 id 列表（清单与语义见 shared/composerFeatures.ts）。
+	 * 可关项：提示词增强/语音输入/快捷消息/权限/Git 分支；只隐藏入口，不停功能与快捷键。
+	 * 默认 `[]` 全部显示；可选以兼容旧 settings.json。
+	 */
+	hiddenComposerFeatures?: string[];
+
+	// ── 供应商卡片排序：用户在模型页拖拽/上移下移后写入的自定义顺序 ──
+	/**
+	 * Pi 模型页供应商卡片的用户自定义顺序（provider key 数组，与 models.json 一致）。
+	 * 只影响展示顺序，不改动 models.json；未列出的 provider 保持配置原序追加在后
+	 * （新增/改名的 provider 因此不会被顶到最前）。可选以兼容旧 settings.json。
+	 */
+	providerOrder?: string[];
+	/**
+	 * DSH 模型页供应商卡片的用户自定义顺序（llm-pi-ai providers 的 provider 名数组）。
+	 * 语义同 providerOrder；与 Pi 侧分开存放，避免两套配置互相污染顺序。
+	 */
+	dshProviderOrder?: string[];
+
+	// ── 模型选择器分组排序：记录最近使用的供应商 ──
+	/**
+	 * 最近使用的供应商 ID 列表（最新在前，最多 8 个），主进程在 sendPrompt 接受时自动记录，
+	 * 与 lastUsedModel 同点写入。模型选择器按此优先排列供应商分组：最近用过的排最前，
+	 * 没记录过的供应商仍按内置置顶 + 字母序。可选以兼容旧 settings.json。
+	 * 注意：被 providerOrder 显式排序过的供应商不再参与最近置顶（自定义顺序优先），
+	 * 此处只对「没自定义排过序」的供应商生效。
+	 */
+	recentProviders?: string[];
+
+	// ── 新会话默认模型：记录用户最后一次实际使用的供应商/模型 ──
+	/**
+	 * 用户最后一次发送消息时使用的模型（主进程在 sendPrompt 接受时自动记录）。
+	 * 为「新会话默认」提供 lastUsed 语义——新会话默认 = 上次真正用过的供应商/模型，
+	 * 而非固定配置。可选以兼容旧 settings.json；模型被删除后由解析器校验存在性自动回退。
+	 */
+	lastUsedModel?: { provider: string; modelId: string };
+
+	// ── 字体配置：沿用主题机制实时生效，写入 documentElement token ──
+	/** 全局字号基准档位；未单独设置各区域时，所有字号 token 均由此推导 */
+	fontSize: AppFontSizeMode;
+	/** UI 字号覆盖；null 表示跟随 fontSize。控制 sidebar、按钮、列表、弹窗等 */
+	uiFontSize: AppFontSizeMode | null;
+	/**
+	 * 会话 Tab 栏字号覆盖；null 表示跟随 uiFontSize（而非 fontSize）。
+	 * 为什么回落界面轨：Tab 标题历史上吃的是界面轨的 --font-size-micro，
+	 * 若回落全局字号，「只改过界面字号」的用户开启本开关后 Tab 会突变。
+	 */
+	tabBarFontSize: AppFontSizeMode | null;
+	/** 会话正文字号覆盖；null 表示跟随 fontSize。控制用户消息与助手回复 */
+	chatFontSize: AppFontSizeMode | null;
+	/** 输入框字号覆盖；null 表示跟随 fontSize。控制 composer 输入区 */
+	inputFontSize: AppFontSizeMode | null;
+	/** 全局窗口缩放比例，1 为 100%；通过 webContents.setZoomFactor 生效 */
+	zoomFactor: number;
+	/** UI 基础字体预设，默认使用系统字体；system 跟随系统字体栈；custom 时使用 fontFamilyBaseCustom */
+	fontFamilyBase: AppFontBaseMode;
+	/** fontFamilyBase=custom 时的自定义字体族栈，原样写入 CSS font-family */
+	fontFamilyBaseCustom: string;
+	/** 等宽字体预设，system-mono 跟随系统等宽字体；custom 时使用 fontFamilyMonoCustom */
+	fontFamilyMono: AppFontMonoMode;
+	/** fontFamilyMono=custom 时的自定义字体族栈，原样写入 CSS font-family */
+	fontFamilyMonoCustom: string;
+
+	// ── 终端（外观/行为/启动）──
+	/** 终端配色主题 id。inherit=跟随应用明暗（深色用 pi-soft 暗版） */
+	terminalTheme: TerminalThemeId;
+	/** 终端字号（px）。为 null 时跟随外观设置的 UI 字号档位 */
+	terminalFontSize: number | null;
+	/** 终端字体族自定义栈。空串时使用 --font-family-mono（外观设置的代码字体） */
+	terminalFontFamily: string;
+	/** 终端滚动回放行数上限（下次新开终端生效） */
+	terminalScrollback: number;
+	/** 光标形状 */
+	terminalCursorStyle: TerminalCursorStyle;
+	/** 光标是否闪烁 */
+	terminalCursorBlink: boolean;
+	/** 选区变化时是否自动复制到系统剪贴板 */
+	terminalCopyOnSelect: boolean;
+	/** 终端内容区上下内边距（px） */
+	terminalPaddingY: number;
+	/** 关闭终端标签时的确认策略 */
+	terminalConfirmClose: TerminalConfirmCloseMode;
+	/** 可选的终端启动命令：非空时新终端在 shell 启动后立即执行该命令 */
+	terminalStartupCommand: string;
+
+	// ── 更新检测 ──
+	/**
+	 * v0.7.4 起检查永远自动（不再提供「禁用版本检测」开关）；
+	 * 旧数据中的 disableUpdateCheck 字段被忽略（读取时不再消费）。
+	 */
+	/**
+	 * 是否自动下载新版本（发现新版本后直接后台下载安装包，完成后提示重启安装）。
+	 * 默认 true；关闭后仅提示有更新，手动点「立即下载」。
+	 */
+	autoDownloadUpdates: boolean;
+	/**
+	 * 是否自动更新 pi-ai 模型目录（后台检查发现新版本时直接拉取并启用覆盖层）。
+	 * 默认 true：覆盖层写入带 manifest 校验与上一版备份，可随时一键还原；
+	 * 关闭后只在设置页提示有更新，由用户手动点「更新到最新」。
+	 */
+	catalogAutoUpdate: boolean;
+	/**
+	 * 更新源："github" 走 GitHub Release 官方源（app-update.yml 原生链路）；
+	 * 其余为国内镜像前缀代理（generic provider 拼 releases/latest/download）；
+	 * "custom" 用 customUpdateSourceUrl 的镜像前缀。
+	 * 默认 "atomgit"（v0.7.5 起，国内加速源为第一首选）。
+	 */
+	updateSource: UpdateSourceId;
+	/** updateSource="custom" 时的镜像前缀（如 https://mirror.example.com），拼接规则见 updateSources.ts。 */
+	customUpdateSourceUrl: string;
+	/**
+	 * updateSource 一次性迁移标记：v0.7.5 将默认源从 github 切为 atomgit 时，
+	 * 对已持久化过 "github" 的旧用户补一次迁移到 atomgit；置 true 后永不重复迁移，
+	 * 用户后续显式改回 github 会被尊重。缺省 = 未迁移（仅旧 settings.json 会出现）。
+	 */
+	updateSourceAtomgitMigrated?: boolean;
+	/** 上次后台检查完成时间（毫秒时间戳）；缺省 = 从未检查。 */
+	updateLastCheckAt?: number;
+	/** 最近一次“已提示过”的 PiDeck 版本（弹窗关闭后写入，用于“每版本只弹一次”）；缺省 = 未提示过任何版本。 */
+	updateNotifiedVersion?: string;
+	/** 用户跳过的 PiDeck 版本（该版本不再主动提示，手动检测仍可查看）；缺省 = 未跳过。 */
+	updateSkippedVersion?: string;
+	/** 最近一次“已提示过”的 Pi CLI 版本；缺省 = 未提示过。 */
+	updatePiNotifiedVersion?: string;
+	/** 是否已看过「更新圆点」的首次解释气泡（coachmark 一次性教育标记）；缺省 = 未看过。 */
+	updateDotHintSeen?: boolean;
+
+	// ── Agent 后端 ──
+	/**
+	 * 新建会话的默认后端（侧栏「+」/ 引导页 / 并行问询共用）。
+	 * "pi" = 经典 pi CLI 后端；"dsh" = DeepSeek Harness 内嵌后端。
+	 * 缺省 "pi"（2026-12 兼容期调整：默认回归 pi，用户可在设置中切换为 dsh）。
+	 */
+	defaultAgentBackend: AgentBackend;
+	/**
+	 * 用户是否手动指定过默认后端（设置页选中 pi/dsh 即置 true）。
+	 *
+	 * 缺省 false = 自动：只装了 DSH runtime 而没有 pi 时用 dsh，其余情况用 pi
+	 * （见 resolveAutoAgentBackend）。一旦用户自己选过，自动逻辑不再改写，
+	 * 否则「我明明选了 pi，装个 DSH 就被改掉」会让人无法信任这个设置。
+	 */
+	defaultAgentBackendManual?: boolean;
+
+	// ── Agent 启动诊断/加速（开发设置） ──
+	/**
+	 * 启动 pi RPC 时附加 --offline，跳过 pi 启动期模型目录网络刷新。
+	 * 桌面端模型列表来自本地 models.json，默认开启以加快冷启动。
+	 */
+	piRpcOffline: boolean;
+	/**
+	 * 启动 pi RPC 时附加 --no-extensions，跳过扩展发现与加载。
+	 * 用于排查「坏扩展导致 RPC 起不来」；开启后 todo/plan/ask 等扩展不可用。
+	 */
+	piRpcNoExtensions: boolean;
+	/**
+	 * 启动 pi RPC 时附加 --no-skills，跳过 skills 发现与加载。
+	 * 用于排查/加速；开启后技能命令与 skill 相关能力不可用。
+	 */
+	piRpcNoSkills: boolean;
+
+	// ── 侧栏 UI 状态 ──
+	/**
+	 * 左侧边栏的展开宽度（px）。可选以兼容旧 settings.json；渲染层仍以 localStorage
+	 * 作首屏缓存，应用设置作为跨 renderer origin 的可靠恢复来源。
+	 */
+	sidebarWidth?: number;
+	/**
+	 * 右侧工作区抽屉的展开宽度（px）。可选以兼容旧 settings.json，取值由渲染层 clamp。
+	 */
+	drawerWidth?: number;
+	/**
+	 * 左侧边栏处于展开状态的项目 id 列表（含 builtin-chat）。
+	 * 写入 settings.json，避免 dev 模式强杀进程时 localStorage 来不及落盘而丢失。
+	 * 缺省时由渲染层按「仅展开 chat」处理。
+	 */
+	sidebarExpandedProjectIds?: string[];
+	/**
+	 * 侧栏 活动/聊天/项目分段。可选以兼容旧 settings.json；localStorage 作首屏缓存，
+	 * settings.json 作跨 renderer origin / dev 强杀的可靠恢复来源。缺省为 chats。
+	 */
+	sidebarNavTab?: "active" | "chats" | "projects";
+	/**
+	 * 侧栏中置顶的会话记录 id。SessionRecord.id 跨重启稳定；缺失或已删除的 id
+	 * 在展示时安全忽略，避免修改 pi 会话文件或把短生命周期 agentId 持久化。
+	 */
+	pinnedSessionIds?: string[];
+	/**
+	 * 侧栏「聊天」「项目」分组标题栏在列表滚动时冻结（sticky）在滚动区顶部。
+	 * 可选以兼容旧 settings.json；缺省视为关闭（历史行为：标题随列表滚走）。
+	 */
+	sidebarStickyGroupHeaders?: boolean;
+
+	/**
+	 * 项目会话列表排序模式（2027-03 开放排序规则）：updatedAt=最近活跃（历史默认）、
+	 * createdAt=创建时间、title=标题。缺省/非法值回落 updatedAt；由渲染层策略目录
+	 * （sessionSortModes）解释，主进程只存字符串不参与排序。
+	 */
+	sessionSortMode?: SessionSortModeId;
+
+	// ── 会话导入 ──
+	/**
+	 * Kimi Work（kimi-desktop 桌面版）daimon-share 数据目录的用户显式指定位置。
+	 * undefined/空串 = 未指定，走探测链（kimi-desktop 的 daimon-storage.json →
+	 * 默认安装位置 %APPDATA%/kimi-desktop/daimon-share）。用户在 Kimi Work 里把
+	 * 数据目录自定义到任意盘符时，靠探测链自动找到；此项仅用于探测失败时的手动指定。
+	 * 优先级最高，非空时不再读探测链。
+	 */
+	kimiWorkShareRoot?: string;
+
+	// ── 扩展管理 ──
+	/**
+	 * 用户手动移除（或因三方冲突自动让位）的内置扩展列表（如 pi-deck-todo.ts）。
+	 * 下次启动跳过自动部署，并清理用户目录残留文件，避免 pi 仍加载导致工具冲突。
+	 */
+	removedBuiltInExtensions: string[];
+
+	/**
+	 * 旧版扩展禁用记录（source 标识 + 作用域）。
+	 * 现代版本已改为写 pi 原生 `settings.json` 过滤规则；此字段仅由启动迁移读取并清理，
+	 * 迁移完成前它仍会被扩展运行时查询与压缩归属启发式读取（见执行计划 A5）。
+	 */
+	disabledExtensions: DisabledExtensionEntry[];
+
+	/**
+	 * 用户禁用的全局技能名列表（与 SkillManager.list 的 name 去重键一致，比较时小写），
+	 * 存储于 PiDeck 自身设置（不写 pi settings）。
+	 * 现代版本已改为写 pi 原生 `settings.json` 过滤规则；此字段仅由启动迁移读取并清理。
+	 * pi 的 frontmatter `disable-model-invocation` 只阻止模型自动调用，与「完全不加载」不同。
+	 */
+	disabledSkills: string[];
+
+	/**
+	 * 旧版提示词禁用记录（与 PromptManager.list 的 name 一致，比较时小写）。
+	 * 现代版本已改为写 pi 原生 `settings.json` 过滤规则；此字段仅由启动迁移读取并清理。
+	 */
+	disabledPrompts: string[];
+
+	// ── 生图模式（composer 底栏记忆，不是独立设置页） ──
+	/** 生图尺寸：unset=不发送 size；或 OpenAI WxH / 火山 1K/2K/4K */
+	imageGenSize: string;
+	/** 生图水印：火山方舟 watermark；默认 false（用户显式打开才带） */
+	imageGenWatermark: boolean;
+	/** 生图文件编码：火山 output_format png|jpeg；默认 png */
+	imageGenOutputFormat: string;
+
+	// ── 安全管理 ──
+	/**
+	 * 安全管理配置（等级/工具动作/目录边界/会话覆盖）。
+	 * 缺省 undefined：由 SecurityStore.normalizeConfig 并入默认值（enabled=true 安全门启用，默认等级 off）。
+	 * 变更后主进程会把策略快照写入 userData/security-policy.json 供 pi-deck-security-gate 扩展消费。
+	 */
+	securityConfig?: SecurityConfig;
+
+	// ── DSH 后端 ──
+	/**
+	 * DSH_HOME 覆盖目录：用户自己的 DSH 配置目录（如 ~/.dsh）。
+	 * 缺省 undefined/空串：自动使用用户真实 ~/.dsh（与 dsh CLI 行为一致，
+	 * 配置/凭证/会话全在同一处，不复制）；目录不存在时启动时自动创建。
+	 * 注意：DSH 官方约束「同一 DSH_HOME 只允许一个 host」，与 dsh CLI 共用默认目录
+	 * 时两实例会互相覆盖状态；配置页概览据此给出 DSH_HOME 隔离提示（#189，判定见
+	 * `src/main/dsh/dshHomeSharing.ts`）。
+	 * 实现见 DshHost.resolveDshHomeDir。启动预热前变更会被新 host 读取；
+	 * 已运行时切换需重启 host。
+	 */
+	dshHomeDir?: string;
+
+	/**
+	 * DSH runtime 下载源索引地址（覆盖默认 AtomGit/GitHub latest 应用 Release）。
+	 * 用于镜像/内网分发：索引是分平台 `dsh-runtime-<platform>-<arch>-releases.json`，
+	 * 条目里给出 tarball 直链与 sha256。缺省/空串 = 跟随 settings.updateSource。
+	 * sha256 校验始终生效，镜像也不能绕过。禁止指向独立 `dsh-runtime` tag。
+	 */
+	dshRuntimeIndexUrl?: string;
+
+	/**
+	 * DSH 沙箱 Node 24 下载源索引（覆盖默认 AtomGit/GitHub latest 应用 Release）。
+	 * 缺省/空串 = 跟随 settings.updateSource。sha256 始终校验。
+	 */
+	dshRunnerNodeIndexUrl?: string;
+
+	/**
+	 * DSH 审批自动放行：开启后 DSH 会话的工具/命令审批（approval/requested）
+	 * 自动应答 allowed-once，不再弹出确认。
+	 * 缺省 undefined/false：保持人工审批（会话内 Ask 弹窗）。
+	 * 运行时读取（每次审批即时生效），无需重启 DSH host。
+	 */
+	dshApprovalAutoAllow?: boolean;
+
+	/**
+	 * DSH 外部会话自动导入：应用启动后只读扫描 DSH_HOME/sessions，把其他工具
+	 * （dsh-web 等）创建的、catalog 尚未映射的根会话写入侧栏（按会话自己的 cwd
+	 * 匹配或注册项目；没有 cwd 的才进入「外部会话」兑底项目）。缺省 true。
+	 * 不启动 host、不 attach，避免与 dsh-web 抢同一份 DSH_HOME。
+	 * 关闭后不再把外部会话写入侧栏（无手动导入入口）。
+	 */
+	dshAutoImportSessions?: boolean;
+
+	/**
+	 * DSH host 是否被用户手动停止（不想让它运行）。
+	 *
+	 * 持久化跨应用重启：标记为真后，预热（startDshHostInBackground）、按需兜底
+	 * （ensureStarted）、崩溃自动重启（DshHostProcess.restartAfterCrash）、runtime
+	 * 磁盘操作后的 host 恢复等所有非用户显式发起的路径都不再 fork host。
+	 * 只有用户在 DSH 配置页点「启动」才清除标记并重新 boot。
+	 * 缺省 undefined/false：保持按需自动启动的历史语义。
+	 */
+	dshManualStopped?: boolean;
+
+	/**
+	 * 远端项目 trust 决策表（P4.4b）：每条记录 = 「某主机的某个远端项目根」被信任/拒绝过。
+	 *
+	 * 为什么放 settings.json：随配置备份一起走，与远端 pin（`ssh-host-keys/`）分开——pin 是密码学事实，
+	 * 决策是用户意图，两者生命周期不同（主机退役时决策随主机清理，见 `RemoteProjectTrustService.forgetHost`）。
+	 * key 用 `RemoteTrustKey.remoteTrustKey()` 的产物，三样材料（hostId / endpoint 身份 / 规范项目根）
+	 * 任一变化都会换 key，所以旧决策不会被自动继承（fail-closed，见 `docs/archive/remote/remote-trust-plan.md` §2）。
+	 *
+	 * 缺省/旧文件缺这一段 = 空表（自然兼容）；非数组或字段畸形的条目在读取时被丢弃。
+	 * **写入只走远端 trust 域**（`remote:trust-set` / `remote:trust-clear` → `SettingsStore.replaceRemoteProjectTrust`），
+	 * 渲染层的通用 `settings:update` 不得携带这一段（否则等于绕过 trust 域的边界校验）。
+	 */
+	remoteProjectTrust?: RemoteProjectTrustRecord[];
+
+	/**
+	 * DSH agent-team 实验预设（默认关）：开启后 DSH host 组合追加官方
+	 * @deepseek-ai/dsh-experimental-agent-team-profile（启用 Team 域 spawn_teammate
+	 * 等工具，并禁用 subagent/subagent_fork 工具——同一组合层后行覆盖先行）。
+	 * 仅在 host fork 时读取（--dsh-agent-team=1）：变更后需重启 DSH host 生效，
+	 * 对已运行会话不变。缺省 undefined/false = 完全等同现状（不注入任何行）。
+	 */
+	dshAgentTeamPreset?: boolean;
+
+	/**
+	 * DSH runtime 迁移提示是否已展示过（一次性提示的持久化闩，#317）。
+	 *
+	 * 渲染层展示「runtime 不在 + 存量 dsh 会话」提示前读取；展示后立即写 true，
+	 * 跨重启不再重弹（否则每次启动都弹，提示变成骚扰）。缺省 undefined/false =
+	 * 还没提示过。展示即置位而非「用户点过入口」：错过 toast 的用户仍可从设置页
+	 * 的 DSH 安装引导进入，不为此保持打扰。
+	 */
+	dshRuntimeMigrationNoticeShown?: boolean;
+
+	/**
+	 * ACP 多后端总开关：默认 false（opt-in）——pi 用户不承受任何 ACP 运行时成本，
+	 * 关闭时主进程不创建 AcpAgentManager、不注册进 CompositeAgentGateway，新建会话也无 ACP 入口。
+	 * 变更重启后生效（热切换会牵动运行中会话生命周期，首版不做）；已登记 acpTools 不受影响，重新开启即恢复。
+	 */
+	acpEnabled?: boolean;
+	/**
+	 * ACP agent CLI 工具登记表（backend=acp 会话的驱动器）：gemini --acp /
+	 * opencode acp / kimi acp / codex-acp 等。仅在 acpEnabled=true 时被读取。数组保序（展示=登记顺序）；
+	 * 删除工具后旧会话靠 acpSessionId 只读降级。缺省 undefined = 空表（无 ACP 工具）。
+	 */
+	acpTools?: AcpToolConfig[];
+	/**
+	 * ACP 工具级配置记忆：按 acpToolId → { configOptionId → 值 } 保存用户最近一次选择的
+	 * 思考档/模式/权限等会话级配置（agent 在 session/new 回传的 configOptions）。
+	 * 新建会话握手成功后自动重放；session/load 恢复的会话不覆盖（agent 自己会恢复）。
+	 * **不含模型**（category=model/model_config 一律不记）：模型仍随 CLI/会话默认。
+	 * 删除工具时由 acp:tools-save 链路清理对应条目；值来自 agent 回传，入参仍按不可信消毒。
+	 */
+	acpToolConfigDefaults?: Record<string, Record<string, string | boolean>>;
+	/**
+	 * ACP 回合 stall 静默判定阈值（ms）：回合内无任何 session/update、无挂起审批且无在途
+	 * 工具调用的全静默超过该值，先补发 session/cancel 再升级强杀。缺省 undefined = 代码内
+	 * 默认 180_000（acpTurnWatchdog.PROMPT_STALL_TIMEOUT_MS）。变更后新回合生效，不需要重启。
+	 */
+	acpPromptStallTimeoutMs?: number;
+	/**
+	 * ACP session/prompt 回合兑底超时（ms）：回合内**无进展**（无 session/update、无挂起审批）
+	 * 持续超过该值即兑底，超时补发 session/cancel 收口。有产出的长回合每收到一条 update
+	 * 就顺延截止，因此这里不是「总时长硬上限」而是「静默上限」——长但健康的回合（实测有单回合
+	 * 达到 10 分钟且持续产出）不会因为总时长到点被误杀。缺省 undefined = 代码内默认 900_000
+	 * （AcpAgentManager.PROMPT_TURN_TIMEOUT_MS，15 分钟）。变更后新回合生效，不需要重启。
+	 */
+	acpPromptTurnTimeoutMs?: number;
+	/**
+	 * ACP 回合失败自动重试：关掉后失败直接收口（行为回退到未引入自动重试的版本）。
+	 * 缺省 undefined = 代码内默认 true（与 pi 的 retry.enabled、DSH 的内置重试对齐）。
+	 */
+	acpTurnRetryEnabled?: boolean;
+	/** 自动重试次数上限（每回合）。缺省 undefined = 代码内默认 2；0 等同只试一次。 */
+	acpTurnRetryMaxRetries?: number;
+	/** 自动重试的指数退避基数（ms）。缺省 undefined = 代码内默认 2000（2s、4s…，封顶 30s）。 */
+	acpTurnRetryBaseDelayMs?: number;
+};
+
+/**
+ * 令牌有效期可选值（ms）。0 = 永不过期（默认）；从 webServiceTokenGeneratedAt 起算。
+ * 主进程 IPC 校验与 SettingsStore 清洗共用同一份枚举，避免两处口径漂移。
+ */
+export const WEB_TOKEN_EXPIRES_IN_CHOICES = [0, 3_600_000, 86_400_000, 604_800_000, 2_592_000_000] as const;
+
+/** cloudflared 隧道传输协议枚举（webRemoteCloudflaredProtocol）；默认 http2（TCP，规避 UDP QoS 限速）。 */
+export const WEB_REMOTE_CLOUDFLARED_PROTOCOLS = ["auto", "quic", "http2"] as const;
+export type WebRemoteCloudflaredProtocol = (typeof WEB_REMOTE_CLOUDFLARED_PROTOCOLS)[number];
+
+/**
+ * 清洗用户输入的 cloudflared 额外参数：允许空格分隔多参数，但仅限可打印 ASCII（拒绝控制字符/非 ASCII），
+ * 长度 ≤500；切分后 argv 直传子进程，无 shell 注入面。非法输入整体置空回退默认。
+ */
+export function sanitizeCloudflaredExtraArgs(value: unknown): string {
+	if (typeof value !== "string") return "";
+	const trimmed = value.trim();
+	if (!trimmed || trimmed.length > 500) return "";
+	return /^[ -~]+$/.test(trimmed) ? trimmed : "";
+}
+
+/**
+ * 清洗手动填写的 EasyTier 虚拟 IP：只接受点分十进制 IPv4（不含 CIDR/端口/协议），
+ * 拒绝 0.0.0.0 与广播地址；非法输入整体置空，避免拼出不可用或危险的 URL。
+ */
+export function sanitizeEasyTierVirtualIp(value: unknown): string {
+	if (typeof value !== "string") return "";
+	const trimmed = value.trim();
+	const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(trimmed);
+	if (!match) return "";
+	const parts = match.slice(1).map(Number);
+	if (parts.some((part) => part < 0 || part > 255)) return "";
+	if (parts[0] === 0 || parts.every((part) => part === 255)) return "";
+	return parts.join(".");
+}
+
+/**
+ * 清洗手动指定的 easytier-cli 路径：去首尾空白与包裹引号（资源管理器「复制为路径」自带引号），
+ * 拒绝换行/控制字符与超长串；其余原样保留——Windows 用户目录常含中文与空格。
+ */
+export function sanitizeEasyTierCliPath(value: unknown): string {
+	if (typeof value !== "string") return "";
+	let trimmed = value.trim();
+	const quoted = trimmed.length >= 2 && ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'")));
+	if (quoted) trimmed = trimmed.slice(1, -1).trim();
+	if (!trimmed || trimmed.length > 1024) return "";
+	if (/[\u0000-\u001f]/.test(trimmed)) return "";
+	return trimmed;
+}
+
+// EasyTier 托管网络的输入清洗规则放在独立叶子模块（纯函数、可单测），此处只做再导出。
+export { EASYTIER_PEER_PROTOCOLS, sanitizeEasyTierNetworkName, sanitizeEasyTierNetworkSecret, sanitizeEasyTierPeers } from "../easytierPeers";
+
+/**
+ * 手动设置令牌的形状约束：8-128 个可打印非空白 ASCII（不含空格，避免 URL 拼接歧义）。
+ * 自动生成的 UUID 天然满足；用户自定义串在此拦截，超界回落未设置。
+ */
+export function isValidWebTokenShape(value: string): boolean {
+	return /^[!-~]{8,128}$/.test(value);
+}
+
+/**
+ * Web 服务运行时状态；token 持久化固定（见 AppSettings.webServiceToken），重启不换新。
+ * requiresAuth 反映用户设置 webServiceRequiresAuth 的清洗结果，缺省视为 true。
+ * 渲染层设置页二维码/令牌提示据此附上访问令牌；tokenExpiresAt 供「剩余有效期」展示（null = 永不过期）。
+ */
+export type WebServiceStatusInfo = {
+	running: boolean;
+	host: string;
+	port: number;
+	token: string;
+	requiresAuth: boolean;
+	tokenExpiresAt: number | null;
+};
+
+// ── 桌面宠物类型 ──
+/** 宠物聚合动画状态；映射到 spritesheet 的行号。
+ *  前 7 个为业务态（由 PetStateBridge 聚合 Agent 状态产出）；
+ *  running-right / running-left / review 为本期启用的预留行——
+ *  巡游方向帧由 PetPatrol 引擎直接推送，review 由「任务完成」转换触发。 */
+export type PetMode =
+	| "idle"
+	| "running"
+	| "failed"
+	| "waiting"
+	| "waving"
+	| "hidden"
+	| "jumping"
+	| "running-right" // 行1 巡游向右（PetPatrol 驱动）
+	| "running-left" // 行2 巡游向左（PetPatrol 驱动）
+	| "review"; // 行8 任务完成庆祝（running→idle 转换触发）
+
+/** 多 Agent 聚合后的全局宠物状态，由 PetStateBridge 计算并推送给宠物窗 */
+export type PetAggregateState = {
+	mode: PetMode;
+	/** 当前 running 的 Agent 数 */
+	runningCount: number;
+	/** 当前 error 的 Agent 数（>0 则 mode=failed，优先级最高） */
+	errorCount: number;
+	/** 点击宠物跳转目标 Agent id；无活跃 Agent 时为 null */
+	activeAgentId: string | null;
+	timestamp: number;
+};
+
+/** 宠物包清单项，合并内置包与 petdex 社区包后去重得到 */
+export type PetManifest = {
+	id: string;
+	displayName: string;
+	description?: string;
+	/** 来源：builtin 随应用打包，petdex 扫描自 ~/.codex/pets/ */
+	source: "builtin" | "petdex";
+	/** 渲染层可加载的 spritesheet URL（pideck-pet:// 协议，主进程按需读文件，非 base64 大字符串） */
+	spritesheetUrl: string;
+};
+
+/** 三端宠物窗能力探测结果（设计文档第 5.2 节降级形态） */
+export type PetWindowCaps = {
+	/** 是否支持透明背景（Linux 部分 WM 不支持） */
+	transparent: boolean;
+	/** 是否支持点击穿透（MVP 不用，预留） */
+	clickThrough: boolean;
+	/** 是否支持自由绝对坐标定位（Wayland 受限） */
+	freePosition: boolean;
+};
+
+/** 宠物通知气泡：出错/完成/等待操作时在宠物头顶弹出。
+ *  waiting 为持久化提醒（等待用户回应），直到主进程推送 null 才消失；
+ *  error/done 由主进程计时 4 秒后推送 null 自动消失。
+ *  text 为完整文案（兼容），title/status 供 renderer 分段着色：标题黑色 + 状态词状态色。 */
+export type PetNotification = {
+	type: "error" | "done" | "waiting";
+	text: string;
+	/** 关联的 Agent id（waiting/error 必有，done 尽量带） */
+	agentId?: string;
+	timestamp: number;
+	/** true：不自动消失，直到主进程推送 null 清理（等待操作类） */
+	persistent?: boolean;
+	/** Agent 标题（黑色段）；缺省时 renderer 退化为整行单色绘制 */
+	title?: string;
+	/** 已翻译的状态词，如「已完成」（状态色段）；缺省时退化为整行单色绘制 */
+	status?: string;
+};
+
+/**
+ * 渲染层 AppSettings 首屏默认值（App.tsx 在主进程 settings.get 返回前使用）。
+ * 口径必须与 main SettingsStore 的 defaultSettings 保持一致：新增设置项时两边同步补，
+ * 避免首屏默认与真实默认不一致造成启动闪烁。
+ */
+export function createDefaultAppSettings(): AppSettings {
+	return {
+		useNativeTitleBar: true,
+		showNativeMenu: false,
+		sendShortcut: "enter-send",
+		defaultAgentBackend: "pi",
+		defaultAgentBackendManual: false,
+		theme: "system",
+		themeScheduleLightStart: "07:00",
+		themeScheduleDarkStart: "19:00",
+		accent: "default",
+		themeStyle: "classic",
+		themePalette: "classic-green",
+		logoStyle: "pi-tui",
+		logoCustomImage: "",
+		appDisplayName: "",
+		customThemeOverrides: {},
+		backgroundImage: "",
+		backgroundImageOpacity: 0.8,
+		weWorkshopDir: "",
+		weWallpaperId: "",
+		language: "system",
+		startupWindowMode: "last",
+		piEnvironmentChecked: false,
+		/** 扩展禁用白名单：与 SettingsStore 默认一致，空数组 = 不启用白名单（首屏未拉到真实设置前的默认值） */
+		disabledExtensions: [],
+		/** 技能禁用列表：与 SettingsStore 默认一致，空数组 = 不启用技能白名单 */
+		disabledSkills: [],
+		/** 提示词模板禁用列表：与 SettingsStore 默认一致，空数组 = 不启用模板白名单 */
+		disabledPrompts: [],
+		sessionTabOpenMode: "preview",
+		// 与 main SettingsStore 默认一致：草稿本按项目隔离，切项目右栏内容随之切换
+		scratchPadScope: "project",
+		// 与 main SettingsStore 默认一致：标题生成默认开启，侧栏不再全是「新会话」
+		autoSessionTitle: true,
+		// 与 main SettingsStore 默认一致：忙碌时发送默认「插入当前回合」
+		busySendDelivery: "steer",
+		tpsDisplayMode: "streaming",
+		// 遗留字段：快捷消息已改存独立配置文件 userData/quick-messages.json（见 useQuickMessages），
+		// 这里保留字段只为满足 AppSettings 类型，内容不再被读取。
+		quickMessages: [],
+		enableGitManagement: true,
+		gitCommitMessagePrompt: "请根据以下 git diff 生成一条中文 git commit message。\n\n变更描述：\n{diff}\n\nGitmoji 对应关系：\n✨ feat - 新功能\n🐛 fix - Bug 修复\n📚 docs - 文档更新\n💎 style - 代码格式\n♻️ refactor - 重构\n🧪 test - 测试\n🔧 chore - 构建/工具",
+		gitCommitMessageProvider: "",
+		gitCommitMessageModel: "",
+		gitExecutablePath: "",
+		dshRunnerNodePath: "",
+		closeToTray: true,
+		singleInstance: true,
+		enableNotifications: true,
+		// Ask 提问系统通知默认关闭：与主进程 SettingsStore 默认一致（默认不打扰）
+		askNotificationEnabled: false,
+		// 仅失焦提醒默认关闭：与主进程 SettingsStore 默认一致（默认照常提醒，不看窗口焦点）
+		alertOnlyWhenUnfocused: false,
+		// 人文关怀提醒默认开启：与主进程 SettingsStore 默认一致，首屏未拉到真实设置前不关闭提醒
+		agentCountReminderEnabled: true,
+		// 公告通知默认开启：与主进程 SettingsStore 默认一致，首屏未拉到真实设置前不误关提醒
+		announcementNotificationEnabled: true,
+		// toast 展示时长：与主进程 defaultSettings 同源（全局统一口径）
+		toastDurationMs: DEFAULT_TOAST_DURATION_MS,
+		// showThinking 由 pi agent 的 hideThinkingBlock 控制，启动后从主进程加载的真实值会覆盖此处
+		showThinking: true,
+		// 流式对话行为：默认自动展开中间过程（与 SettingsStore 一致）
+		expandInterimDuringStream: true,
+		// 过程组显示默认开启：与主进程 SettingsStore 默认一致，首屏即按过程组渲染
+		processGroupDisplay: true,
+		showDevTools: false,
+		developerDiagnostics: false,
+		// Electron Chromium 沙箱默认关，与主进程历史兼容策略一致
+		electronChromiumSandbox: false,
+		piProxyEnabled: false,
+		piProxyUrl: "http://127.0.0.1:7890",
+		piProxyBypass: "localhost,127.0.0.1,::1",
+		piProxyProviders: [],
+		piProxyModels: [],
+		acpProxyEnabled: false,
+		acpProxyUrl: "http://127.0.0.1:7890",
+		acpProxyBypass: "localhost,127.0.0.1,::1",
+		desktopProxyEnabled: false,
+		desktopProxyUrl: "http://127.0.0.1:7890",
+		desktopProxyBypass: "localhost,127.0.0.1,::1",
+		customPiPath: "",
+		piCustomPaths: [],
+		wslEnabled: false,
+		wslDistro: "Ubuntu",
+		wslUser: "root",
+		telemetryEnabled: true,
+		webServiceEnabled: false,
+		webServiceHost: "0.0.0.0",
+		webServicePort: 8765,
+		webServiceRequiresAuth: true,
+		rpcTimeout: 600_000,
+		linkOpenMode: "external",
+		workspaceContentOpenMode: "split",
+		contentMaxWidth: 1800,
+		chatContentWidthPct: 80,
+		sessionStatusPlacement: "composer",
+		scrollToLatestOnSend: true,
+		navigationMode: "tabs",
+		sessionTabMaxWidth: SESSION_TAB_MAX_WIDTH_DEFAULT,
+		maxEditorFileSizeMB: 5,
+		externalEditors: createDefaultExternalEditorSettings(),
+
+		// 桌面宠物默认关闭：关闭后应用与现状完全一致，零回归
+		petEnabled: false,
+		petId: "clawd",
+		petAlwaysOnTop: true,
+		petScale: DEFAULT_PET_SCALE,
+		petPatrolEnabled: true,
+		petPatrolPauseMin: 5,
+		// 悬浮球默认关闭：开启后主窗口可隐藏为小圆点，不影响现状
+		floatingBallEnabled: false,
+		floatingBallExpandTarget: "mini",
+		floatingBallAlwaysOnTop: true,
+		floatingBallShowRunningBadge: true,
+		floatingBallSnapToEdge: true,
+		// 闲置 agent 自动释放：与 main SettingsStore 默认值保持一致，避免启动时闪烁
+		idleAgentAutoRelease: true,
+		idleAgentKeepCount: 5,
+		idleAgentTimeoutMin: 60,
+		standbyRuntimeEnabled: true,
+		// session-store 读取路径默认开启（条目表落盘后收益已证明，见 docs/archive/plans/session-data-plane-plan.md §8.11）：
+		// 渲染层不展示这个开关，但默认值必须与 main SettingsStore 一致，避免读到 undefined 而误判为关闭。
+		sessionStoreEnabled: true,
+		cuaEnabled: false,
+		cuaAutoApprove: true,
+		// 浏览器 Agent 默认关闭；开启后写动作默认免审批（与 CUA 一致），可关闭改为逐次确认。
+		browserAgentEnabled: false,
+		browserAgentAutoApprove: true,
+		// 智能体记忆默认关闭：关闭时不注册、不改动 pi 的 mcp.json，与引入前完全一致
+		agentMemoryEnabled: false,
+		agentMemoryAutoLearnEnabled: false,
+		favoriteModels: [],
+
+		// 字体配置：与 main SettingsStore 默认值保持一致，避免启动时闪烁
+		fontSize: "medium",
+		uiFontSize: null,
+		tabBarFontSize: null,
+		chatFontSize: null,
+		inputFontSize: null,
+		zoomFactor: 1,
+		fontFamilyBase: "system",
+		fontFamilyBaseCustom: "",
+		fontFamilyMono: "system-mono",
+		fontFamilyMonoCustom: "",
+		// 终端外观/行为默认值：主题 inherit 保持 pi-soft 跟随明暗行为，
+		// scrollback 与 TerminalDock 历史硬编码 5000 一致（升级后行为不变）。
+		terminalTheme: "inherit",
+		terminalFontSize: null,
+		terminalFontFamily: "",
+		terminalScrollback: 5000,
+		terminalCursorStyle: "block",
+		terminalCursorBlink: true,
+		terminalCopyOnSelect: false,
+		terminalPaddingY: 8,
+		terminalConfirmClose: "running",
+		terminalStartupCommand: "",
+		removedBuiltInExtensions: [],
+		// 声音提醒：与主进程 defaultSettings 保持一致（完成/异常开、等待输入关）
+		soundAlert: createDefaultSoundAlertSettings(),
+		imageGenSize: "unset",
+		imageGenWatermark: false,
+		imageGenOutputFormat: "png",
+		autoDownloadUpdates: true,
+		catalogAutoUpdate: true,
+		// 与主进程 defaultSettings 保持一致：更新源默认 GitHub 官方，自定义镜像前缀留空
+		updateSource: "github",
+		customUpdateSourceUrl: "",
+		// 与主进程 defaultSettings 保持一致：offline 默认关，让模型目录随启动刷新
+		piRpcOffline: false,
+		piRpcNoExtensions: false,
+		piRpcNoSkills: false,
+	};
+}

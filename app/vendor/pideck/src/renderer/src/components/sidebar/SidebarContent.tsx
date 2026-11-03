@@ -1,0 +1,1014 @@
+import { Activity, Bolt, ChevronRight, CirclePlus, Clock, Folder, Globe, MessageSquare, Monitor, Moon, Search, Sun } from "lucide-react";
+import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import type { AgentBackend, AgentTab, AppThemeMode, ArchivedDshSession, ArchivedPiSession, Project, SessionRecord, SessionSummary, WorktreeEntry } from "../../../../shared/types";
+import { AgentContextMenu, DraftSessionContextMenu, ProjectContextMenu, SessionContextMenu, SessionManagerModal, SessionSourceFilterMenu, WorktreeCreateDialog } from "./SidebarParts";
+import { automationModuleHiddenAtom, sessionRecordToSummary } from "../../atoms";
+import { hasPendingUpdateAtom, pendingAppUpdateAtom, pendingCatalogUpdateAtom, pendingPiUpdateAtom, updateStatusAtom } from "../../atoms/update-atoms";
+import { useAtomValue } from "jotai";
+import { isManagerSessionSummary, worktreeFamilyProjects } from "../../sessionManagerModel";
+import { t } from "../../i18n";
+import { cn } from "../../lib/utils";
+import { showNotice } from "../../utils/notice";
+import { resolveSessionReloadMode, resolveSessionRunState, sessionRunCapabilities, type SessionRunAction } from "../../utils/sessionCommands";
+import { getBoundSidebarRuntimeAgent, getBoundSidebarRuntimeAgentByAgentId, type SidebarController } from "../../hooks/useSidebarController";
+import type { RpcLogEntry } from "../../../../shared/types/rpcLog";
+import type { SidebarRunControl } from "./SidebarComponents";
+import { sessionDisplayName } from "../../utils/sessionDisplayName";
+import { DshSearchResults } from "./DshSearchResults";
+import { SessionContentSearchResults } from "./SessionContentSearchResults";
+import { ProjectTree } from "./ProjectTree";
+import type { BatchProjectRemovalOutcome } from "./BatchRemoveProjectsDialog";
+import { Button } from "../ui-shadcn/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui-shadcn/tooltip";
+import { Tabs, TabsList, TabsTrigger } from "../motion/tabs";
+import { Dock, DockItem } from "../motion/dock";
+import { UpdateDotHint } from "./UpdateDotHint";
+import { AnnouncementCenter } from "./AnnouncementCenter";
+import { AutomationDockButton } from "../automation/AutomationDockButton";
+import { AgentMarketDockButton } from "../agents/AgentMarketDockButton";
+import { FavoritesDockButton } from "./FavoritesDockButton";
+import { HostPluginDockButtons } from "../plugins/HostPluginDockButtons";
+import { MorphingSearch, type MorphingSearchItem } from "../motion/morphing-search";
+import { parseSidebarNavTab } from "../../utils/sidebarNavTab";
+import { ensurePinyinTable, pinyinKeys } from "../../utils/pinyinSearch";
+import { displayProjectDirectoryName, isChatProject } from "../../rendererUtils";
+import { isLocalProject } from "../../../../shared/projectLocation";
+import { formatAccelerator } from "../../../../shared/shortcuts";
+import { desktopApi } from "../../desktopApi";
+import { useShortcutBindings } from "../../hooks/useShortcutBindings";
+import { useFavorites } from "../../hooks/useFavorites";
+import { useRelativeTimeTicker } from "../../hooks/sidebar/useSessionActivityClock";
+
+export type SidebarActions = {
+	projects: {
+		add: () => Promise<void>;
+		select: (projectId: string) => void;
+		refresh: (projectId: string) => Promise<void>;
+		/** 重扫所有项目目录的存在性并刷新侧栏清单。 */
+		refreshAll: () => Promise<void>;
+		reorder: (sourceProjectId: string, targetProjectId: string, position?: "before" | "after") => Promise<void>;
+		/** 置顶/取消置顶普通项目；聊天项目与 worktree 子项目由菜单层隐藏入口。 */
+		setPinned: (project: Project, pinned: boolean) => Promise<void>;
+		reveal: (project: Project) => Promise<void>;
+		openWithEditor: (project: Project) => void;
+		importSessions: (project: Project, source: "codex" | "claude" | "qoder" | "opencode" | "zcode" | "workbuddy" | "cursor" | "kimi" | "kimiwork" | "minimax") => void;
+		/** 导入其他目录的会话：源目录现选，用于目录移动/改名后找回历史。 */
+		importDirectorySessions: (project: Project) => void;
+		manageResources: (project: Project) => void;
+		/** 打开该项目的自动化任务表；任务归属与运行历史均按项目隔离。 */
+		manageAutomations: (projectId: string) => void;
+		toggleWorktree: (project: Project) => Promise<void>;
+		copyPath: (project: Project) => Promise<void>;
+		/** 重命名项目显示名（仅改 label，不动磁盘目录）；打开重命名对话框。 */
+		rename: (project: Project) => void;
+		remove: (project: Project) => Promise<void>;
+		/** 批量移除项目记录：逐个 IPC，单个失败不影响后续；返回成功/失败数量供弹窗汇总。 */
+		removeMany: (projectIds: readonly string[], onProgress?: (done: number, total: number) => void) => Promise<BatchProjectRemovalOutcome>;
+		changeChatPath?: (project: Project) => Promise<void>;
+	};
+	sessions: {
+		simpleNavigation?: boolean;
+		/** 单击模式由App决定；仅标签模式支持双击晋升常驻。 */
+		open: (projectId: string, sessionId: string, tabMode?: "preview" | "permanent") => Promise<void>;
+		/**
+		 * 按需预加载会话 catalog：活动页「最近会话」要跨项目数据，而 catalog 平时只在
+		 * 展开/选中项目时才扫描。已在 loading/ready 的项目会被跳过，不会重复触发扫描。
+		 */
+		ensureCatalogsLoaded: (projectIds: readonly string[]) => void;
+		/** 侧栏会话开始拖拽（与 Tab 栏共用 MIME，可拖到聊天区边缘分屏） */
+		beginDrag?: (sessionId: string) => void;
+		endDrag?: () => void;
+		createDraft: (projectId: string) => Promise<void>;
+		/** 新建侧边任务：在该会话所属项目建一条带标记的会话，由右侧抽屉「侧边任务」面板承载。 */
+		createSideTask: (projectId: string, backend?: AgentBackend) => Promise<void>;
+		createAnonymous: (projectId: string) => Promise<void>;
+		/**
+		 * 远端会话登记成功后：显式重拉该项目的本地会话清单并选中新会话。
+		 * 远端发现/登记本身在侧栏「远端会话」区块里发起（register 已写进 catalog），这里只做「刷新 + 选中」，
+		 * 不创建任何会话、也不打开 Tab（选中 ≠ 呈现）。
+		 */
+		importRemoteSession: (projectId: string, sessionId: string) => Promise<void>;
+		/** 新建 ACP 工具会话(toolId → settings.acpTools 条目);后端固定 acp。 */
+		createAcp: (projectId: string, toolId: string) => Promise<void>;
+		deleteDraft: (session: SessionRecord) => Promise<void>;
+		rename: (projectId: string, session: SessionSummary) => void;
+		export: (projectId: string, session: SessionSummary) => Promise<void>;
+		copy: (projectId: string, session: SessionSummary) => Promise<void>;
+		copyPath: (session: SessionSummary) => Promise<void>;
+		openFile: (session: SessionSummary) => Promise<void>;
+		delete: (projectId: string, session: SessionSummary) => Promise<void>;
+		/** 运行控制（全状态）：启动/停止/重启/重载，语义由 App 侧策略分派 */
+		runControl: (sessionId: string, action: SessionRunAction) => Promise<void>;
+		/**
+		 * 打开会话代理设置弹框。弹窗宿主挂在 App 层（与 Tab 栏 ⋯ 菜单共用同一实例），
+		 * 侧栏只负责上抛「为哪个会话打开」，避免两侧各挂一份 UI。
+		 */
+		openProxySetting: (sessionId: string) => void;
+		/** 归档会话（可恢复） */
+		archive: (projectId: string, session: SessionSummary) => Promise<void>;
+		/** 恢复归档会话 */
+		unarchive: (session: ArchivedPiSession, projectId?: string) => Promise<void>;
+		/** 列出已归档会话（恢复 UI 用；带原始路径，弹窗按项目归属过滤） */
+		listArchived: () => Promise<ArchivedPiSession[]>;
+		/** 永久删除已归档会话（pi 文件归档；移入回收站并移出索引） */
+		deleteArchived: (archivedPath: string) => Promise<void>;
+		/** 恢复 DSH 归档会话（host 目录移回 sessions 树并重建 catalog 记录） */
+		unarchiveDsh: (dshSessionId: string, projectId?: string) => Promise<void>;
+		/** 列出 DSH 归档会话（会话管理弹窗归档视图用；含标题） */
+		listArchivedDsh: () => Promise<ArchivedDshSession[]>;
+		/** 永久删除已归档 DSH 会话（host 目录移入回收站） */
+		deleteArchivedDsh: (dshSessionId: string) => Promise<void>;
+		/** 远端归档行永久删除：请求 main 的一次性确认（只传本机 catalog 会话 id）。 */
+		requestDeleteArchivedRemote: (sessionId: string) => Promise<import("../../../../shared/types").RemoteArchivedSessionDeleteRequestResult>;
+		/** 回答远端永久删除的一次性确认（approve 才真正删远端数据）。 */
+		answerDeleteArchivedRemote: (requestId: string, choice: "approve" | "deny") => Promise<import("../../../../shared/types").RemoteArchivedSessionDeleteAnswerResult>;
+	};
+	agents: {
+		rename: (agent: AgentTab) => void;
+		export: (agent: AgentTab) => Promise<void>;
+		copySession: (agent: AgentTab) => Promise<void>;
+		copyPath: (agent: AgentTab) => Promise<void>;
+		openSessionFile: (agent: AgentTab) => Promise<void>;
+		close: (agent: AgentTab) => Promise<void>;
+		/** 运行控制（全状态）：启动/停止/重启/重载，语义由 App 侧策略分派 */
+		runControl: (sessionId: string, action: SessionRunAction) => Promise<void>;
+	};
+	worktrees: {
+		create: (projectId: string, branchName: string) => Promise<void>;
+		remove: (parentProjectId: string, entry: WorktreeEntry, childProject?: Project) => Promise<void>;
+	};
+	rpc: {
+		getLogging: (agentId: string) => Promise<boolean>;
+		setLogging: (agentId: string, enabled: boolean) => Promise<boolean>;
+		listLogs: (agentId: string) => Promise<RpcLogEntry[]>;
+		/** 打开实时日志面板（右侧抽屉承载）；侧栏只发打开命令，不负责关闭 */
+		openViewer: (agentId: string) => void;
+	};
+};
+
+export type SidebarContentProps = {
+	simple?: boolean;
+	controller: SidebarController;
+	actions: SidebarActions;
+	currentProjectId?: string;
+	currentSessionId?: string;
+	worktreesByProject: Readonly<Record<string, readonly WorktreeEntry[]>>;
+	branchByProject?: Readonly<Record<string, string | null | undefined>>;
+	creatingWorktree?: boolean;
+	/** 正在删除的 worktree 子项目 id 集合（透传给 ProjectTree 驱动淡出动画；远端工作区必需）。 */
+	removingWorktreeProjectIds?: ReadonlySet<string>;
+	/** 「聊天」「项目」分组标题栏在列表滚动时冻结在顶部（settings.sidebarStickyGroupHeaders）。 */
+	stickyGroupHeaders?: boolean;
+	isLanWeb?: boolean;
+	chrome?: ReactNode;
+	/** 「新建会话」：打开初始引导页（居中输入框 + 项目下拉切换），由 App 提供。 */
+	onOpenNewSession?: () => void;
+	onOpenSettings?: () => void;
+	onOpenFeedback?: () => void;
+	/** 底栏主题切换：当前主题模式 + 点击循环（浅色→暗色→跟随系统），由 App 提供。 */
+	themeMode?: AppThemeMode;
+	onToggleTheme?: () => void;
+};
+
+export function SidebarContent(props: SidebarContentProps) {
+	const { controller, actions } = props;
+	// 会话收藏：右键菜单的「已收藏态 + 切换」与收藏页共用同一份 atom/写入链路。
+	const favorites = useFavorites();
+	// 侧栏相对时间刷新节拍：会话静置时没有别的渲染源，「n分钟」也得自己往前走。
+	// 只在本组件挂一次，行组件订阅同一个 atom。
+	useRelativeTimeTicker();
+	const menu = controller.menu;
+	// 三个更新源 atom 必须无条件读取：不能用短路合并，否则任一更新源从 false 变 true
+	// 时会跳过后续 Hook，破坏 Hook 调用顺序。快照本体供角标 tooltip 清单取版本号。
+	const hasPendingAppUpdate = useAtomValue(pendingAppUpdateAtom);
+	const hasPendingPiUpdate = useAtomValue(pendingPiUpdateAtom);
+	const hasPendingCatalogUpdate = useAtomValue(pendingCatalogUpdateAtom);
+	const hasPendingUpdate = useAtomValue(hasPendingUpdateAtom);
+	const updateStatus = useAtomValue(updateStatusAtom);
+	// 功能模块隐藏「定时任务」时，项目菜单里的入口一并收起（侧栏入口见 AutomationDockButton）
+	const automationHidden = useAtomValue(automationModuleHiddenAtom);
+	// tooltip 清单条目：按「哪一类有更新」组装，让用户不用猜圆点指的是什么。
+	const updateItems = [
+		hasPendingAppUpdate && updateStatus?.app?.latestVersion ? t("update.dotMenuApp", { version: updateStatus.app.latestVersion }) : null,
+		hasPendingPiUpdate && updateStatus?.piCli?.latestVersion ? t("update.dotMenuPi", { version: updateStatus.piCli.latestVersion }) : null,
+		hasPendingCatalogUpdate && updateStatus?.catalog?.latestVersion ? t("update.dotMenuCatalog", { version: updateStatus.catalog.latestVersion }) : null,
+	].filter((item): item is string => item !== null);
+	const menuProject = menu?.kind === "project" ? controller.catalog.projects.find((project) => project.id === menu.projectId) : undefined;
+	// 子工作区的「⋯」需要复用项目菜单，但删除必须回到根项目的 Git worktree 流程。
+	const menuProjectWorktreeParent = menuProject?.worktreeParentId ? controller.catalog.projects.find((project) => project.id === menuProject.worktreeParentId) : undefined;
+	const menuAgent = menu?.kind === "agent" ? controller.catalog.agents.find((agent) => agent.id === menu.agentId) : undefined;
+	const menuAgentSessionId = menuAgent ? Object.entries(controller.catalog.runtimeBySessionId).find(([, runtime]) => runtime?.agentId === menuAgent.id)?.[0] : undefined;
+	const menuAgentSessionRecord = menuAgentSessionId && menuAgent ? controller.catalog.sessionsByProject[menuAgent.projectId]?.find((session) => session.id === menuAgentSessionId) : undefined;
+
+	// 底栏主题按钮：图标与文案反映当前主题模式；点击翻转浅/暗（规则见 themeAppearance.toggleThemeMode）
+	const ThemeModeIcon = props.themeMode === "dark" ? Moon : props.themeMode === "system" ? Monitor : props.themeMode === "schedule" ? Clock : Sun;
+	const themeToggleTitle = t("app.themeDockTooltip", {
+		mode: t(props.themeMode === "dark" ? "settings.themeDark" : props.themeMode === "system" ? "settings.themeSystem" : props.themeMode === "schedule" ? "settings.themeSchedule" : "settings.themeLight"),
+	});
+	// agent 是否有 live runtime：没有运行中的 pi 子进程时，RPC 日志记录无法开启
+	// （记录靠主进程旁路拦截子进程通信，进程不存在则无日志可记）。
+	// 注意不能拿 menuAgent.sessionId 直接查 runtimeBySessionId：AgentTab.sessionId
+	// 是 pi 自身会话 id，而 runtimeBySessionId 的 key 是会话记录 id，必须按 agentId 反查。
+	const menuAgentCanRpcLog = menuAgent !== undefined && getBoundSidebarRuntimeAgentByAgentId(controller.catalog, menuAgent.id) !== undefined;
+	// 顶部「搜索」菜单项控制 MorphingSearch 命令面板的展开状态。
+	const [searchOpen, setSearchOpen] = useState(false);
+	// 低频入口（定时任务 / 智能体 / 收藏）收进「更多」：新建与搜索是每次会话都要用的，
+	// 这三个是偶发入口，平铺在列表上方会把会话列表挤下去。展开态只在本会话内保持。
+	const [moreActionsOpen, setMoreActionsOpen] = useState(false);
+	// 拼音字典按需装载：搜索面板打开才拉 26k 条字典 chunk（不进启动路径）。
+	// 就绪后 bump 一次渲染让 searchItems 重算出真实拼音键；未就绪期间面板退化为
+	// 子串/英文匹配，本地 chunk 毫秒级到位，体感无损。失败静默（只损失拼音通道）。
+	const [, bumpPinyinTable] = useReducer((tick: number) => tick + 1, 0);
+	useEffect(() => {
+		if (!searchOpen) return;
+		let cancelled = false;
+		ensurePinyinTable()
+			.then(() => {
+				if (!cancelled) bumpPinyinTable();
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, [searchOpen]);
+	// 生效快捷键绑定（用户设置可改），kbd 提示跟随真实键位；设置保存后自动刷新
+	const { bindings: shortcutBindings, platform } = useShortcutBindings();
+	const newSessionKbd = shortcutBindings ? formatAccelerator(shortcutBindings.openNewSession, platform) : "Ctrl+N";
+	const searchKbd = shortcutBindings ? formatAccelerator(shortcutBindings.openSearch, platform) : "Ctrl+F";
+
+	// 全局快捷键：新建会话（打开引导页）与搜索（打开命令面板）由主进程
+	// before-input-event 匹配（键位可设置页自定义）后广播 appShortcutTriggered；
+	// 这里只负责执行 UI 动作。输入框/内容可编辑区域聚焦时跳过（广播已由主进程
+	// preventDefault，跳过只是不执行，不会误触发页面行为），避免打字时误开面板。
+	useEffect(() => {
+		return desktopApi.app.onShortcutTriggered((id) => {
+			if (id !== "openNewSession" && id !== "openSearch") return;
+			const target = document.activeElement;
+			if (target instanceof HTMLElement && (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
+				return;
+			}
+			if (id === "openNewSession") {
+				props.onOpenNewSession?.();
+			} else {
+				setSearchOpen(true);
+			}
+		});
+	}, [props.onOpenNewSession]);
+	const menuSessionRecord = menu?.kind === "session" ? controller.catalog.sessionsByProject[menu.projectId]?.find((session) => session.id === menu.sessionId) : undefined;
+	const menuDraft = menu?.kind === "draft" ? controller.catalog.sessionsByProject[menu.projectId]?.find((session) => session.id === menu.sessionId) : undefined;
+	const menuSession = menuSessionRecord ? sessionRecordToSummary(menuSessionRecord) : undefined;
+	const menuSessionRuntimeAgent = menuSessionRecord ? getBoundSidebarRuntimeAgent(controller.catalog, menuSessionRecord.id) : undefined;
+	// 与上面 live 判据分开：error/closed 终态绑定不再是 live，但菜单必须保留「关闭 Agent」，
+	// 否则报错会话/草稿反而失去关闭出口（入口按「有 agentId 绑定」判定，不看状态）。
+	const boundAgentForSession = (sessionId: string | undefined) => {
+		if (!sessionId) return undefined;
+		const agentId = controller.catalog.runtimeBySessionId[sessionId]?.agentId;
+		return agentId ? controller.catalog.agents.find((agent) => agent.id === agentId) : undefined;
+	};
+	const menuSessionBoundAgent = menuSessionRecord ? boundAgentForSession(menuSessionRecord.id) : undefined;
+	const menuDraftBoundAgent = menuDraft ? boundAgentForSession(menuDraft.id) : undefined;
+
+	/**
+	 * 侧栏菜单的全状态运行控制（任意会话/agent 都有）。
+	 * 侧栏只拿得到快照（SidebarRuntimeSummary 无 runtimeGeneration），
+	 * 因此「有绑定」按 agentId 判定，与 Tab 下拉共用同一套策略函数避免判定漂移。
+	 * 过渡态（starting）由策略函数自身识别，侧栏不额外维护 busy。
+	 */
+	const buildSidebarRunControl = (sessionId: string, backend: AgentBackend | undefined): SidebarRunControl => {
+		const runtime = controller.catalog.runtimeBySessionId[sessionId];
+		const hasBinding = Boolean(runtime?.agentId);
+		return {
+			capabilities: sessionRunCapabilities({
+				state: resolveSessionRunState(runtime, hasBinding),
+				hasBinding,
+			}),
+			// 快照里有 agentId 就带上：菜单「复制 Agent ID」依赖它，且与 hasBinding 同源判定
+			agentId: runtime?.agentId,
+			reloadMode: resolveSessionReloadMode(backend),
+			onAction: (action) => void actions.sessions.runControl(sessionId, action),
+		};
+	};
+	const managerProject = controller.sessionManagerProjectId ? controller.catalog.projects.find((project) => project.id === controller.sessionManagerProjectId) : undefined;
+	const currentProject = props.currentProjectId ? controller.catalog.projects.find((project) => project.id === props.currentProjectId) : undefined;
+	const currentRootProject = currentProject?.worktreeParentId ? (controller.catalog.projects.find((project) => project.id === currentProject.worktreeParentId) ?? currentProject) : currentProject;
+
+	// 列表滚动容器：搜索面板选中项目后要把目标行滚进可视区（见 revealSearchProject）。
+	const conversationListRef = useRef<HTMLElement>(null);
+	/**
+	 * 搜索面板里点项目 = 「跳过去」：右侧已由 actions.projects.select 切到该项目引导页，
+	 * 左侧列表必须跟着定位，否则分段停在「活动/聊天」时目标行根本没挂载，看起来像没反应。
+	 * 顺序：先切到项目所在分段（Chat 在「聊天」，其余在「项目」）→ 展开父级与自身 →
+	 * 等搜索词清空、行回流落定后滚到可视区。搜索词由面板关闭同步清空，所以等两帧。
+	 */
+	const revealSearchProject = (project: Project) => {
+		if (!props.simple) controller.setNavTab(isChatProject(project) ? "chats" : "projects");
+		// worktree 子项目行挂在父项目树下：父项目折叠或该分支未展开时行都不存在，先展开。
+		const parent = project.worktreeParentId ? controller.catalog.projects.find((candidate) => candidate.id === project.worktreeParentId) : undefined;
+		if (parent) {
+			controller.revealProject(parent.id);
+			controller.expandWorktreeSessions(project.id);
+		}
+		controller.revealProject(project.id);
+		requestAnimationFrame(() => {
+			requestAnimationFrame(() => {
+				conversationListRef.current?.querySelector<HTMLElement>(`[data-project-row-id="${CSS.escape(project.id)}"]`)?.scrollIntoView({ block: "nearest" });
+			});
+		});
+	};
+
+	// MorphingSearch 检索项：扁平化所有项目 + 会话，供命令面板跳转。
+	// 项目项用目录名（chat 用「Chat」），会话项用标题 + 预览；选中即打开/选中目标。
+	// pinyin：中文标题的首字母/全拼键（纯字母查询才能命中，键按标题缓存）。
+	const searchItems: MorphingSearchItem[] = [];
+	for (const project of controller.catalog.projects) {
+		const projectTitle = displayProjectDirectoryName(project);
+		searchItems.push({
+			id: `project:${project.id}`,
+			title: projectTitle,
+			// 远端项目没有本机 path：描述用远端根路径，避免空串让搜索结果看起来没有位置。
+			description: isLocalProject(project) ? project.path : project.locator.remotePath,
+			pinyin: pinyinKeys(projectTitle),
+			icon: isChatProject(project) ? MessageSquare : Folder,
+			onSelect: () => {
+				actions.projects.select(project.id);
+				revealSearchProject(project);
+			},
+		});
+		for (const session of controller.catalog.sessionsByProject[project.id] ?? []) {
+			const sessionTitle = sessionDisplayName(session.title, session.forked) ?? session.title;
+			searchItems.push({
+				id: `session:${session.id}`,
+				title: sessionTitle,
+				description: session.preview,
+				pinyin: pinyinKeys(sessionTitle),
+				icon: MessageSquare,
+				onSelect: () => {
+					void actions.sessions.open(project.id, session.id);
+				},
+			});
+		}
+	}
+
+	return (
+		<aside
+			// 行操作按钮是 absolute 浮层：hover 时行文本通过 padding-right 压缩让位
+			// （pr 留出按钮空间 + 截断，三棵树统一策略，不再按侧栏宽度分断点），
+			// 宽度不用穿透到树组件
+			className={cn("chat-list-pane v3-braun flex h-full min-w-0 flex-col overflow-hidden text-sidebar-foreground", props.simple ? "bg-(--simple-shell-surface)" : "bg-sidebar")}
+			aria-label={t("app.search")}
+		>
+			{/* 品牌区提到 body 外：贴侧栏顶边，不被 sidebar-body 的 px/py 顶开（logo 怼左上）。 */}
+			{props.chrome}
+			<div className="sidebar-body flex min-h-0 flex-1 flex-col gap-2 px-2 pt-2 pb-1">
+				{/* 顶部两个平铺操作：「新建会话」+「搜索」（无下拉、无外边框）。
+            新建会话 → 打开初始引导页（居中输入框 + 项目下拉切换后可直接对话）；
+            搜索 → 打开 MorphingSearch 命令面板。把搜索从整行输入框收敛成单个动作项，
+            消除与下方胶囊分段的样式重复。底部细分割线与下方分组区分，避免与分段栏粘连。 */}
+				<div className={cn("flex shrink-0 flex-col gap-0.5 pt-1 pb-2", !props.simple && "border-b border-border/40")}>
+					<button type="button" className="group flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body text-foreground transition-colors hover:bg-bg-hover" aria-label={t("app.newSession")} title={t("app.newSession")} onClick={() => props.onOpenNewSession?.()}>
+						<CirclePlus className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+						<span className="min-w-0 flex-1 truncate font-medium">{t("app.newSession")}</span>
+						{/* 快捷键默认隐藏，行 hover 时才淡入（无边框，弱化到只剩文字），避免常驻视觉噪音；
+                键位跟随设置页自定义（useShortcutBindings） */}
+						<kbd className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md px-1 text-micro text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{newSessionKbd}</kbd>
+					</button>
+					<button type="button" className="group flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body text-foreground transition-colors hover:bg-bg-hover" aria-label={t("app.searchSessions")} title={t("app.searchSessions")} onClick={() => setSearchOpen(true)}>
+						<Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+						<span className="min-w-0 flex-1 truncate font-medium">{t("app.searchSessions")}</span>
+						{/* 快捷键默认隐藏，行 hover 时才淡入；键位跟随设置页自定义（useShortcutBindings） */}
+						<kbd className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md px-1 text-micro text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{searchKbd}</kbd>
+					</button>
+					{/* 宿主插件面板入口：插件贡献的行是用户自己装的模块入口，固定排在「更多」之上——
+					    否则「更多」展开的三件套会夹在插件行之前，越展开越乱。无已启用面板时组件自身不渲染。 */}
+					<HostPluginDockButtons projectId={props.currentProjectId} sessionId={props.currentSessionId} />
+					{/* 低频入口折叠组：定时任务 / 智能体 / 收藏，固定排在动作区最末（插件行之后）。展开后按原顺序平铺，
+					    不改变各自行为（定时任务仍有运行中呼吸点，智能体/收藏各自打开页面 Tab）。
+					    箭头与树节点同向：收起指向右（▸），展开转向下（▾）——不是反过来的「收起下指、展开上指」。 */}
+					<button type="button" className="group flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body text-foreground transition-colors hover:bg-bg-hover" aria-expanded={moreActionsOpen} aria-controls="sidebar-more-actions" title={t("common.more")} onClick={() => setMoreActionsOpen((v) => !v)}>
+						<ChevronRight className={cn("size-4 shrink-0 text-muted-foreground transition-transform duration-fast", moreActionsOpen && "rotate-90")} aria-hidden="true" />
+						<span className="min-w-0 flex-1 truncate font-medium">{t("common.more")}</span>
+					</button>
+					{moreActionsOpen ? (
+						<div id="sidebar-more-actions" className="flex flex-col gap-0.5">
+							<AutomationDockButton />
+							<AgentMarketDockButton />
+							<FavoritesDockButton />
+						</div>
+					) : null}
+				</div>
+
+				{/* MorphingSearch 命令面板：锚点固定定位到视口水平居中、垂直约 1/5 处，
+            （VSCode/Raycast 式 command 弹窗），而不是贴在搜索按钮旁。锚点不可见但保留
+            真实尺寸供 getBoundingClientRect 测量，面板从锚点位置展开即居中。 */}
+				<div className="pointer-events-none fixed left-1/2 top-[16vh] z-50 w-[min(640px,calc(100vw-2rem))] -translate-x-1/2">
+					<MorphingSearch
+						items={searchItems}
+						placeholder={t("app.searchSessions")}
+						shortcut=""
+						iconOnly
+						maxWidth={640}
+						maxHeight={360}
+						open={searchOpen}
+						onOpenChange={setSearchOpen}
+						emptyMessage={t("app.searchNoResults")}
+						className="pointer-events-none h-12 w-full opacity-0"
+						onQueryChange={(query) => controller.setSearch(query)}
+					/>
+				</div>
+
+				{/* 活动 / 聊天 / 项目分段：beUI pill 分段（凹槽轨道 + 凸起高亮胶囊）。
+            活动页收集所有已激活的 Agent 会话（跨项目），聊天页显示历史会话，项目页显示工作区目录。
+            轨道：muted 弱化底 + hairline 边框；高亮块盖掉 beUI 默认的 bg-primary 色块，
+            换成 background 浮起面（细描边 + 投影；暗色用 bg-active 提亮一档做「抬起」感）。
+            激活文字显式给 text-foreground 压掉 beUI 的 text-primary-foreground
+            （反白色落在浅色胶囊上不可见）。选择即记忆（双写 localStorage + settings.json）。
+
+            宽度自适应：beUI pill 的 trigger 外面还包了一层 <div className="relative">（承载
+            layoutId 指示器），它才是轨道里的 flex item；只在 TabsTrigger 上写 w-full 只能撑满
+            这层包层，包层自身仍是内容宽，所以侧栏拉宽时右侧会留一段空轨（下方 Dock 用
+            w-full justify-between 分发才显得自适应）。用后代选择器把包层设为 flex-1，三档
+            平分轨道；包层 min-w-0 + 文案 truncate 作窄侧栏/英文长标签的溢出兜底。 */}
+				{!props.simple && (
+					<Tabs
+						value={controller.navTab}
+						onValueChange={(value) => {
+							const tab = parseSidebarNavTab(value);
+							if (tab) controller.setNavTab(tab);
+						}}
+						variant="pill"
+					>
+						<TabsList className="w-full rounded-full bg-muted/70 p-0.5 [&>div]:min-w-0 [&>div]:flex-1">
+							<TabsTrigger value="active" className={cn("w-full min-w-0 gap-1.5 overflow-hidden px-2 py-1.5 text-xs", controller.navTab === "active" && "text-foreground")} indicatorClassName="bg-bg-active">
+								<Activity className="size-3.5 shrink-0" aria-hidden="true" />
+								<span className="truncate">{t("app.sidebarActive")}</span>
+							</TabsTrigger>
+							<TabsTrigger value="chats" className={cn("w-full min-w-0 gap-1.5 overflow-hidden px-2 py-1.5 text-xs", controller.navTab === "chats" && "text-foreground")} indicatorClassName="bg-bg-active">
+								<MessageSquare className="size-3.5 shrink-0" aria-hidden="true" />
+								<span className="truncate">{t("app.sidebarChats")}</span>
+							</TabsTrigger>
+							<TabsTrigger value="projects" className={cn("w-full min-w-0 gap-1.5 overflow-hidden px-2 py-1.5 text-xs", controller.navTab === "projects" && "text-foreground")} indicatorClassName="bg-bg-active">
+								<Folder className="size-3.5 shrink-0" aria-hidden="true" />
+								<span className="truncate">{t("app.sidebarProjects")}</span>
+							</TabsTrigger>
+						</TabsList>
+					</Tabs>
+				)}
+
+				{/* G9：DSH 全文搜索结果（搜索词非空时展示；结果按 dshSessionId 映射回 catalog） */}
+				{controller.search.trim() && (
+					<DshSearchResults
+						query={controller.search}
+						onOpen={(projectId, sessionId) => {
+							void actions.sessions.open(projectId, sessionId);
+						}}
+					/>
+				)}
+				{/* 跨会话正文搜索（Go session-index sidecar）：命中会话跨项目展示，
+				    点击打开并定位到首个命中消息（pendingMessageJump 链路）；无 sidecar 时隐藏 */}
+				{controller.search.trim() && (
+					<SessionContentSearchResults
+						query={controller.search}
+						onOpen={(projectId, sessionId) => {
+							void actions.sessions.open(projectId, sessionId);
+						}}
+					/>
+				)}
+
+				{/* 单一滚动区承载项目与展开内容，避免项目导航/详情双滚动和重复标题。
+            scrollbar-gutter: stable：滚动条出现/消失时列表宽度不跳变（与抽屉一致）。 */}
+				{/* scroll-ok: bounded —— 行数有硬上限（受控分页 / 上限常量 / 固定枚举），不随数据无限增长。 */}
+				<section ref={conversationListRef} className="conversation-list min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]">
+					<ProjectTree
+						simple={props.simple}
+						controller={controller}
+						actions={actions}
+						currentProjectId={currentRootProject?.id}
+						currentSessionId={props.currentSessionId}
+						worktreesByProject={props.worktreesByProject}
+						branchByProject={props.branchByProject}
+						removingWorktreeProjectIds={props.removingWorktreeProjectIds}
+						stickyGroupHeaders={props.stickyGroupHeaders}
+					/>
+				</section>
+			</div>
+			{/* 底栏 dock（beUI Dock）：设置/公告/反馈/主题切换收进浮动卡片，铺满底栏宽度
+          （w-full + justify-between 让四个动作均匀分布，侧栏最小宽 208px 时也不溢出）。
+          DockItem 只提供尺寸与居中容器，按钮本体仍是 shadcn ghost；四入口 hover 提示
+          统一走 styled Tooltip（side="right"/delay 300），不用原生 title——原生 title
+          会与 Tooltip 双弹且样式割裂（回归见 sidebarBottomButtons.test.mjs）。
+          行容器带 relative：首次解释气泡挂在整行上（左缘铺满行宽），不能寄生在 32px
+          的 DockItem 内——否则 224px 气泡会溢出侧栏左缘被裁剪（回归见 updateDotHintAnchor）。 */}
+			{!props.isLanWeb && (
+				<div className="relative flex shrink-0 items-center px-2 pb-2 pt-1">
+					{/* 首次解释气泡：圆点第一次出现时指向设置按钮（Material feature discovery），
+              与 Dock 同级挂载（铺满行宽，箭头指向最左侧的设置按钮） */}
+					<UpdateDotHint hasPendingUpdate={hasPendingUpdate} onOpenSettings={() => props.onOpenSettings?.()} />
+					<Dock size={32} className="w-full justify-between">
+						<DockItem>
+							<div className="relative size-full">
+								{/* 有可用更新时：圆点 + 富 tooltip 清单（谁有更新、版本号），点击进入设置页查看。
+                  aria-label 保留更新文案，读屏与纯键盘用户不依赖视觉圆点。 */}
+								<Tooltip delayDuration={300}>
+									<TooltipTrigger asChild>
+										<Button type="button" variant="ghost" className="size-full rounded-full text-muted-foreground hover:bg-bg-hover hover:text-foreground" aria-label={hasPendingUpdate ? t("settings.titleWithUpdate") : t("settings.title")} onClick={props.onOpenSettings}>
+											<Bolt className="size-4" />
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent side="right" sideOffset={6} className="max-w-56">
+										{hasPendingUpdate ? (
+											<div className="flex flex-col gap-1">
+												<span className="font-medium">{t("update.dotMenuTitle")}</span>
+												<ul className="flex flex-col gap-0.5">
+													{updateItems.map((item) => (
+														<li key={item}>{item}</li>
+													))}
+												</ul>
+											</div>
+										) : (
+											t("settings.title")
+										)}
+									</TooltipContent>
+								</Tooltip>
+								{/* 更新角标：PiDeck / Pi CLI / 模型目录任一有可提示更新时显示圆点 */}
+								{hasPendingUpdate && <span className="pointer-events-none absolute right-1 top-1 size-2 rounded-full bg-[var(--color-accent)] ring-2 ring-[var(--color-bg-sidebar)]" aria-hidden="true" />}
+							</div>
+						</DockItem>
+						{/* 公告中心入口：未读红点在组件内部按 atom 派生（单一 owner） */}
+						<DockItem>
+							<AnnouncementCenter />
+						</DockItem>
+						<DockItem>
+							{/* 反馈入口：与设置/公告统一 styled Tooltip（原生 title 移除，防双弹）；aria-label 保留读屏契约 */}
+							<Tooltip delayDuration={300}>
+								<TooltipTrigger asChild>
+									<Button type="button" variant="ghost" className="size-full rounded-full text-muted-foreground hover:bg-bg-hover hover:text-foreground" aria-label={t("feedback.title")} onClick={props.onOpenFeedback}>
+										<MessageSquare className="size-4" />
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="right" sideOffset={6}>
+									{t("feedback.title")}
+								</TooltipContent>
+							</Tooltip>
+						</DockItem>
+						<DockItem>
+							{/* 主题切换：Tooltip 文案随当前模式变化（主题：X（点击切换）），与其它入口同一观感 */}
+							<Tooltip delayDuration={300}>
+								<TooltipTrigger asChild>
+									<Button type="button" variant="ghost" className="size-full rounded-full text-muted-foreground hover:bg-bg-hover hover:text-foreground" aria-label={themeToggleTitle} onClick={props.onToggleTheme}>
+										<ThemeModeIcon className="size-4" />
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="right" sideOffset={6}>
+									{themeToggleTitle}
+								</TooltipContent>
+							</Tooltip>
+						</DockItem>
+					</Dock>
+				</div>
+			)}
+
+			{controller.sourceFilterMenu && (
+				<SessionSourceFilterMenu
+					menu={controller.sourceFilterMenu}
+					filter={controller.sourceFilterFor(controller.sourceFilterMenu.projectId)}
+					onToggleSource={(source) => controller.toggleSourceFilter(controller.sourceFilterMenu!.projectId, source)}
+					onClear={() => controller.clearSourceFilter(controller.sourceFilterMenu!.projectId)}
+					onClose={controller.closeSourceFilter}
+				/>
+			)}
+			{menuProject && menu?.kind === "project" && (
+				<ProjectContextMenu
+					menu={{ x: menu.x, y: menu.y, project: menuProject }}
+					onClose={controller.closeMenu}
+					onNewSession={() => {
+						void actions.sessions.createDraft(menuProject.id);
+						controller.closeMenu();
+					}}
+					onNewAnonymousSession={() => {
+						void actions.sessions.createAnonymous(menuProject.id);
+						controller.closeMenu();
+					}}
+					onRevealProject={() => {
+						void actions.projects.reveal(menuProject);
+						controller.closeMenu();
+					}}
+					onOpenWithEditor={() => {
+						actions.projects.openWithEditor(menuProject);
+						controller.closeMenu();
+					}}
+					onImportCodexSessions={() => {
+						actions.projects.importSessions(menuProject, "codex");
+						controller.closeMenu();
+					}}
+					onImportClaudeSessions={() => {
+						actions.projects.importSessions(menuProject, "claude");
+						controller.closeMenu();
+					}}
+					onImportQoderSessions={() => {
+						actions.projects.importSessions(menuProject, "qoder");
+						controller.closeMenu();
+					}}
+					onImportOpenCodeSessions={() => {
+						actions.projects.importSessions(menuProject, "opencode");
+						controller.closeMenu();
+					}}
+					onImportZCodeSessions={() => {
+						actions.projects.importSessions(menuProject, "zcode");
+						controller.closeMenu();
+					}}
+					onImportWorkBuddySessions={() => {
+						actions.projects.importSessions(menuProject, "workbuddy");
+						controller.closeMenu();
+					}}
+					onImportCursorSessions={() => {
+						actions.projects.importSessions(menuProject, "cursor");
+						controller.closeMenu();
+					}}
+					onImportKimiSessions={() => {
+						actions.projects.importSessions(menuProject, "kimi");
+						controller.closeMenu();
+					}}
+					onImportKimiWorkSessions={() => {
+						actions.projects.importSessions(menuProject, "kimiwork");
+						controller.closeMenu();
+					}}
+					onImportMinimaxSessions={() => {
+						actions.projects.importSessions(menuProject, "minimax");
+						controller.closeMenu();
+					}}
+					onImportDirectorySessions={() => {
+						actions.projects.importDirectorySessions(menuProject);
+						controller.closeMenu();
+					}}
+					onManageProjectResources={() => {
+						actions.projects.manageResources(menuProject);
+						controller.closeMenu();
+					}}
+					onManageAutomations={
+						automationHidden
+							? undefined
+							: () => {
+									actions.projects.manageAutomations(menuProject.id);
+									controller.closeMenu();
+								}
+					}
+					onManageSessions={() => {
+						controller.openSessionManager(menuProject.id);
+						controller.closeMenu();
+					}}
+					onFilterSessions={() => {
+						controller.openSourceFilter(menuProject.id, menu.x, menu.y + 20);
+						controller.closeMenu();
+					}}
+					onToggleWorktree={() => {
+						void actions.projects.toggleWorktree(menuProject);
+						controller.closeMenu();
+					}}
+					onRefreshProject={() => {
+						void actions.projects.refresh(menuProject.id);
+						controller.closeMenu();
+					}}
+					onCopyProjectPath={() => {
+						void actions.projects.copyPath(menuProject);
+						controller.closeMenu();
+					}}
+					onRenameProject={() => {
+						actions.projects.rename(menuProject);
+						controller.closeMenu();
+					}}
+					isPinned={menuProject.pinned === true}
+					sessionSortMode={controller.sessionSortMode}
+					onSetSessionSortMode={(mode) => {
+						controller.setSessionSortMode(mode);
+						controller.closeMenu();
+					}}
+					onTogglePin={
+						menuProject.kind !== "chat" && !menuProject.worktreeParentId
+							? () => {
+									void actions.projects.setPinned(menuProject, !(menuProject.pinned === true));
+									controller.closeMenu();
+								}
+							: undefined
+					}
+					onRemoveWorktree={
+						menuProjectWorktreeParent && isLocalProject(menuProject)
+							? () => {
+									void actions.worktrees.remove(
+										menuProjectWorktreeParent.id,
+										{
+											target: { projectId: menuProject.id, relativePath: "" },
+											displayPath: menuProject.path,
+											branch: menuProject.name,
+										},
+										menuProject,
+									);
+									controller.closeMenu();
+								}
+							: undefined
+					}
+					onRemoveProject={() => {
+						void actions.projects.remove(menuProject);
+						controller.closeMenu();
+					}}
+					onChatSettings={() => {
+						if (actions.projects.changeChatPath) void actions.projects.changeChatPath(menuProject);
+						controller.closeMenu();
+					}}
+				/>
+			)}
+			{menuAgent && menu?.kind === "agent" && (
+				<AgentContextMenu
+					menu={{ x: menu.x, y: menu.y, agent: menuAgent }}
+					onClose={controller.closeMenu}
+					onRename={() => {
+						actions.agents.rename(menuAgent);
+						controller.closeMenu();
+					}}
+					isPinned={menuAgentSessionRecord ? controller.isSessionPinned(menuAgentSessionRecord.id) : false}
+					onTogglePinned={
+						menuAgentSessionRecord && menu.pinnable !== false
+							? () => {
+									controller.toggleSessionPin(menuAgentSessionRecord.id);
+									controller.closeMenu();
+								}
+							: undefined
+					}
+					isSessionFavorited={menuAgentSessionRecord && menuAgentSessionRecord.status !== "draft" && menu.pinnable !== false ? favorites.favoritedSessionIds.has(menuAgentSessionRecord.id) : false}
+					onToggleSessionFavorite={
+						menuAgentSessionRecord && menuAgentSessionRecord.status !== "draft" && menu.pinnable !== false
+							? () => {
+									void favorites.toggleSessionFavorite({
+										kind: "session",
+										text: "",
+										sessionId: menuAgentSessionRecord.id,
+										sessionTitle: menuAgentSessionRecord.title,
+										projectId: menuAgentSessionRecord.projectId,
+									});
+									controller.closeMenu();
+								}
+							: undefined
+					}
+					onExport={() => {
+						void actions.agents.export(menuAgent);
+						controller.closeMenu();
+					}}
+					onCopySession={() => {
+						void actions.agents.copySession(menuAgent);
+						controller.closeMenu();
+					}}
+					onCopySessionFilePath={() => {
+						void actions.agents.copyPath(menuAgent);
+						controller.closeMenu();
+					}}
+					onOpenSessionFile={() => {
+						void actions.agents.openSessionFile(menuAgent);
+						controller.closeMenu();
+					}}
+					// 运行控制全状态（启动/停止/重启/重载）：按 runtime 快照算能力，不再分 live/非 live 两套入口
+					runControl={menuAgentSessionId ? buildSidebarRunControl(menuAgentSessionId, menuAgent.backend) : undefined}
+					// 会话代理：与 Tab 菜单/Session 菜单共用 App 层弹窗宿主；agent 维度此前缺失该入口
+					onOpenProxySetting={
+						menuAgentSessionId
+							? () => {
+									controller.closeMenu();
+									actions.sessions.openProxySetting(menuAgentSessionId);
+								}
+							: undefined
+					}
+					onCreateSideTask={
+						menuAgent.projectId
+							? () => {
+									controller.closeMenu();
+									void actions.sessions.createSideTask(menuAgent.projectId, menuAgent.backend);
+								}
+							: undefined
+					}
+					onToggleRpcLogging={() => {
+						// 兜底：置灰的菜单项点击不触发 onSelect，这里防御 agent 状态在菜单打开期间变化的情况
+						if (!menuAgentCanRpcLog) {
+							showNotice(t("menu.rpcLoggingRequiresRuntime"), 2500);
+							controller.closeMenu();
+							return;
+						}
+						controller.closeMenu();
+						if (controller.isAgentRpcLogging(menuAgent.id)) {
+							// 已开启：菜单项显示「关闭RPC日志」→ 直接关闭记录（历史文件保留，30 天自动清理）
+							void actions.rpc
+								.setLogging(menuAgent.id, false)
+								.then((enabled) => {
+									showNotice(enabled ? t("rpc.loggingDisableFailed") : t("rpc.loggingDisabled"), 2500);
+								})
+								.catch(() => showNotice(t("rpc.loggingDisableFailed"), 2500));
+							return;
+						}
+						void actions.rpc
+							.setLogging(menuAgent.id, true)
+							.then((enabled) => {
+								// 开启成功即自动打开日志面板：开记录的意图就是「现在要看」，省掉再点一次「查看日志」。
+								// 状态镜像由 App 层 rpc.setLogging 包装统一写入，这里只负责视图跳转与反馈。
+								if (enabled) controller.openRpcLogs(menuAgent.id);
+								showNotice(enabled ? t("rpc.loggingEnabled") : t("rpc.loggingEnableFailed"), 2500);
+							})
+							.catch(() => showNotice(t("rpc.loggingEnableFailed"), 2500));
+					}}
+					isRpcLogging={controller.isAgentRpcLogging(menuAgent.id)}
+					rpcToggleDisabled={!menuAgentCanRpcLog}
+					onOpenLogs={() => {
+						controller.openRpcLogs(menuAgent.id);
+						controller.closeMenu();
+					}}
+					onCloseAgent={() => {
+						void actions.agents.close(menuAgent);
+						controller.closeMenu();
+					}}
+					// 远端记录的「删除」只是移除本机记录（远端文件保留，主进程记墓碑）：菜单文案必须如实。
+					isRemoteSession={menuAgentSessionRecord?.locator?.kind === "ssh"}
+					onDeleteSession={() => {
+						const bound = Object.entries(controller.catalog.runtimeBySessionId).find(([, runtime]) => runtime?.agentId === menuAgent.id);
+						const sessionId = bound?.[0];
+						const projectId = menuAgent.projectId;
+						const record = sessionId ? controller.catalog.sessionsByProject[projectId]?.find((session) => session.id === sessionId) : undefined;
+						if (record?.status === "draft") {
+							void actions.sessions.deleteDraft(record);
+						} else if (record) {
+							const summary = sessionRecordToSummary(record);
+							if (summary) void actions.sessions.delete(projectId, summary);
+						}
+						controller.closeMenu();
+					}}
+				/>
+			)}
+			{menuDraft && menu?.kind === "draft" && menuDraft.status === "draft" && !menuAgent && (
+				<DraftSessionContextMenu
+					menu={{ x: menu.x, y: menu.y }}
+					onClose={controller.closeMenu}
+					// 草稿会话同样给运行控制：不必先打开会话发消息就能启动 Agent
+					runControl={buildSidebarRunControl(menuDraft.id, menuDraft.backend)}
+					onCloseAgent={
+						menuDraftBoundAgent
+							? () => {
+									void actions.agents.close(menuDraftBoundAgent);
+									controller.closeMenu();
+								}
+							: undefined
+					}
+					onDelete={() => {
+						void actions.sessions.deleteDraft(menuDraft);
+						controller.closeMenu();
+					}}
+				/>
+			)}
+			{menuSession && menu?.kind === "session" && (
+				<SessionContextMenu
+					menu={{ x: menu.x, y: menu.y, session: menuSession }}
+					onClose={controller.closeMenu}
+					onRename={() => {
+						actions.sessions.rename(menu.projectId, menuSession);
+						controller.closeMenu();
+					}}
+					isPinned={controller.isSessionPinned(menuSession.id)}
+					onTogglePinned={
+						menu.pinnable
+							? () => {
+									controller.toggleSessionPin(menuSession.id);
+									controller.closeMenu();
+								}
+							: undefined
+					}
+					isSessionFavorited={menu.pinnable ? favorites.favoritedSessionIds.has(menuSession.id) : false}
+					onToggleSessionFavorite={
+						menu.pinnable
+							? () => {
+									void favorites.toggleSessionFavorite({
+										kind: "session",
+										text: "",
+										sessionId: menuSession.id,
+										sessionTitle: menuSessionRecord?.title ?? menuSession.name,
+										projectId: menuSession.projectId ?? menu.projectId,
+									});
+									controller.closeMenu();
+								}
+							: undefined
+					}
+					onOpenProxySetting={() => {
+						controller.closeMenu();
+						actions.sessions.openProxySetting(menuSession.id);
+					}}
+					// 侧边任务：项目归属优先取会话自己的（分屏/worktree 栏可能与菜单所在项目不同）
+					onCreateSideTask={() => {
+						controller.closeMenu();
+						void actions.sessions.createSideTask(menuSession.projectId ?? menu.projectId, menuSession.backend);
+					}}
+					// 运行控制全状态：未启动的历史会话主控项即「启动 Agent」
+					runControl={buildSidebarRunControl(menuSession.id, menuSession.backend)}
+					onExport={() => {
+						void actions.sessions.export(menu.projectId, menuSession);
+						controller.closeMenu();
+					}}
+					onCopySession={() => {
+						void actions.sessions.copy(menu.projectId, menuSession);
+						controller.closeMenu();
+					}}
+					onCopySessionFilePath={() => {
+						void actions.sessions.copyPath(menuSession);
+						controller.closeMenu();
+					}}
+					onOpenSessionFile={() => {
+						void actions.sessions.openFile(menuSession);
+						controller.closeMenu();
+					}}
+					// F5：DSH 会话无 filePath 但可复制 host 会话文件路径（主进程按 dshSessionId 推导）
+					hasFilePath={Boolean(menuSession.filePath) || menuSession.backend === "dsh"}
+					// 远端记录的「删除」只是移除本机记录（远端文件保留，主进程记墓碑）：菜单文案必须如实。
+					isRemoteSession={menuSession.locator?.kind === "ssh"}
+					canRpcLog={Boolean(menuSessionRuntimeAgent)}
+					rpcToggleDisabled={!menuSessionRuntimeAgent}
+					isRpcLogging={menuSessionRuntimeAgent ? controller.isAgentRpcLogging(menuSessionRuntimeAgent.id) : false}
+					onToggleRpcLogging={() => {
+						// 历史会话（无 runtime）不会渲染该项；兜底防御状态变化
+						if (!menuSessionRuntimeAgent) {
+							showNotice(t("menu.rpcLoggingRequiresRuntime"), 2500);
+							controller.closeMenu();
+							return;
+						}
+						controller.closeMenu();
+						if (controller.isAgentRpcLogging(menuSessionRuntimeAgent.id)) {
+							// 已开启：菜单项显示「关闭RPC日志」→ 直接关闭记录
+							void actions.rpc
+								.setLogging(menuSessionRuntimeAgent.id, false)
+								.then((enabled) => {
+									showNotice(enabled ? t("rpc.loggingDisableFailed") : t("rpc.loggingDisabled"), 2500);
+								})
+								.catch(() => showNotice(t("rpc.loggingDisableFailed"), 2500));
+							return;
+						}
+						void actions.rpc
+							.setLogging(menuSessionRuntimeAgent.id, true)
+							.then((enabled) => {
+								// 开启成功即自动打开日志面板（语义同 agent 菜单分支）；镜像状态由 App 层 rpc.setLogging 包装统一写 atom。
+								if (enabled) controller.openRpcLogs(menuSessionRuntimeAgent.id);
+								showNotice(enabled ? t("rpc.loggingEnabled") : t("rpc.loggingEnableFailed"), 2500);
+							})
+							.catch(() => showNotice(t("rpc.loggingEnableFailed"), 2500));
+					}}
+					onOpenLogs={() => {
+						if (menuSessionRuntimeAgent) controller.openRpcLogs(menuSessionRuntimeAgent.id);
+						controller.closeMenu();
+					}}
+					onCloseAgent={
+						menuSessionBoundAgent
+							? () => {
+									void actions.agents.close(menuSessionBoundAgent);
+									controller.closeMenu();
+								}
+							: undefined
+					}
+					onArchiveSession={() => {
+						void actions.sessions.archive(menu.projectId, menuSession);
+						controller.closeMenu();
+					}}
+					onDeleteSession={() => {
+						void actions.sessions.delete(menu.projectId, menuSession);
+						controller.closeMenu();
+					}}
+				/>
+			)}
+			{managerProject && (
+				/* 弹窗项目上下文 = 整个 worktree 家族（根 + 全部子工作区）：主列表并集展示，
+           归档按家族过滤，worktree 会话打工作区标签（策略见 sessionManagerModel）。 */
+				<SessionManagerModal
+					projects={controller.catalog.projects}
+					projectId={managerProject.id}
+					sessions={worktreeFamilyProjects(controller.catalog.projects, managerProject.id)
+						.flatMap((project) => controller.catalog.sessionsByProject[project.id] ?? [])
+						.map(sessionRecordToSummary)
+						.filter((summary): summary is SessionSummary => Boolean(summary && isManagerSessionSummary(summary)))
+						.sort((a, b) => b.updatedAt - a.updatedAt)}
+					onClose={controller.closeSessionManager}
+					onRename={(session) => actions.sessions.rename(managerProject.id, session)}
+					onExport={(session) => void actions.sessions.export(managerProject.id, session)}
+					onDelete={(sessions) => Promise.all(sessions.map((session) => actions.sessions.delete(managerProject.id, session))).then(controller.closeSessionManager)}
+					onArchive={async (sessions) => {
+						// 归档成功后弹窗保持打开（用户要继续管理/切到归档视图核对），关闭只由用户触发。
+						// 家族列表跨多个工作区：按会话归属项目归档，dismiss/refresh 才不会落到错误项目，
+						// 否则弹窗留着时子工作区的行会残留。
+						// 失败必须转 toast：弹窗不关闭时，静默失败会让用户以为已经归档而反复点击。
+						await Promise.all(sessions.map((session) => actions.sessions.archive(session.projectId ?? managerProject.id, session))).catch((error: unknown) => showNotice(error instanceof Error ? error.message : String(error), 5000, "error"));
+					}}
+					onUnarchive={(archived) => actions.sessions.unarchive(archived, managerProject.id)}
+					listArchived={actions.sessions.listArchived}
+					deleteArchived={(archivedPath) => actions.sessions.deleteArchived(archivedPath)}
+					onUnarchiveDsh={(dshSessionId) => actions.sessions.unarchiveDsh(dshSessionId, managerProject.id)}
+					listArchivedDsh={actions.sessions.listArchivedDsh}
+					deleteArchivedDsh={(dshSessionId) => actions.sessions.deleteArchivedDsh(dshSessionId)}
+					requestDeleteArchivedRemote={(sessionId) => actions.sessions.requestDeleteArchivedRemote(sessionId)}
+					answerDeleteArchivedRemote={(requestId, choice) => actions.sessions.answerDeleteArchivedRemote(requestId, choice)}
+				/>
+			)}
+			{controller.worktreeCreateProjectId && (
+				<WorktreeCreateDialog projectId={controller.worktreeCreateProjectId} creating={Boolean(props.creatingWorktree)} onCreate={(branchName) => void actions.worktrees.create(controller.worktreeCreateProjectId!, branchName).then(controller.closeWorktreeCreate)} onClose={controller.closeWorktreeCreate} />
+			)}
+			{/* 实时日志面板挂在右侧工作区抽屉（App 层 rpcLog 面板），侧栏不再挂查看器 */}
+		</aside>
+	);
+}
