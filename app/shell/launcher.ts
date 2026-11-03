@@ -19,6 +19,7 @@ import {
 	upsertDevice,
 	type DeviceRecord,
 } from "./device.ts";
+import { ensureNotificationPermission, rememberedNotificationDenial } from "./permissions.ts";
 
 type ProbeState = "checking" | "online" | "offline" | "auth";
 
@@ -29,6 +30,10 @@ const addBtn = $<HTMLButtonElement>("add-btn");
 const scanBtn = $<HTMLButtonElement>("scan-btn");
 const toastEl = $("toast");
 const scanOverlay = $("scan-overlay");
+const scanCancel = $<HTMLButtonElement>("scan-cancel");
+const scanTorch = $<HTMLButtonElement>("scan-torch");
+const notifyNotice = $("notify-notice");
+const notifyBtn = $<HTMLButtonElement>("notify-btn");
 
 let devices = loadDevices();
 const probeStates = new Map<string, ProbeState>();
@@ -199,7 +204,97 @@ inputEl.addEventListener("keydown", (event) => {
 	if (event.key === "Enter") addFromText(inputEl.value);
 });
 
-/** 扫码：优先 Google 原生全屏扫描器，无 GMS 机型退到插件自带的取景器。 */
+/**
+ * 扫码。
+ *
+ * 两条路线：
+ * 1) Google code scanner（GMS 提供的全屏扫描页，自带手电筒/相册，不需要页面配合）；
+ * 2) 插件内置取景器：相机预览铺在 WebView **下面**，所以必须由页面自己把背景变透明
+ *    （`body.barcode-scanner-active`），否则用户看到的就是一块纯色。
+ */
+async function scanWithGoogle(
+	BarcodeScanner: typeof import("@capacitor-mlkit/barcode-scanning").BarcodeScanner,
+	BarcodeFormat: typeof import("@capacitor-mlkit/barcode-scanning").BarcodeFormat,
+): Promise<string | null | undefined> {
+	const availability = await BarcodeScanner.isGoogleBarcodeScannerModuleAvailable?.();
+	if (!availability?.available) return undefined;
+	try {
+		const result = await BarcodeScanner.scan({ formats: [BarcodeFormat.QrCode] });
+		return result.barcodes.map((item) => item.rawValue ?? item.displayValue ?? "").find(Boolean) ?? null;
+	} catch (error) {
+		// 用户点了取消：当作没扫到，别再退到内置取景器（会二次弹相机）
+		if (/cancel|取消|abort/i.test(String(error))) return null;
+		// 有模块但起不来（部分 ROM）：继续走内置取景器
+		return undefined;
+	}
+}
+
+async function scanInline(
+	BarcodeScanner: typeof import("@capacitor-mlkit/barcode-scanning").BarcodeScanner,
+	BarcodeFormat: typeof import("@capacitor-mlkit/barcode-scanning").BarcodeFormat,
+): Promise<string | null> {
+	const handles: Array<{ remove(): Promise<void> }> = [];
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let finished = false;
+	let torchOn = false;
+
+	scanOverlay.classList.add("show");
+	document.body.classList.add("barcode-scanner-active");
+
+	try {
+		return await new Promise<string | null>((resolve) => {
+			const finish = (value: string | null): void => {
+				if (finished) return;
+				finished = true;
+				if (timer) clearTimeout(timer);
+				resolve(value);
+			};
+
+			scanCancel.onclick = () => finish(null);
+			scanTorch.onclick = () => {
+				// 7.x 的 toggleTorch() 是裸开关（没有参数），状态得自己记
+				void BarcodeScanner.toggleTorch()
+					.then(() => {
+						torchOn = !torchOn;
+						scanTorch.classList.toggle("primary", torchOn);
+					})
+					.catch(() => toast("这台机器没有手电筒"));
+			};
+
+			void BarcodeScanner.addListener("barcodesScanned", (event) => {
+				const text = event.barcodes.map((item) => item.rawValue ?? "").find(Boolean);
+				if (!text || finished) return;
+				void navigator.vibrate?.(30);
+				finish(text);
+			})
+				.then((handle) => {
+					if (finished) void handle.remove();
+					else handles.push(handle);
+				})
+				.catch(() => finish(null));
+
+			void BarcodeScanner.startScan({ formats: [BarcodeFormat.QrCode] }).catch((error: unknown) => {
+				toast(`相机起不来：${String(error)}`);
+				finish(null);
+			});
+
+			timer = setTimeout(() => {
+				toast("没扫到，超时了");
+				finish(null);
+			}, 60_000);
+		});
+	} finally {
+		scanCancel.onclick = null;
+		scanTorch.onclick = null;
+		if (torchOn) await BarcodeScanner.toggleTorch().catch(() => undefined);
+		await BarcodeScanner.stopScan().catch(() => undefined);
+		for (const handle of handles) await handle.remove().catch(() => undefined);
+		await BarcodeScanner.removeAllListeners().catch(() => undefined);
+		document.body.classList.remove("barcode-scanner-active");
+		scanOverlay.classList.remove("show");
+	}
+}
+
 async function scanPairingCode(): Promise<string | null> {
 	const module = await import("@capacitor-mlkit/barcode-scanning");
 	const { BarcodeScanner, BarcodeFormat } = module;
@@ -208,44 +303,11 @@ async function scanPairingCode(): Promise<string | null> {
 
 	let permission = await BarcodeScanner.checkPermissions();
 	if (permission.camera !== "granted") permission = await BarcodeScanner.requestPermissions();
-	if (permission.camera !== "granted") throw new Error("没有相机权限");
+	if (permission.camera !== "granted") throw new Error("没有相机权限：系统设置 → 应用 → PiDeck → 权限 → 相机");
 
-	try {
-		const result = await BarcodeScanner.scan({ formats: [BarcodeFormat.QrCode] });
-		const text = result.barcodes.map((item) => item.rawValue ?? item.displayValue ?? "").find(Boolean);
-		return text ?? null;
-	} catch (error) {
-		if (/cancel|取消|abort/i.test(String(error))) return null;
-	}
-
-	// 没有 Google code scanner 模块时的兜底：插件取景器 + 自绘取景框
-	scanOverlay.classList.add("show");
-	const handles: Array<{ remove(): Promise<void> }> = [];
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	try {
-		return await new Promise<string | null>((resolve) => {
-			const finish = (value: string | null): void => {
-				if (timer) clearTimeout(timer);
-				resolve(value);
-			};
-			void BarcodeScanner.addListener("barcodesScanned", (event) => {
-				const text = event.barcodes.map((item) => item.rawValue ?? "").find(Boolean);
-				if (text) finish(text);
-			})
-				.then((handle) => {
-					handles.push(handle);
-				})
-				.catch(() => finish(null));
-			void BarcodeScanner.startScan({ formats: [BarcodeFormat.QrCode] }).catch(() => finish(null));
-			timer = setTimeout(() => finish(null), 60_000);
-		});
-	} finally {
-		if (timer) clearTimeout(timer);
-		scanOverlay.classList.remove("show");
-		await BarcodeScanner.stopScan().catch(() => undefined);
-		for (const handle of handles) await handle.remove().catch(() => undefined);
-		await BarcodeScanner.removeAllListeners().catch(() => undefined);
-	}
+	const viaGoogle = await scanWithGoogle(BarcodeScanner, BarcodeFormat);
+	if (viaGoogle !== undefined) return viaGoogle;
+	return scanInline(BarcodeScanner, BarcodeFormat);
 }
 
 scanBtn.addEventListener("click", async () => {
@@ -258,6 +320,41 @@ scanBtn.addEventListener("click", async () => {
 	} finally {
 		scanBtn.disabled = false;
 	}
+});
+
+/* ------------------------------------------------------------------ */
+/* 通知权限                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Android 13+ 的 POST_NOTIFICATIONS 必须运行时申请，否则后台看护服务
+ * `notify()` 的结果是被系统静默丢弃——用户体感就是「跑完了没提醒」。
+ * 进启动页时静默查一次（不弹框），用户点「开启」才真正弹。
+ */
+async function refreshNotificationNotice(request = false): Promise<void> {
+	const state = await ensureNotificationPermission(request);
+	const warn = state === "denied" || (state === "prompt" && rememberedNotificationDenial());
+	notifyNotice.classList.toggle("show", warn);
+	notifyBtn.textContent = state === "denied" ? "去设置" : "开启";
+	if (request && state === "granted") toast("通知已开启");
+	if (request && state === "denied") toast("系统里被关掉了：设置 → 应用 → PiDeck → 通知");
+}
+
+notifyBtn.addEventListener("click", () => {
+	void (async () => {
+		const state = await ensureNotificationPermission(true);
+		if (state === "granted") {
+			notifyNotice.classList.remove("show");
+			toast("通知已开启");
+			return;
+		}
+		// 已经拒过：Android 不会再弹框，只能把用户送到系统页
+		await import("@capacitor/core").then(({ registerPlugin }) =>
+			registerPlugin<{ openNotificationSettings(): Promise<void> }>("NavigationBar")
+				.openNotificationSettings()
+				.catch(() => undefined),
+		);
+	})();
 });
 
 // 返回键：启动页没有可关的层，直接退出
@@ -274,6 +371,7 @@ document.addEventListener("visibilitychange", () => {
 
 render();
 for (const device of devices) void probe(device);
+void refreshNotificationNotice();
 
 export type { ProbeState };
 export { normalizeBaseUrl };

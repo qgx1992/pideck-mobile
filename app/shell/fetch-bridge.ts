@@ -34,6 +34,30 @@ function isApiPath(url: string): boolean {
 	return url.startsWith("/api/") || url.startsWith("/api?") || url === "/api";
 }
 
+/**
+ * 哪些请求的响应是流（必须走原生 SSE）。
+ *
+ * 不能只看 `Accept: text/event-stream`：`ai` 的 DefaultChatTransport 发 `/api/chat`
+ * 时**不带 Accept 头**（只在 body 里带 JSON），所以只按 header 判断的话，
+ * 聊天会掉进 CapacitorHttp 被整体缓冲——表现为「等半天，答案一次性蹦出来」。
+ */
+const STREAM_PATHS: RegExp[] = [
+	/^\/api\/chat(?:[?#]|$)/, // 发送：POST + SSE 响应
+	/\/stream(?:[?#]|$)/, // 外部流：/api/sessions/<id>/stream
+];
+
+function looksLikeStream(url: string, accept: string): boolean {
+	if (accept.includes("text/event-stream")) return true;
+	let pathname = url;
+	try {
+		// 也吃绝对地址（`http://ip:8765/api/chat`）——上游偶尔直接拼好的 URL 会带 origin
+		pathname = new URL(url, "http://pideck.local").pathname;
+	} catch {
+		pathname = url.split(/[?#]/)[0] ?? url;
+	}
+	return STREAM_PATHS.some((pattern) => pattern.test(pathname));
+}
+
 async function readBody(body: BodyInit | null | undefined): Promise<string | undefined> {
 	if (body === undefined || body === null) return undefined;
 	if (typeof body === "string") return body;
@@ -46,6 +70,8 @@ async function readBody(body: BodyInit | null | undefined): Promise<string | und
 	}
 	return undefined;
 }
+
+export { looksLikeStream };
 
 export function installFetchBridge(baseUrl: string): void {
 	const originalFetch = window.fetch.bind(window);
@@ -64,7 +90,7 @@ export function installFetchBridge(baseUrl: string): void {
 		const body = await readBody(init?.body ?? request?.body);
 		const url = `${baseUrl.replace(/\/+$/, "")}${rawUrl}`;
 		const accept = headers.accept ?? headers.Accept ?? "";
-		const wantsStream = accept.includes("text/event-stream");
+		const wantsStream = looksLikeStream(rawUrl, accept);
 
 		if (wantsStream && isNativeSseAvailable()) {
 			return nativeSseFetch({ url, method, headers, body, signal: init?.signal ?? request?.signal ?? undefined });

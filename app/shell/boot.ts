@@ -11,10 +11,12 @@
  */
 
 import { App } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
 
 import { UPSTREAM_TOKEN_KEY, getActiveDevice } from "./device.ts";
 import { installDownloadBridge } from "./downloads.ts";
 import { installExternalLinks } from "./external-links.ts";
+import { getSseTransport, isNativeSseAvailable } from "./native-sse.ts";
 import { installFetchBridge } from "./fetch-bridge.ts";
 import { installEventSource } from "./event-source.ts";
 import { startRunWatch } from "./run-watch.ts";
@@ -55,6 +57,14 @@ if (!device) {
 		id: device.id,
 		name: device.name,
 		baseUrl: device.baseUrl,
+	};
+
+	// 排查用：真机上看一眼「消息是逐字出来还是一次性出来」时，
+	// 控制台跑 `__pideckDebug.sseIds()`（等它返回一堆 uuid = 走的是原生栈）。
+	(window as unknown as { __pideckDebug?: unknown }).__pideckDebug = {
+		nativeSse: isNativeSseAvailable(),
+		nativeHttp: Capacitor.isNativePlatform(),
+		sseIds: () => getSseTransport().list(),
 	};
 
 	// 返回键：上游用 pushState 叠层（抽屉/面板各一层），所以能回就回一层；

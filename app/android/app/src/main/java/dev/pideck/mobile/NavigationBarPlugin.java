@@ -1,6 +1,7 @@
 package dev.pideck.mobile;
 
 import android.content.Intent;
+import android.provider.Settings;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -80,6 +81,31 @@ public class NavigationBarPlugin extends Plugin {
         } catch (Exception error) {
             String message = error.getMessage();
             call.reject(message != null && !message.isEmpty() ? message : "没有可处理该链接的 App");
+        }
+    }
+
+    /**
+     * 打开本应用的「通知」系统设置页。
+     *
+     * Android 13+ 的 POST_NOTIFICATIONS 被拒过两次之后系统不再弹框，
+     * 唯一的出口就是这一页——所以启动页的「去设置」按钮直接调它，
+     * 免得用户自己翻三层设置还找不到。
+     */
+    @PluginMethod
+    public void openNotificationSettings(PluginCall call) {
+        try {
+            Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+            intent.putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+            if (getActivity() != null) {
+                getActivity().startActivity(intent);
+            } else {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(intent);
+            }
+            call.resolve();
+        } catch (Exception error) {
+            String message = error.getMessage();
+            call.reject(message != null && !message.isEmpty() ? message : "打不开通知设置");
         }
     }
 }

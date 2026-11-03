@@ -130,6 +130,18 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
 - `CapacitorHttp.enabled` 必须保持 `false`（`app/capacitor.config.ts`）：开了它 fetch 会被整体缓冲，
   流式对话直接变成「等半天一次性出来」。
 - service worker 必须禁用：Capacitor 下 `sw.js` 会缓存旧 assets，表现为「更新了还是老页面」。
+- **「要不要走原生 SSE」按路径判定，不要看 `Accept` 头**（`app/shell/fetch-bridge.ts` 的
+  `looksLikeStream`）：`ai` 的 `DefaultChatTransport` 发 `POST /api/chat` 时**不带
+  `Accept: text/event-stream`**，只按头分流会把整条对话交给 `CapacitorHttp` 缓冲，
+  表现是「等半天、答案一次性蹦出来」。现在按 `/api/chat` 与 `*/stream` 路径判定，
+  4 条单测在 `app/shell/fetch-bridge.test.ts`。
+- `POST_NOTIFICATIONS` 是**运行时**权限（Android 13+）：清单里声明不等于拿到，
+  `RunWatchService` 的 `notify()` 会被静默丢弃，表现为「跑完了没提醒」。启动页
+  `app/shell/launcher.ts` 调 `ensureNotificationPermission()`（`app/shell/permissions.ts`），
+  被拒过两次后系统不再弹框，「去设置」走 `NavigationBar.openNotificationSettings`。
+- 扫码取景是「相机预览在 WebView 下面」：`BarcodeScanner.startScan()` 只负责起相机，
+  页面必须自己把背景变透明（`body.barcode-scanner-active`），否则看到的是纯色块。
+  `app/shell/launcher.html` 里的遮罩只能靠取景框自身的 `box-shadow`，整屏底色必须 transparent。
 
 ## 改动完成后必须跑的验证
 

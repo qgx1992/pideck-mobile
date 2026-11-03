@@ -55,6 +55,8 @@ export interface SseTransport {
 	open(options: SseOpenOptions): Promise<void>;
 	close(options: { id: string }): Promise<void>;
 	subscribe(handlers: SseTransportHandlers): Promise<() => void>;
+	/** 当前所有在跑的流 id（排查「是否真走原生栈」用） */
+	list(): Promise<string[]>;
 }
 
 export function toAbsoluteUrl(url: string, baseUrl: string): string {
@@ -263,6 +265,10 @@ export function getSseTransport(): SseTransport {
 		},
 		async close(options) {
 			await plugin.close(options);
+		},
+		async list() {
+			const result = await plugin.list();
+			return Array.isArray(result?.ids) ? result.ids : [];
 		},
 		async subscribe(handlers) {
 			const handles = await Promise.all([

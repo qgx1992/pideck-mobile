@@ -87,12 +87,36 @@
         opacity: 0; pointer-events: none; transition: opacity 0.2s;
       }
       .toast.show { opacity: 1; }
+      .notice {
+        display: none;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+        padding: 10px 12px;
+        border: 1px solid #4a3b1f;
+        background: #221c10;
+        border-radius: 12px;
+        font-size: 13px;
+        color: #f0d9a8;
+      }
+      .notice.show { display: flex; }
+      .notice button { padding: 6px 10px; font-size: 13px; flex: none; }
       .scan-overlay {
-        position: fixed; inset: 0; background: rgba(0,0,0,0.55);
-        display: none; align-items: center; justify-content: center; z-index: 20;
+        position: fixed; inset: 0;
+        /* 相机预览在 WebView 下面，所以遮罩只能靠取景框自己的 box-shadow，
+           整屏底色必须透明，否则看到的是一块纯色。 */
+        background: transparent;
+        display: none; flex-direction: column; align-items: center; justify-content: center;
+        gap: 28px; z-index: 20;
       }
       .scan-overlay.show { display: flex; }
       .scan-frame { width: 62vw; height: 62vw; max-width: 300px; max-height: 300px; border: 2px solid #fff; border-radius: 18px; box-shadow: 0 0 0 100vmax rgba(0,0,0,0.45); }
+      .scan-actions { display: flex; gap: 12px; }
+      .scan-actions button { background: rgba(24,24,28,0.86); border-color: rgba(255,255,255,0.24); }
+      .scan-tip { color: #f2f2f4; font-size: 13px; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+      /* 扫码期间让页面整体透出下面的相机预览（插件只负责起相机，不碰 DOM） */
+      body.barcode-scanner-active { background: transparent; }
+      body.barcode-scanner-active > :not(#scan-overlay):not(#toast) { display: none !important; }
     </style>
   </head>
   <body>
@@ -100,6 +124,11 @@
       <h1>PiDeck</h1>
       <span class="brand-sub">手机客户端</span>
     </header>
+
+    <div class="notice" id="notify-notice">
+      <span>通知是关的，任务跑完不会有提醒。</span>
+      <button class="primary" id="notify-btn">开启</button>
+    </div>
 
     <div class="section-title">设备</div>
     <div id="devices"></div>
@@ -117,7 +146,14 @@
     </div>
 
     <div class="toast" id="toast"></div>
-    <div class="scan-overlay" id="scan-overlay"><div class="scan-frame"></div></div>
+    <div class="scan-overlay" id="scan-overlay">
+      <div class="scan-tip">把桌面端的二维码放进框里</div>
+      <div class="scan-frame"></div>
+      <div class="scan-actions">
+        <button id="scan-torch" class="ghost">手电筒</button>
+        <button id="scan-cancel" class="ghost">取消</button>
+      </div>
+    </div>
 
     <script type="module" src="/launcher.js"></script>
   </body>
