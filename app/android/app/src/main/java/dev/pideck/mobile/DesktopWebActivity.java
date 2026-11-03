@@ -11,7 +11,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.webkit.JavascriptInterface;
-import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -24,7 +23,6 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
-import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -66,8 +64,6 @@ public class DesktopWebActivity extends AppCompatActivity {
     private static final boolean forcedEdgeToEdge = Build.VERSION.SDK_INT >= 36;
     /** 承载 WebView 的容器：系统栏占位加在这上面，而不是 WebView 自己身上。 */
     private FrameLayout contentRoot;
-    /** 临时诊断条：把实际用到的几个尺寸画在页面上，方便按真机数值定死占位。 */
-    private TextView debugView;
     private WebView webView;
     private WebChromeClient.FileChooserParams pendingChooser;
     private LocalWebServer localServer;
@@ -134,6 +130,8 @@ public class DesktopWebActivity extends AppCompatActivity {
 
         // 页面自己画背景；WebView 保持不透明，避免键盘弹出时露出系统底色的黑边
         webView.setBackgroundColor(Color.parseColor("#101014"));
+        // 首帧先藏着：等页面自报安全区、占位定下来再显示（见 ShellBridge.setInsetInfo）
+        webView.setAlpha(0f);
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -199,16 +197,6 @@ public class DesktopWebActivity extends AppCompatActivity {
         contentRoot = new FrameLayout(this);
         contentRoot.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        debugView = new TextView(this);
-        debugView.setTextSize(9f);
-        debugView.setTextColor(Color.WHITE);
-        debugView.setBackgroundColor(0xCCD9004C);
-        debugView.setPadding(6, 2, 6, 2);
-        FrameLayout.LayoutParams debugLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        debugLp.gravity = Gravity.TOP | Gravity.START;
-        contentRoot.addView(debugView, debugLp);
-
         setContentView(contentRoot);
         ViewCompat.setOnApplyWindowInsetsListener(contentRoot, (view, insets) -> {
             applyBarInsets(insets);
@@ -226,18 +214,22 @@ public class DesktopWebActivity extends AppCompatActivity {
      * 为什么不能写死：桌面 Web 端主题跟桌面端设置（也可能是跟随系统），
      * 而 `AppTheme.WebShell` 的静态样式是「深色一套」 —— 浅色主题下会变成白底白图标。
      */
-    /** 页面 `env(safe-area-inset-*)` 的自报值（CSS px）+ `header` 相对页面顶边的偏移。 */
+    /** 页面 `env(safe-area-inset-*)` 的自报值（CSS px）；`pageHeaderTop` 只用于排查。 */
     private volatile float pageInsetTop = -1f;
     private volatile float pageHeaderTop = -1f;
 
     private final class ShellBridge {
         @JavascriptInterface
         public void setInsetInfo(final float safeTop, final float headerTop) {
+            if (safeTop < 0) return;
             pageInsetTop = safeTop;
             pageHeaderTop = headerTop;
             new Handler(Looper.getMainLooper()).post(() -> {
                 if (contentRoot == null) return;
                 applyBarInsets(ViewCompat.getRootWindowInsets(contentRoot));
+                // 首帧是「还不知道页面让了多少」的猜测值，等这一报上来再显示，
+                // 否则会先看到内容多缩进去一截、随即跳上来
+                if (webView != null && webView.getAlpha() < 1f) webView.setAlpha(1f);
             });
         }
 
@@ -292,9 +284,7 @@ public class DesktopWebActivity extends AppCompatActivity {
 
         int[] screenPos = new int[2];
         contentRoot.getLocationOnScreen(screenPos);
-        int screenHeight = getResources().getDisplayMetrics().heightPixels;
         int statusBar = systemDimen("status_bar_height");
-        int navBar = systemDimen("navigation_bar_height");
 
         // 页面自己让位了多少（`web.html` 写了 `pt-[env(safe-area-inset-top)]`，新 WebView 在
         // edge-to-edge 下**会上报真实安全区**，这时页面已经把内容排到状态栏下面了）。
@@ -313,23 +303,6 @@ public class DesktopWebActivity extends AppCompatActivity {
             contentRoot.setPadding(0, top, 0, bottom);
         }
 
-        DisplayMetrics real = new DisplayMetrics();
-        DisplayMetrics usable = new DisplayMetrics();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            getDisplay().getRealMetrics(real);
-        } else {
-            getWindowManager().getDefaultDisplay().getRealMetrics(real);
-        }
-        getWindowManager().getDefaultDisplay().getMetrics(usable);
-        int insetsTop = insets == null ? -1 : insets.getInsets(systemBars | WindowInsetsCompat.Type.displayCutout()).top;
-        if (debugView != null) {
-            debugView.setText("y=" + screenPos[1] + " h=" + contentRoot.getHeight()
-                    + " sb=" + statusBar + " in=" + insetsTop
-                    + " pad=" + top + "/" + bottom
-                    + " real=" + real.heightPixels + " usable=" + usable.heightPixels
-                    + " dpi=" + real.densityDpi
-                    + " pt=" + pageInsetTop + " ht=" + pageHeaderTop);
-        }
     }
 
     /** 系统资源里的栏高（`status_bar_height` 之类不是公开 API，取不到就当 0）。 */
