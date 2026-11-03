@@ -255,15 +255,27 @@ public class DesktopWebActivity extends AppCompatActivity {
     private void applyBarInsets(@Nullable WindowInsetsCompat insets) {
         if (contentRoot == null) return;
         int systemBars = WindowInsetsCompat.Type.systemBars();
-        int top = insets == null ? 0 : insets.getInsets(systemBars | WindowInsetsCompat.Type.displayCutout()).top;
-        int bottom = insets == null ? 0 : insets.getInsets(systemBars).bottom;
-        if (insets != null) {
-            bottom = Math.max(bottom, insets.getInsets(WindowInsetsCompat.Type.ime()).bottom);
-        }
 
         int[] screenPos = new int[2];
         contentRoot.getLocationOnScreen(screenPos);
-        top = Math.max(top, Math.max(0, systemDimen("status_bar_height") - screenPos[1]));
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        int statusBar = systemDimen("status_bar_height");
+        int navBar = systemDimen("navigation_bar_height");
+
+        // 以**实测位置**为准：容器已经在状态栏下面（decor-fit 生效）时，insets 仍可能报一个
+        // 非 0 的顶值 —— 那就再加一次，顶栏凭空下移一大截（实测：0.3.4 顶栏上面多出半屏空白）。
+        // 实测为 0 就不加，只在容器顶边真的压到状态栏里时才补。
+        int measuredTop = Math.max(0, statusBar - screenPos[1]);
+        int top = measuredTop == 0 ? 0 : Math.max(measuredTop,
+                insets == null ? 0 : insets.getInsets(systemBars | WindowInsetsCompat.Type.displayCutout()).top);
+
+        int measuredBottom = Math.max(0, (screenPos[1] + contentRoot.getHeight()) - (screenHeight - navBar));
+        int bottom = measuredBottom == 0 ? 0 : Math.max(measuredBottom,
+                insets == null ? 0 : insets.getInsets(systemBars).bottom);
+        // 键盘不改变窗口大小时（edge-to-edge）只能靠 insets
+        if (insets != null && insets.isVisible(WindowInsetsCompat.Type.ime())) {
+            bottom = Math.max(bottom, insets.getInsets(WindowInsetsCompat.Type.ime()).bottom);
+        }
 
         if (contentRoot.getPaddingTop() != top || contentRoot.getPaddingBottom() != bottom) {
             contentRoot.setPadding(0, top, 0, bottom);
