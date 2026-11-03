@@ -1565,3 +1565,36 @@ Dart 的 `HttpResponse` 默认把 body 攒到 close 才发，而流式连接永�
 
 回归测试在 `flutter_module/test/chat_session_switch_test.dart`：新增「草稿跟着会话走」
 与「点了会话之后，旧会话的推送不能把页面拽回去」两条，`flutter test` 现 262 条。
+
+### 0.2.17：桌面端回 5xx 时不许卡在「一直空白加载」
+
+现场：在项目 A 建了个会话、在项目 B 又建一个，切回 A 那个新会话时页面**一直空白加载**；
+退回网页版再进来，看到一张「历史加载失败 HTTP 500 · webError.internal」的错误卡。
+
+桌面端的行为是确定性的（2026-11-03 用 curl 在 `127.0.0.1:8765` 上复现过）：
+
+- `POST /api/sessions {projectId}` 刚建好的 draft 会话，`GET /api/sessions/:id/messages`
+  回 **200 空**；
+- 一旦 `POST /api/sessions/:id/runtime/activate`（返回里带 `sessionPath`）把运行时绑到那个
+  **还不存在的 `.jsonl`** 上，同一个接口立刻变成 **500** `{"code":"webError.internal"}`，
+  `/messages/page` 同样 500，日志里是 `Read message page: session file not written yet`。
+
+也就是说：**「会话文件还没写出来」在协议层是一个 500**，不是 404、也不是空数组。这是桌面端的
+缺陷（网页版同样会画错误卡），但手机端不能等它修，得自己把这种情况当「还没有历史」。
+
+两侧的改法：
+
+- `flutter_module/lib/runtime/chat_runtime.dart`：`_loadHistory()` 收到 5xx 时
+  `_historyLoaded = true` + 空历史 + 一次提示（「这个会话还没有历史…可以先发消息」）+
+  `historyRetryDelay`（默认 3s、最多 5 次）静默重试。**失败也必须把 `_historyLoaded` 置真** ——
+  留着 false 会让 `_mergedJson()` 整份退回 WebView 那份，而 WebView 这时停在 `loading: true`，
+  用户看到的就是「一直空白加载」。非 5xx（403 / 401）仍然是错误卡，且不重试。
+- `app/src/main.ts`：`reloadHistory()` 里加 `isMissingTranscript()`（`status >= 500`）→
+  `renderEmptyState()`，不画错误卡。网页版和 Flutter 页共用这条路径，两边表现一致。
+- `flutter_module/lib/chat/chat_page.dart`：顶栏的刷新按钮与错误卡的「重试」都改走 `_refresh()`
+  —— 先 `runtime.reloadHistory()`，再把 `refresh` 发给 WebView。历史归 Dart 之后，只发动作回去
+  这边画面不会动，用户点了「重试」看着像没反应。
+
+回归测试在 `flutter_module/test/runtime_missing_transcript_test.dart`（真开 `HttpServer`）：
+「先 500 两次再给正文」断言第一帧就是空历史 + 无错误卡 + 一次提示，随后静默重试补上历史；
+「403 一直失败」断言仍是错误卡、且只请求一次（不重试）。

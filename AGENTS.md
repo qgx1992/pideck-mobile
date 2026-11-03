@@ -374,6 +374,17 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
      点会话那条本地先行路径都要搬；发出去之后要把该会话的草稿删掉。
   5. 新会话历史是**后到**的：切过去第一帧列表是空的（只画加载中），`_scrollLatestWhenLoaded` 要等历史到货
      那一帧再 `_scrollToLatest()` 一次，否则懒构建列表第一次量出来的位置是估的，人会停在半截。
+- **「会话文件还没写出来」不是错误**（0.2.17）：桌面端新建的会话要等第一条消息落盘才有 transcript，
+  在那之前 `GET /api/sessions/:id/messages` 稳定回 **5xx `webError.internal`**（不是 404、也不是空数组；
+  `POST /api/sessions` 刚建好的 draft 还是 200 空，一旦 `runtime/activate` 把 `sessionPath` 定死到那个
+  还不存在的 `.jsonl` 上就开始 500）。两侧都按「还没有历史」处理：
+  1. Dart `ChatRuntime._loadHistory()`：5xx → `_historyLoaded = true` + 空历史 + 一次提示 + 静默重试
+     （`historyRetryDelay` 默认 3s、最多 5 次，测试里调到 40ms）。**失败时 `_historyLoaded` 必须是 true** ——
+     留着 false 会让 `_mergedJson()` 整份退回 WebView 那份，而它此时停在 `loading: true`，就是「一直空白加载」。
+     非 5xx（403/401 等）仍然是错误卡，且不重试。
+  2. WebView `reloadHistory()`：同样的 `isMissingTranscript()` 判断 → `renderEmptyState()`，不画错误卡。
+  3. 页面上的刷新（顶栏转圈按钮、错误卡的「重试」）要调 `_refresh()`：先 `runtime.reloadHistory()` 再发
+     `{'type':'refresh'}` —— 历史归 Dart 之后，只发动作回去，这边画面不会动。
 
 ## 改动完成后必须跑的验证
 

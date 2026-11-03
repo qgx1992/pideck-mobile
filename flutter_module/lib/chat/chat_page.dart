@@ -886,6 +886,16 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 「停止」和「回答提问卡」等不起那一跳 —— 按钮就在这一页上，按下去要立刻有反应，
   /// 而绕回 WebView 得等那边的 JS 被唤醒一次。发消息（`_send`）仍然走 WebView：
   /// 计划模式注入、排队/插话、todo 归档都在 `main.ts` 的 `send()` 里，搬过来就是两份真相源。
+  /// 刷新：Dart 那侧的数据面自己重拉历史，控制面照旧转给 WebView。
+  ///
+  /// 历史现在归 Dart（0.2.10 起），只发 `refresh` 回 WebView 的话，
+  /// 这边页面上那份数据不会动 —— 用户点了「重试」看着像没反应。
+  void _refresh() {
+    final ChatRuntime? runtime = _runtime;
+    if (runtime != null) unawaited(runtime.reloadHistory());
+    sendChatAction(<String, Object?>{'type': 'refresh'});
+  }
+
   Future<void> _stop() async {
     final ChatRuntime? runtime = _runtime;
     if (runtime != null && runtime.historyLoaded) {
@@ -1166,8 +1176,7 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             tooltip: '刷新',
             icon: Icon(Icons.refresh_rounded, color: c.textMuted),
-            onPressed: () =>
-                sendChatAction(<String, Object?>{'type': 'refresh'}),
+            onPressed: _refresh,
           ),
           IconButton(
             tooltip: '返回网页版',
@@ -1450,8 +1459,7 @@ class _ChatScreenState extends State<ChatScreen> {
           Align(
             alignment: Alignment.centerRight,
             child: TextButton(
-              onPressed: () =>
-                  sendChatAction(<String, Object?>{'type': 'refresh'}),
+              onPressed: _refresh,
               child: const Text('重试'),
             ),
           ),

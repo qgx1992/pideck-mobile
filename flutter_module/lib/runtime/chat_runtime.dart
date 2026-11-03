@@ -114,6 +114,16 @@ class ChatRuntime extends ChangeNotifier {
   bool _disposed = false;
   int _settleStamp = 0;
 
+  /// 历史读不到时的静默重试（当前只用于「会话文件还没写出来」，见 [_loadHistory]）。
+  Timer? _historyRetryTimer;
+  int _historyRetries = 0;
+  bool _noticedMissingTranscript = false;
+
+  /// 静默重试的间隔（测试会调小它，正式路径用 3 秒）。
+  Duration historyRetryDelay = const Duration(seconds: 3);
+
+  static const int _maxHistoryRetries = 5;
+
   final _Backoff _frameBackoff = _Backoff();
 
   /// 状态机可读字段（页面/测试用）。
@@ -577,19 +587,63 @@ class ChatRuntime extends ChangeNotifier {
       _historyLoaded = true;
       _errorTitle = null;
       _errorDetail = null;
+      _historyRetries = 0;
+      _historyRetryTimer?.cancel();
+      _historyRetryTimer = null;
+      _noticedMissingTranscript = false;
       _notify();
     } on PiDeckException catch (error) {
       if (_disposed) return;
       _loading = false;
+      // 这一轮「读过了」——不管成没成，页面都得有一份数据可以画。
+      // 留着 false 的话合并会退回 WebView 那份，而它这时通常停在 `loading: true`，
+      // 用户看到的就是一直转圈（0.2.17 修）。
+      _historyLoaded = true;
       if (error.isAuth) {
         _authFailed = true;
         _errorTitle = '登录已失效';
-      } else {
-        _errorTitle = '历史加载失败';
+        _errorDetail = error.describe();
+        _notify();
+        return;
       }
+      // 桌面端在会话文件还没写出来时对 `/messages` 回 500（新建会话、还没发第一条）。
+      // 那不是「历史读坏了」，是「还没有历史」：当空历史处理，隔几秒再静默重试。
+      if (_isMissingTranscript(error)) {
+        _errorTitle = null;
+        _errorDetail = null;
+        if (!_noticedMissingTranscript) {
+          _noticedMissingTranscript = true;
+          onNotice?.call('这个会话还没有历史（电脑端还没写出会话文件），可以先发消息');
+        }
+        _scheduleHistoryRetry();
+        _notify();
+        return;
+      }
+      _errorTitle = '历史加载失败';
       _errorDetail = error.describe();
       _notify();
     }
+  }
+
+  /// 桌面端「会话文件还没写出来」时回的是 5xx（不是 404，也不是空数组）。
+  ///
+  /// 新建的会话要等第一条消息落盘才有 transcript 文件；在此之前
+  /// `GET /api/sessions/:id/messages` 稳定回 500 `webError.internal`。
+  /// 这里按「空历史」处理并安排一次重试 —— 用户点进新会话本来就该看到空态。
+  bool _isMissingTranscript(PiDeckException error) {
+    final int? status = error.status;
+    return status != null && status >= 500;
+  }
+
+  void _scheduleHistoryRetry() {
+    if (_disposed || _historyRetryTimer != null) return;
+    if (_historyRetries >= _maxHistoryRetries) return;
+    _historyRetries += 1;
+    _historyRetryTimer = Timer(historyRetryDelay, () {
+      _historyRetryTimer = null;
+      if (_disposed) return;
+      unawaited(_loadHistory());
+    });
   }
 
   /* ------------------------------- 工具 ------------------------------- */
@@ -644,6 +698,8 @@ class ChatRuntime extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _historyRetryTimer?.cancel();
+    _historyRetryTimer = null;
     store.stop();
     // 两条流的取消靠「关掉客户端」：`streamSse` 的 async* 生成器在
     // HttpClient 关闭时抛 SocketException 并走 finally，循环随即退出。

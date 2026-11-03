@@ -3136,6 +3136,14 @@ async function reloadHistory(sessionId: string): Promise<void> {
     }
     chatView.setHistory(page.messages);
   } catch (error) {
+    // 新建的会话在写出会话文件之前，桌面端对 /messages 直接回 5xx。
+    // 那不是「历史读坏了」，而是「还没有历史」：给引导页，让用户直接发消息。
+    // （Dart 侧 `ChatRuntime._loadHistory()` 有同样的判断，见 0.2.17。）
+    if (isMissingTranscript(error)) {
+      chatError = null;
+      if (!chatView.hasContent()) renderEmptyState(sessionId);
+      return;
+    }
     // 已经有内容时不要拿错误卡把历史顶掉，只提示一下
     if (chatView.hasContent()) {
       toast(`刷新历史失败：${describeError(error)}`);
@@ -3144,6 +3152,17 @@ async function reloadHistory(sessionId: string): Promise<void> {
     chatView.setError(describeHistoryFailure(error, runtime.store.session(sessionId)?.backend));
     chatError = describeHistoryFailure(error, runtime.store.session(sessionId)?.backend);
   }
+}
+
+/**
+ * 「会话文件还没写出来」：桌面端此时对 `/messages` 回 5xx，不是 404。
+ *
+ * 新会话要等第一条消息落盘才有 transcript 文件；在那之前读历史必然失败。
+ * 页面该显示空态（引导页），而不是一张「历史加载失败」的错误卡。
+ */
+function isMissingTranscript(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" && status >= 500;
 }
 
 async function createSession(projectId?: string, choice: BackendChoice = DEFAULT_BACKEND_CHOICE): Promise<void> {
