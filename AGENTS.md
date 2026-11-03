@@ -152,6 +152,13 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
   Capacitor 的 `html5mode` 会把无扩展名路径回落到 `index.html`，所以「停在 `/s/<id>` 上被系统重建」
   加载的是启动页，它转写成待跳转记录再送进 `web.html`。守门测试
   `app/shell/notification-tap.test.ts`（8 条）盯着两头，删任一端都会红。
+- **看护是多设备的**：`RunWatchService` 按 `deviceId` 维护多份 `Target`（每台一条
+  `/api/events` SSE、一个线程、各自的 `lastStatus` / `knownRequests` / 标题表），JS 侧
+  `startRunWatch(loadDevices(), { page })` 每 15s 轮询每台设备的 `/api/sessions/runtimes`，
+  压成 id 签名，**只有集合变化才重新下发** —— 否则每次轮询都会掐断 SSE，服务端重连要重推
+  57KB state。新增单目标路径已删，`RunWatch.start` 收 `{ targets, page }`。通知 id 必须是
+  `(deviceId + ":" + sessionId).hashCode()`，只用 `sessionId` 会让两台设备的同名会话互相覆盖，
+  点回来还会开错机器。
 - **通知的静音范围只算聊天页**：前台服务记一个 `page`（`chat` / `launcher`，由
   `app/shell/run-watch.ts` 的 `startRunWatch(device, { page })` 透传），原生判定是
   `!appVisible() || !"chat".equals(page)`。理由：停在聊天页时用户正盯着对话，弹通知是噪音；

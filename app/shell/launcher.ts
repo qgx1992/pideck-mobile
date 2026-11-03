@@ -448,15 +448,14 @@ App.addListener("appStateChange", ({ isActive }) => {
  * 聊天页那边用 `page: "chat"` 起服务（前台且停在聊天页时静音），退回这里时
  * 这条会重新起一次并标成 `launcher`，于是「App 在前台但看不到会话」也能收到。
  */
-const activeDevice = getActiveDevice();
-const runWatch = activeDevice ? startRunWatch(activeDevice, { page: "launcher" }) : null;
+const runWatch = startRunWatch(loadDevices(), { page: "launcher" });
 
 // 从聊天页退回来时重新测一次，顺手刷新「最后一次在线」
 document.addEventListener("visibilitychange", () => {
 	if (document.visibilityState !== "visible") return;
 	render();
 	for (const device of devices) void probe(device);
-	runWatch?.poke();
+	runWatch.poke();
 });
 
 render();

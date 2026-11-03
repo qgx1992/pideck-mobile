@@ -5,22 +5,28 @@
  * 并在 App 不可见时发通知——它需要的是**在会话开始跑的那一刻就被启动**
  * （Android 12+ 禁止从后台启动前台服务，等切走了再启动会被拒）。
  *
- * 所以这里只做一件事：轮询运行态，发现「有 running」就 start，长时间没有就 stop。
+ * 所以这里只做一件事：轮询**每台配对设备**的运行态，把「当前有会话在跑」的设备清单
+ * 交给原生（原生给每台各开一条 SSE），长时间没人在跑就 stop。
  * 轮询用 `/api/sessions/runtimes`（约 3KB）而不是 `/api/state`（200KB+）。
+ *
+ * 多设备的意义：切到 B 设备之后，A 上跑完的照样要提醒 —— 清单里必须包含所有在跑的
+ * 设备，而不是只有一个「当前设备」。
  */
 
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 import type { DeviceRecord } from "./device.ts";
 
+/** 交给原生的一台设备：一条 SSE + 标题表（通知正文用）。 */
+export interface WatchTarget {
+	deviceId: string;
+	baseUrl: string;
+	token: string;
+	titles: Record<string, string>;
+}
+
 interface RunWatchApi {
-	start(options: {
-		baseUrl: string;
-		token: string;
-		titles: Record<string, string>;
-		deviceId: string;
-		page: ShellPage;
-	}): Promise<void>;
+	start(options: { targets: WatchTarget[]; page: ShellPage }): Promise<void>;
 	stop(): Promise<void>;
 }
 
@@ -94,50 +100,86 @@ export interface RunWatchHandle {
 	poke(): void;
 }
 
-export function startRunWatch(device: DeviceRecord, options: RunWatchOptions = {}): RunWatchHandle {
+/** 设备清单签名：只有变化的设备集合才重新下发给原生，避免每次轮询都重连。 */
+function targetSignature(devices: DeviceRecord[]): string {
+	return devices
+		.map((device) => device.id)
+		.sort()
+		.join(",");
+}
+
+export function startRunWatch(devices: DeviceRecord[], options: RunWatchOptions = {}): RunWatchHandle {
 	const page: ShellPage = options.page ?? "chat";
-	if (!Capacitor.isNativePlatform() || !device.token) {
-		// 浏览器里没有前台服务，令牌缺失时原生侧也会拒绝启动
+	const usable = devices.filter((device) => device.token);
+	if (!Capacitor.isNativePlatform() || usable.length === 0) {
+		// 浏览器里没有前台服务；一台带令牌的设备都没有时也无需看护
 		return { stop: () => undefined, poke: () => undefined };
 	}
 
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let watching = false;
 	let idlePolls = 0;
-	let titles: Record<string, string> = {};
+	let watchingSignature = "";
 	let stopped = false;
+	/** 同一轮 tick 不叠跑（poke 可能在网络慢时接连触发） */
+	let ticking = false;
 
-	async function ensureStarted(): Promise<void> {
-		if (watching) return;
-		titles = await fetchTitles(device);
-		try {
-			await RunWatch.start({ baseUrl: device.baseUrl, token: device.token, titles, deviceId: device.id, page });
-			watching = true;
-		} catch {
-			// 权限/系统拒绝（例如后台启动限制）：下一轮再试，不影响前台使用
-		}
+	/** 给「有会话在跑」的设备各抓一次标题表，拼接成原生要的 targets。 */
+	async function buildTargets(running: DeviceRecord[]): Promise<WatchTarget[]> {
+		return Promise.all(
+			running.map(async (device) => ({
+				deviceId: device.id,
+				baseUrl: device.baseUrl,
+				token: device.token,
+				titles: await fetchTitles(device),
+			})),
+		);
 	}
 
 	async function tick(): Promise<void> {
-		if (stopped) return;
-		let runtimes: { sessionId: string; status: string }[] = [];
+		if (stopped || ticking) return;
+		ticking = true;
 		try {
-			runtimes = await fetchRuntimes(device);
-		} catch {
-			return; // 网络抖动：保持现状，别把正在跑的看护停掉
-		}
-		const running = runtimes.some((runtime) => RUNNING_STATUSES.has(runtime.status));
-		if (running) {
+			// 每台设备各查一次：网络抖动只影响那一台，别把别的设备的看护也停掉
+			const results = await Promise.all(
+				usable.map(async (device) => {
+					try {
+						const runtimes = await fetchRuntimes(device);
+						return { device, running: runtimes.some((runtime) => RUNNING_STATUSES.has(runtime.status)) };
+					} catch {
+						return { device, running: null };
+					}
+				}),
+			);
+
+			const running = results.filter((item) => item.running === true).map((item) => item.device);
+			if (running.length > 0) {
+				idlePolls = 0;
+				const signature = targetSignature(running);
+				if (watching && signature === watchingSignature) return;
+				const targets = await buildTargets(running);
+				try {
+					await RunWatch.start({ targets, page });
+					watching = true;
+					watchingSignature = signature;
+				} catch {
+					// 权限/系统拒绝（例如后台启动限制）：下一轮再试，不影响前台使用
+				}
+				return;
+			}
+
+			// 全都查不到运行态时保持现状：可能只是网络抖了，别急着停
+			if (results.some((item) => item.running === null)) return;
+			if (!watching) return;
+			idlePolls += 1;
+			if (idlePolls < IDLE_POLLS_BEFORE_STOP) return;
 			idlePolls = 0;
-			await ensureStarted();
-			return;
+			watching = false;
+			watchingSignature = "";
+			await RunWatch.stop().catch(() => undefined);
+		} finally {
+			ticking = false;
 		}
-		if (!watching) return;
-		idlePolls += 1;
-		if (idlePolls < IDLE_POLLS_BEFORE_STOP) return;
-		idlePolls = 0;
-		watching = false;
-		await RunWatch.stop().catch(() => undefined);
 	}
 
 	timer = setInterval(() => void tick(), POLL_MS);
@@ -150,6 +192,7 @@ export function startRunWatch(device: DeviceRecord, options: RunWatchOptions = {
 			timer = undefined;
 			if (watching) {
 				watching = false;
+				watchingSignature = "";
 				void RunWatch.stop().catch(() => undefined);
 			}
 		},
@@ -159,4 +202,4 @@ export function startRunWatch(device: DeviceRecord, options: RunWatchOptions = {
 	};
 }
 
-export { pickRuntimes, RUNNING_STATUSES };
+export { pickRuntimes, RUNNING_STATUSES, targetSignature };

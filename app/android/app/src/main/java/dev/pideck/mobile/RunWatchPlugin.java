@@ -27,18 +27,32 @@ public class RunWatchPlugin extends Plugin {
 
     static final String PREFS = "pideck-runwatch";
 
+    /**
+     * 开始看护。
+     *
+     * 新接口收 `targets`（每台配对设备一个：deviceId / baseUrl / token / titles），
+     * 服务会给每台设备各开一条 SSE，通知里带上设备 id —— 多设备下点通知才不会
+     * 把 A 设备的会话开在 B 设备上。旧的单设备字段仍然认，只是不再由客户端传。
+     */
     @PluginMethod
     public void start(PluginCall call) {
+        String page = call.getString("page", "chat");
+        JSArray targets = call.getArray("targets");
+        if (targets != null && targets.length() > 0) {
+            RunWatchService.start(getContext(), targets.toString(), page);
+            call.resolve();
+            return;
+        }
         String baseUrl = call.getString("baseUrl", "");
         String token = call.getString("token", "");
         JSObject titles = call.getObject("titles");
         if (baseUrl == null || baseUrl.isEmpty() || token == null || token.isEmpty()) {
-            call.reject("baseUrl/token required");
+            call.reject("targets or baseUrl/token required");
             return;
         }
         String deviceId = call.getString("deviceId", "");
         RunWatchService.start(getContext(), baseUrl, token, titles != null ? titles.toString() : "{}",
-            deviceId == null ? "" : deviceId, call.getString("page", "chat"));
+            deviceId == null ? "" : deviceId, page);
         call.resolve();
     }
 

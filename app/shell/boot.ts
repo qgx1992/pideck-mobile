@@ -15,7 +15,7 @@ import { Capacitor } from "@capacitor/core";
 
 import { installBackHandler } from "./back.ts";
 import { installLaunchWatcher, openPendingLaunch } from "./launch-session.ts";
-import { UPSTREAM_TOKEN_KEY, getActiveDevice } from "./device.ts";
+import { UPSTREAM_TOKEN_KEY, getActiveDevice, loadDevices } from "./device.ts";
 import { installDownloadBridge } from "./downloads.ts";
 import { installExternalLinks } from "./external-links.ts";
 import { getSseTransport, isNativeSseAvailable } from "./native-sse.ts";
@@ -91,7 +91,8 @@ if (!device) {
 	installLaunchWatcher({ mode: "push" });
 
 	// 看护：会话一开跑就拉前台服务（后台启动会被系统拒绝，所以必须在前台就开始）
-	const runWatch = startRunWatch(device, { page: "chat" });
+	// 看护覆盖所有配对设备（不只是当前这台）：切到别的设备后，原来那台上跑完的也要提醒
+	const runWatch = startRunWatch(loadDevices(), { page: "chat" });
 	document.addEventListener("visibilitychange", () => {
 		if (document.visibilityState === "visible") runWatch.poke();
 	});

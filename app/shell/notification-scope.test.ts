@@ -43,17 +43,17 @@ describe("原生：通知静音只发生在聊天页", () => {
 
 describe("JS：两个页面都拉服务，并且各报各的身份", () => {
 	it("聊天页报 chat，且不在 pagehide 上停服务", () => {
-		assert.match(bootTs, /startRunWatch\(device, \{ page: "chat" \}\)/);
+		assert.match(bootTs, /startRunWatch\(loadDevices\(\), \{ page: "chat" \}\)/);
 		assert.doesNotMatch(bootTs, /pagehide[\s\S]{0,80}runWatch\.stop\(\)/);
 	});
 
 	it("启动页报 launcher，并在回前台时补一拍", () => {
-		assert.match(launcherTs, /startRunWatch\(activeDevice, \{ page: "launcher" \}\)/);
-		assert.match(launcherTs, /runWatch\?\.poke\(\)/);
+		assert.match(launcherTs, /startRunWatch\(loadDevices\(\), \{ page: "launcher" \}\)/);
+		assert.match(launcherTs, /runWatch\.poke\(\)/);
 	});
 
 	it("run-watch 把 page 透传给原生", () => {
 		assert.match(runWatchTs, /export type ShellPage = "chat" \| "launcher";/);
-		assert.match(runWatchTs, /deviceId: device\.id, page \}\)/);
+		assert.match(runWatchTs, /RunWatch\.start\(\{ targets, page \}\)/);
 	});
 });

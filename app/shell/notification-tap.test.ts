@@ -21,20 +21,18 @@ const launcherTs = read("shell/launcher.ts");
 const launchSession = read("shell/launch-session.ts");
 
 describe("原生：通知 Intent 带会话与设备", () => {
-	it("两条通知（完成 / 待回答）都塞了 sessionId 与 deviceId", () => {
-		assert.equal(
-			(service.match(/intent\.putExtra\(MainActivity\.EXTRA_SESSION_ID, sessionId\);/g) ?? []).length,
-			2,
-		);
-		assert.equal(
-			(service.match(/intent\.putExtra\(MainActivity\.EXTRA_DEVICE_ID, deviceId\);/g) ?? []).length,
-			2,
-		);
+	it("两条通知（完成 / 待回答）都走同一个 buildIntent，会话与设备一起带", () => {
+		// 现在两条通知都调 buildIntent(target, sessionId)，不再是各写一遍 putExtra
+		assert.equal((service.match(/Intent intent = buildIntent\(target, sessionId\);/g) ?? []).length, 2);
+		assert.match(service, /intent\.putExtra\(MainActivity\.EXTRA_SESSION_ID, sessionId\);/);
+		assert.match(service, /intent\.putExtra\(MainActivity\.EXTRA_DEVICE_ID, target\.deviceId\);/);
 	});
 
-	it("看护服务记住了是哪台设备在看", () => {
-		assert.match(service, /intent\.putExtra\(EXTRA_DEVICE_ID, deviceId == null \? "" : deviceId\)/);
-		assert.match(plugin, /RunWatchService\.start\([\s\S]*?deviceId == null/);
+	it("看护服务按设备分连接、通知 id 不跨设备撞车", () => {
+		assert.match(service, /private final Map<String, Target> targets = new HashMap<>\(\);/);
+		assert.match(service, /private final class Target/);
+		assert.match(service, /return \(target\.deviceId \+ ":" \+ sessionId \+ suffix\)\.hashCode\(\);/);
+		assert.match(plugin, /RunWatchService\.start\(getContext\(\), targets\.toString\(\), page\)/);
 	});
 
 	it("MainActivity 把设备 id 一起接住、一起交出去", () => {

@@ -24,8 +24,12 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 后台任务看护（前台服务）。
@@ -34,16 +38,17 @@ import java.util.Map;
  * WebView 里的 JS（包括 SSE 回调和定时器）全部停摆，于是「跑完了」这件事在
  * JS 侧永远观察不到 —— 这就是「有时候收到通知、有时候收不到」的根因。
  *
- * 这里用前台服务（不会被冻结）守着 /api/events 这条 SSE：
+ * 这里用前台服务（不会被冻结）给**每台配对的设备**各守一条 /api/events SSE：
  *   - 服务端连上就先推一份完整 state，之后只在「运行时状态 / 待答卡片」变化时推送
  *   - 由此可以同时盯两件事：会话跑完（running → 非 running）、AI 提问（新的待答卡片）
  * 之所以不用轮询 /api/state：那份 JSON 有 57KB，而 SSE 一天下来也只推几次；
  * /api/sessions/runtimes 虽然只有 2.9KB 但不含 pendingUiRequests，看不到提问。
  *
- * 两条约束：
- *   - 只在 App 不可见时发通知（可见时由 JS 自己发，避免重复）
+ * 三条约束：
+ *   - 只在「看不到那条会话」时发通知（见 {@link #shouldNotify()}）
  *   - 服务必须在 App 还活着时启动（Android 12+ 不允许后台启动前台服务），
  *     所以由 JS 在「开始跑」的那一刻就把它拉起来
+ *   - 通知必须带上是哪台设备，点回来时先切设备再进会话（多设备下不带就会开错机器）
  */
 public class RunWatchService extends Service {
 
@@ -51,13 +56,15 @@ public class RunWatchService extends Service {
 
     public static final String ACTION_START = "dev.pideck.mobile.RUNWATCH_START";
     public static final String ACTION_STOP = "dev.pideck.mobile.RUNWATCH_STOP";
+    /** 要盯的设备清单：[{deviceId, baseUrl, token, titles}] */
+    public static final String EXTRA_TARGETS = "targets";
+    /** 发起看护的是哪个页面：chat（聊天页）/ launcher（启动页） */
+    public static final String EXTRA_PAGE = "page";
+    // 单设备的旧字段：只在没有 EXTRA_TARGETS 时作兼容读入
     public static final String EXTRA_BASE_URL = "baseUrl";
     public static final String EXTRA_TOKEN = "token";
     public static final String EXTRA_TITLES = "titles";
-    /** 这次看护盯的是哪台设备（通知点回来时要先切到它） */
     public static final String EXTRA_DEVICE_ID = "deviceId";
-    /** 发起看护的是哪个页面：chat（聊天页）/ launcher（启动页） */
-    public static final String EXTRA_PAGE = "page";
 
     /**
      * App 是否在前台。唯一真相源在 PiDeckApp（按 Activity started 计数），
@@ -92,31 +99,37 @@ public class RunWatchService extends Service {
     private static final int READ_TIMEOUT_MS = 120_000;
 
     private volatile boolean running = false;
-    private Thread worker;
-    private String baseUrl = "";
-    private String token = "";
-    private String deviceId = "";
     /** 发起看护的页面，缺省按聊天页算（旧客户端没有这个字段） */
     private volatile String page = PAGE_CHAT;
-    private JSONObject titles = new JSONObject();
-    private final Map<String, String> lastStatus = new HashMap<>();
-    /** 上一次见过的待答卡片（sessionId:requestId），用来判断「新提问」 */
-    private final java.util.Set<String> knownRequests = new java.util.HashSet<>();
-    private boolean seeded = false;
+    /** 每台设备一条连接，key 是 deviceId（没有 id 时退化成 baseUrl） */
+    private final Map<String, Target> targets = new HashMap<>();
 
-    public static void start(Context context, String baseUrl, String token, String titlesJson, String deviceId, String page) {
+    public static void start(Context context, String targetsJson, String page) {
         Intent intent = new Intent(context, RunWatchService.class);
         intent.setAction(ACTION_START);
-        intent.putExtra(EXTRA_BASE_URL, baseUrl);
-        intent.putExtra(EXTRA_TOKEN, token);
-        intent.putExtra(EXTRA_TITLES, titlesJson);
-        intent.putExtra(EXTRA_DEVICE_ID, deviceId == null ? "" : deviceId);
+        intent.putExtra(EXTRA_TARGETS, targetsJson);
         intent.putExtra(EXTRA_PAGE, page == null ? PAGE_CHAT : page);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
             context.startService(intent);
         }
+    }
+
+    /** 旧的单设备入口（兼容保留）。 */
+    public static void start(Context context, String baseUrl, String token, String titlesJson, String deviceId, String page) {
+        JSONArray list = new JSONArray();
+        try {
+            JSONObject item = new JSONObject();
+            item.put("deviceId", deviceId == null ? "" : deviceId);
+            item.put("baseUrl", baseUrl == null ? "" : baseUrl);
+            item.put("token", token == null ? "" : token);
+            item.put("titles", titlesJson == null ? "{}" : titlesJson);
+            list.put(item);
+        } catch (Exception ignored) {
+            // 拼不出来就当没有目标，服务空转
+        }
+        start(context, list.toString(), page);
     }
 
     public static void stop(Context context) {
@@ -137,33 +150,92 @@ public class RunWatchService extends Service {
             return START_NOT_STICKY;
         }
 
-        String nextBaseUrl = intent != null ? intent.getStringExtra(EXTRA_BASE_URL) : null;
-        String nextToken = intent != null ? intent.getStringExtra(EXTRA_TOKEN) : null;
-        String nextTitles = intent != null ? intent.getStringExtra(EXTRA_TITLES) : null;
-        String nextDeviceId = intent != null ? intent.getStringExtra(EXTRA_DEVICE_ID) : null;
         String nextPage = intent != null ? intent.getStringExtra(EXTRA_PAGE) : null;
-        if (nextBaseUrl != null) baseUrl = nextBaseUrl;
-        if (nextToken != null) token = nextToken;
-        if (nextDeviceId != null) deviceId = nextDeviceId;
         if (nextPage != null && !nextPage.isEmpty()) page = nextPage;
-        if (nextTitles != null) {
-            try {
-                titles = new JSONObject(nextTitles);
-            } catch (Exception ignored) {
-                titles = new JSONObject();
-            }
-        }
 
-        startForegroundSafely();
-        startWorkerIfNeeded();
+        List<Target> next = parseTargets(intent);
+        running = true;
+        startForegroundSafely(next.size());
+        reconcile(next);
         return START_STICKY;
     }
 
-    private void startForegroundSafely() {
+    /** 从 Intent 里读目标清单：优先新字段，退化成旧的单设备字段。 */
+    private List<Target> parseTargets(Intent intent) {
+        List<Target> list = new ArrayList<>();
+        if (intent == null) return list;
+
+        String raw = intent.getStringExtra(EXTRA_TARGETS);
+        if (raw != null && !raw.isEmpty()) {
+            try {
+                JSONArray array = new JSONArray(raw);
+                for (int i = 0; i < array.length(); i++) {
+                    JSONObject item = array.optJSONObject(i);
+                    if (item == null) continue;
+                    Target target = new Target(
+                        item.optString("deviceId", ""),
+                        item.optString("baseUrl", ""),
+                        item.optString("token", ""),
+                        item.optString("titles", "{}")
+                    );
+                    if (target.usable()) list.add(target);
+                }
+            } catch (Exception error) {
+                Log.w(TAG, "bad targets: " + error.getMessage());
+            }
+            return list;
+        }
+
+        String baseUrl = intent.getStringExtra(EXTRA_BASE_URL);
+        String token = intent.getStringExtra(EXTRA_TOKEN);
+        if (baseUrl != null && token != null) {
+            Target target = new Target(
+                intent.getStringExtra(EXTRA_DEVICE_ID),
+                baseUrl,
+                token,
+                intent.getStringExtra(EXTRA_TITLES)
+            );
+            if (target.usable()) list.add(target);
+        }
+        return list;
+    }
+
+    /** 按 deviceId 对齐连接：新的起线程，消失的断开。已经在盯的不重连（省一次握手）。 */
+    private void reconcile(List<Target> next) {
+        Set<String> keep = new HashSet<>();
+        for (Target target : next) {
+            String key = target.key();
+            keep.add(key);
+            Target existing = targets.get(key);
+            if (existing == null) {
+                targets.put(key, target);
+                target.start();
+                continue;
+            }
+            // 同一台设备换了地址/令牌：重连一次，别拿旧连接硬撑
+            if (!existing.baseUrl.equals(target.baseUrl) || !existing.token.equals(target.token)) {
+                existing.shutdown();
+                targets.put(key, target);
+                target.start();
+                continue;
+            }
+            existing.titles = target.titles;
+        }
+
+        for (String key : new ArrayList<>(targets.keySet())) {
+            if (keep.contains(key)) continue;
+            Target gone = targets.remove(key);
+            if (gone != null) gone.shutdown();
+        }
+
+        updateOngoingText(targets.size());
+    }
+
+    private void startForegroundSafely(int count) {
         ensureChannels();
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ONGOING)
             .setContentTitle("PiDeck")
-            .setContentText("正在等待任务完成…")
+            .setContentText(ongoingText(count))
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
@@ -185,179 +257,231 @@ public class RunWatchService extends Service {
         }
     }
 
-    private void startWorkerIfNeeded() {
-        if (running) return;
-        running = true;
-        worker = new Thread(this::loop, "pideck-runwatch");
-        worker.setDaemon(true);
-        worker.start();
+    private String ongoingText(int count) {
+        if (count <= 1) return "正在等待任务完成…";
+        return "正在看护 " + count + " 台设备…";
     }
 
-    private void loop() {
-        while (running) {
-            try {
-                listenOnce();
-            } catch (Exception error) {
-                Log.w(TAG, "stream failed: " + error.getMessage());
-            }
-            if (!running) break;
-            try {
-                Thread.sleep(RECONNECT_DELAY_MS);
-            } catch (InterruptedException interrupted) {
-                break;
-            }
-        }
-    }
-
-    /** 连一次 /api/events 并读到断线为止。 */
-    private void listenOnce() throws Exception {
-        if (baseUrl.isEmpty() || token.isEmpty()) {
-            Thread.sleep(RECONNECT_DELAY_MS);
-            return;
-        }
-        String url = baseUrl.replaceAll("/+$", "")
-            + "/api/events?token=" + URLEncoder.encode(token, "UTF-8");
-
-        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-        connection.setConnectTimeout(5_000);
-        connection.setReadTimeout(READ_TIMEOUT_MS);
-        connection.setRequestProperty("Accept", "text/event-stream");
-        connection.setRequestProperty("Cache-Control", "no-cache");
-
+    private void updateOngoingText(int count) {
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ONGOING)
+            .setContentTitle("PiDeck")
+            .setContentText(ongoingText(count))
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setSilent(true)
+            .build();
         try {
-            int code = connection.getResponseCode();
-            if (code != 200) {
-                Log.w(TAG, "events http " + code);
-                return;
-            }
-            BufferedReader reader = new BufferedReader(
-                new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8)
-            );
-            String line;
-            String event = null;
-            StringBuilder data = null;
-
-            while (running && (line = reader.readLine()) != null) {
-                if (line.isEmpty()) {
-                    if (data != null) {
-                        handleEvent(event, data.toString());
-                    }
-                    event = null;
-                    data = null;
-                    continue;
-                }
-                if (line.startsWith(":")) continue;                 // 注释/心跳
-                if (line.startsWith("event:")) {
-                    event = line.substring(6).trim();
-                    continue;
-                }
-                if (!line.startsWith("data:")) continue;
-                String chunk = line.substring(5).trim();
-                if (data == null) data = new StringBuilder(chunk);
-                else data.append(chunk);
-            }
-        } finally {
-            connection.disconnect();
-        }
-    }
-
-    private void handleEvent(String event, String payload) {
-        if (event != null && !"state".equals(event)) return;
-        try {
-            handleState(payload);
+            manager.notify(ONGOING_NOTIFICATION_ID, notification);
         } catch (Exception error) {
-            Log.w(TAG, "bad state payload: " + error.getMessage());
+            Log.w(TAG, "ongoing update failed", error);
         }
     }
 
-    private void handleState(String body) throws Exception {
-        JSONObject root = new JSONObject(body);
+    /** 一台设备的看护状态与连接。每台一个线程，互不拖累。 */
+    private final class Target {
+        final String deviceId;
+        final String baseUrl;
+        final String token;
+        volatile JSONObject titles;
+        volatile boolean alive = true;
+        Thread worker;
 
-        Map<String, String> next = new HashMap<>();
-        JSONArray runtimes = root.optJSONArray("runtimes");
-        if (runtimes != null) {
-            for (int i = 0; i < runtimes.length(); i++) {
-                JSONObject item = runtimes.optJSONObject(i);
-                if (item == null) continue;
-                String sessionId = item.optString("sessionId", "");
-                if (sessionId.isEmpty()) continue;
-                next.put(sessionId, item.optString("status", ""));
-            }
+        /** 上一次见过的运行时状态：sessionId → status */
+        final Map<String, String> lastStatus = new HashMap<>();
+        /** 上一次见过的待答卡片（sessionId:requestId），用来判断「新提问」 */
+        final Set<String> knownRequests = new HashSet<>();
+        boolean seeded = false;
+
+        Target(String deviceId, String baseUrl, String token, String titlesJson) {
+            this.deviceId = deviceId == null ? "" : deviceId;
+            this.baseUrl = baseUrl == null ? "" : baseUrl.replaceAll("/+$", "");
+            this.token = token == null ? "" : token;
+            this.titles = parseTitles(titlesJson);
         }
 
-        JSONObject sessionTitles = new JSONObject();
-        JSONArray sessions = root.optJSONArray("sessions");
-        if (sessions != null) {
-            for (int i = 0; i < sessions.length(); i++) {
-                JSONObject item = sessions.optJSONObject(i);
-                if (item == null) continue;
-                String id = item.optString("id", "");
-                if (!id.isEmpty()) sessionTitles.put(id, item.optString("title", ""));
-            }
+        String key() {
+            return deviceId.isEmpty() ? baseUrl : deviceId;
         }
 
-        // 1) 会话跑完：running → 非 running（含 runtime 消失）
-        if (!lastStatus.isEmpty()) {
-            for (Map.Entry<String, String> entry : lastStatus.entrySet()) {
-                if (!"running".equals(entry.getValue())) continue;
-                String sessionId = entry.getKey();
-                String current = next.get(sessionId);
-                boolean finished = current == null || !"running".equals(current);
-                if (!finished) continue;
-                if (shouldNotify()) notifyFinished(sessionId, current, sessionTitles.optString(sessionId, ""));
-            }
+        boolean usable() {
+            return !baseUrl.isEmpty() && !token.isEmpty();
         }
-        lastStatus.clear();
-        lastStatus.putAll(next);
 
-        // 2) AI 提问：新出现的待答卡片
-        JSONArray pendings = root.optJSONArray("pendingUiRequests");
-        java.util.Set<String> nextRequests = new java.util.HashSet<>();
-        JSONArray fresh = new JSONArray();
-        if (pendings != null) {
-            for (int i = 0; i < pendings.length(); i++) {
-                JSONObject item = pendings.optJSONObject(i);
-                if (item == null) continue;
-                String sessionId = item.optString("sessionId", "");
-                String requestId = item.optString("requestId", "");
-                if (sessionId.isEmpty() || requestId.isEmpty()) continue;
-                String key = sessionId + ":" + requestId;
-                nextRequests.add(key);
-                // 第一次收到的快照只当基线：用户可能正盯着那张卡片
-                if (seeded && !knownRequests.contains(key)) fresh.put(item);
-            }
+        void start() {
+            worker = new Thread(this::loop, "pideck-runwatch-" + key());
+            worker.setDaemon(true);
+            worker.start();
         }
-        knownRequests.clear();
-        knownRequests.addAll(nextRequests);
-        seeded = true;
 
-        if (fresh.length() > 0) {
-            // 同一会话多个提问合并成一条，别刷屏
-            Map<String, Integer> counts = new HashMap<>();
-            Map<String, String> firstTitle = new HashMap<>();
-            for (int i = 0; i < fresh.length(); i++) {
-                JSONObject item = fresh.optJSONObject(i);
-                if (item == null) continue;
-                String sessionId = item.optString("sessionId", "");
-                counts.put(sessionId, counts.getOrDefault(sessionId, 0) + 1);
-                if (!firstTitle.containsKey(sessionId)) {
-                    String question = item.optString("title", "").trim();
-                    if (question.isEmpty()) question = item.optString("question", "").trim();
-                    firstTitle.put(sessionId, question);
+        void shutdown() {
+            alive = false;
+            if (worker != null) worker.interrupt();
+            worker = null;
+        }
+
+        void loop() {
+            while (alive) {
+                try {
+                    listenOnce();
+                } catch (Exception error) {
+                    Log.w(TAG, key() + " stream failed: " + error.getMessage());
                 }
-                rememberNotified("ask:" + sessionId + ":" + item.optString("requestId", ""));
+                if (!alive) break;
+                try {
+                    Thread.sleep(RECONNECT_DELAY_MS);
+                } catch (InterruptedException interrupted) {
+                    break;
+                }
             }
-            for (Map.Entry<String, Integer> entry : counts.entrySet()) {
-                String sessionId = entry.getKey();
-                if (shouldNotify()) {
-                    notifyAsk(sessionId, entry.getValue(), firstTitle.get(sessionId), sessionTitles.optString(sessionId, ""));
+        }
+
+        /** 连一次 /api/events 并读到断线为止。 */
+        void listenOnce() throws Exception {
+            String url = baseUrl + "/api/events?token=" + URLEncoder.encode(token, "UTF-8");
+
+            HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+            connection.setConnectTimeout(5_000);
+            connection.setReadTimeout(READ_TIMEOUT_MS);
+            connection.setRequestProperty("Accept", "text/event-stream");
+            connection.setRequestProperty("Cache-Control", "no-cache");
+
+            try {
+                int code = connection.getResponseCode();
+                if (code != 200) {
+                    Log.w(TAG, key() + " events http " + code);
+                    return;
+                }
+                BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8)
+                );
+                String line;
+                String event = null;
+                StringBuilder data = null;
+
+                while (alive && (line = reader.readLine()) != null) {
+                    if (line.isEmpty()) {
+                        if (data != null) handleEvent(event, data.toString());
+                        event = null;
+                        data = null;
+                        continue;
+                    }
+                    if (line.startsWith(":")) continue;                 // 注释/心跳
+                    if (line.startsWith("event:")) {
+                        event = line.substring(6).trim();
+                        continue;
+                    }
+                    if (!line.startsWith("data:")) continue;
+                    String chunk = line.substring(5).trim();
+                    if (data == null) data = new StringBuilder(chunk);
+                    else data.append(chunk);
+                }
+            } finally {
+                connection.disconnect();
+            }
+        }
+
+        void handleEvent(String event, String payload) {
+            if (event != null && !"state".equals(event)) return;
+            try {
+                handleState(payload);
+            } catch (Exception error) {
+                Log.w(TAG, key() + " bad state payload: " + error.getMessage());
+            }
+        }
+
+        void handleState(String body) throws Exception {
+            JSONObject root = new JSONObject(body);
+
+            Map<String, String> next = new HashMap<>();
+            JSONArray runtimes = root.optJSONArray("runtimes");
+            if (runtimes != null) {
+                for (int i = 0; i < runtimes.length(); i++) {
+                    JSONObject item = runtimes.optJSONObject(i);
+                    if (item == null) continue;
+                    String sessionId = item.optString("sessionId", "");
+                    if (sessionId.isEmpty()) continue;
+                    next.put(sessionId, item.optString("status", ""));
+                }
+            }
+
+            JSONObject sessionTitles = new JSONObject();
+            JSONArray sessions = root.optJSONArray("sessions");
+            if (sessions != null) {
+                for (int i = 0; i < sessions.length(); i++) {
+                    JSONObject item = sessions.optJSONObject(i);
+                    if (item == null) continue;
+                    String id = item.optString("id", "");
+                    if (!id.isEmpty()) sessionTitles.put(id, item.optString("title", ""));
+                }
+            }
+
+            // 1) 会话跑完：running → 非 running（含 runtime 消失）
+            if (!lastStatus.isEmpty()) {
+                for (Map.Entry<String, String> entry : lastStatus.entrySet()) {
+                    if (!"running".equals(entry.getValue())) continue;
+                    String sessionId = entry.getKey();
+                    String current = next.get(sessionId);
+                    boolean finished = current == null || !"running".equals(current);
+                    if (!finished) continue;
+                    if (shouldNotify()) notifyFinished(this, sessionId, current, sessionTitles.optString(sessionId, ""));
+                }
+            }
+            lastStatus.clear();
+            lastStatus.putAll(next);
+
+            // 2) AI 提问：新出现的待答卡片
+            JSONArray pendings = root.optJSONArray("pendingUiRequests");
+            Set<String> nextRequests = new HashSet<>();
+            JSONArray fresh = new JSONArray();
+            if (pendings != null) {
+                for (int i = 0; i < pendings.length(); i++) {
+                    JSONObject item = pendings.optJSONObject(i);
+                    if (item == null) continue;
+                    String sessionId = item.optString("sessionId", "");
+                    String requestId = item.optString("requestId", "");
+                    if (sessionId.isEmpty() || requestId.isEmpty()) continue;
+                    String key = sessionId + ":" + requestId;
+                    nextRequests.add(key);
+                    // 第一次收到的快照只当基线：用户可能正盯着那张卡片
+                    if (seeded && !knownRequests.contains(key)) fresh.put(item);
+                }
+            }
+            knownRequests.clear();
+            knownRequests.addAll(nextRequests);
+            seeded = true;
+
+            if (fresh.length() > 0) {
+                // 同一会话多个提问合并成一条，别刷屏
+                Map<String, Integer> counts = new HashMap<>();
+                Map<String, String> firstTitle = new HashMap<>();
+                for (int i = 0; i < fresh.length(); i++) {
+                    JSONObject item = fresh.optJSONObject(i);
+                    if (item == null) continue;
+                    String sessionId = item.optString("sessionId", "");
+                    counts.put(sessionId, counts.getOrDefault(sessionId, 0) + 1);
+                    if (!firstTitle.containsKey(sessionId)) {
+                        String question = item.optString("title", "").trim();
+                        if (question.isEmpty()) question = item.optString("question", "").trim();
+                        firstTitle.put(sessionId, question);
+                    }
+                    rememberNotified(this, "ask:" + sessionId + ":" + item.optString("requestId", ""));
+                }
+                for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+                    String sessionId = entry.getKey();
+                    if (shouldNotify()) {
+                        notifyAsk(this, sessionId, entry.getValue(), firstTitle.get(sessionId),
+                            sessionTitles.optString(sessionId, ""));
+                    }
                 }
             }
         }
     }
 
     /** AI 提问通知：agent 会一直阻塞等回答，所以这条比「跑完了」更该及时。 */
-    private void notifyAsk(String sessionId, int count, String question, String sessionTitle) {
+    private void notifyAsk(Target target, String sessionId, int count, String question, String sessionTitle) {
         String name = sessionTitle == null ? "" : sessionTitle.trim();
         String body;
         if (count > 1) {
@@ -365,16 +489,11 @@ public class RunWatchService extends Service {
         } else if (question != null && !question.trim().isEmpty()) {
             body = name.isEmpty() ? question.trim() : ("「" + name + "」：" + question.trim());
         } else {
-            body = name.isEmpty() ? "有一个问题待回答" : ("「" + name + "」有一个问题待回答");
+            body = name.isEmpty() ? "有 1 个问题待回答" : ("「" + name + "」有 1 个问题待回答");
         }
 
-        Intent intent = new Intent(this, MainActivity.class);
-        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        intent.putExtra(MainActivity.EXTRA_SESSION_ID, sessionId);
-        intent.putExtra(MainActivity.EXTRA_DEVICE_ID, deviceId);
-        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
-        PendingIntent pending = PendingIntent.getActivity(this, (sessionId + "#ask").hashCode(), intent, flags);
+        Intent intent = buildIntent(target, sessionId);
+        PendingIntent pending = buildPending(target, sessionId, "#ask", intent);
 
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_DONE)
             .setContentTitle("AI 在等你回答")
@@ -388,14 +507,14 @@ public class RunWatchService extends Service {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
         try {
-            manager.notify((sessionId + "#ask").hashCode(), notification);
+            manager.notify(notificationId(target, sessionId, "#ask"), notification);
         } catch (Exception error) {
             Log.w(TAG, "ask notify failed", error);
         }
     }
 
-    private void notifyFinished(String sessionId, String status, String sessionTitle) {
-        String title = sessionTitle.isEmpty() ? titles.optString(sessionId, "") : sessionTitle;
+    private void notifyFinished(Target target, String sessionId, String status, String sessionTitle) {
+        String title = sessionTitle.isEmpty() ? target.titles.optString(sessionId, "") : sessionTitle;
         // 结束状态要和 JS 侧口径一致：崩溃/掉线不能说成「完成」
         String heading;
         String suffix;
@@ -414,13 +533,8 @@ public class RunWatchService extends Service {
         }
         String body = title.isEmpty() ? ("会话" + suffix) : ("「" + title + "」" + suffix);
 
-        Intent intent = new Intent(this, MainActivity.class);
-        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        intent.putExtra(MainActivity.EXTRA_SESSION_ID, sessionId);
-        intent.putExtra(MainActivity.EXTRA_DEVICE_ID, deviceId);
-        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
-        PendingIntent pending = PendingIntent.getActivity(this, sessionId.hashCode(), intent, flags);
+        Intent intent = buildIntent(target, sessionId);
+        PendingIntent pending = buildPending(target, sessionId, "", intent);
 
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_DONE)
             .setContentTitle(heading)
@@ -434,17 +548,46 @@ public class RunWatchService extends Service {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
         try {
-            manager.notify(sessionId.hashCode(), notification);
-            rememberNotified("run:" + sessionId);
+            manager.notify(notificationId(target, sessionId, ""), notification);
+            rememberNotified(target, "run:" + sessionId);
         } catch (Exception error) {
             Log.w(TAG, "notify failed", error);
         }
     }
 
+    /** 点通知要「切到那台设备 + 打开那条会话」，所以两个 extra 必须一起带。 */
+    private Intent buildIntent(Target target, String sessionId) {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        intent.putExtra(MainActivity.EXTRA_SESSION_ID, sessionId);
+        intent.putExtra(MainActivity.EXTRA_DEVICE_ID, target.deviceId);
+        return intent;
+    }
+
+    private PendingIntent buildPending(Target target, String sessionId, String suffix, Intent intent) {
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
+        // 同一台设备的同一条会话才复用同一条通知；不同设备不能撞 id
+        return PendingIntent.getActivity(this, notificationId(target, sessionId, suffix), intent, flags);
+    }
+
+    private int notificationId(Target target, String sessionId, String suffix) {
+        return (target.deviceId + ":" + sessionId + suffix).hashCode();
+    }
+
     /** 记下「原生已经通知过」的会话，JS 恢复后据此避免重复弹。 */
-    private void rememberNotified(String key) {
+    private void rememberNotified(Target target, String key) {
         SharedPreferences prefs = getSharedPreferences(RunWatchPlugin.PREFS, Context.MODE_PRIVATE);
-        prefs.edit().putLong("notified:" + key, System.currentTimeMillis()).apply();
+        prefs.edit().putLong("notified:" + target.key() + ":" + key, System.currentTimeMillis()).apply();
+    }
+
+    private JSONObject parseTitles(String titlesJson) {
+        if (titlesJson == null || titlesJson.isEmpty()) return new JSONObject();
+        try {
+            return new JSONObject(titlesJson);
+        } catch (Exception ignored) {
+            return new JSONObject();
+        }
     }
 
     private void ensureChannels() {
@@ -469,11 +612,11 @@ public class RunWatchService extends Service {
         manager.createNotificationChannel(done);
     }
 
-
     @Override
     public void onDestroy() {
         running = false;
-        if (worker != null) worker.interrupt();
+        for (Target target : new ArrayList<>(targets.values())) target.shutdown();
+        targets.clear();
         super.onDestroy();
     }
 
