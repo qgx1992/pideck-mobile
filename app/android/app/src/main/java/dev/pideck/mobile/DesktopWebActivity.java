@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -219,6 +220,10 @@ public class DesktopWebActivity extends AppCompatActivity {
 
     private void applyBarTheme(boolean dark, String background) {
         int background_int = parseColor(background, dark ? Color.parseColor("#101014") : Color.WHITE);
+        // 容器与窗口底色一起改：padding 区 / 回弹区露的是窗口底色，
+        // 不跟着页面走就会在输入条下面留一条与主题无关的黑边。
+        if (contentRoot != null) contentRoot.setBackgroundColor(background_int);
+        getWindow().setBackgroundDrawable(new ColorDrawable(background_int));
         if (webView != null) {
             // 页面自己铺满，但回弹 / 缩放时露出的是 WebView 底色，用同样的色才不跳
             webView.setBackgroundColor(background_int);
@@ -269,13 +274,10 @@ public class DesktopWebActivity extends AppCompatActivity {
         int top = measuredTop == 0 ? 0 : Math.max(measuredTop,
                 insets == null ? 0 : insets.getInsets(systemBars | WindowInsetsCompat.Type.displayCutout()).top);
 
-        int measuredBottom = Math.max(0, (screenPos[1] + contentRoot.getHeight()) - (screenHeight - navBar));
-        int bottom = measuredBottom == 0 ? 0 : Math.max(measuredBottom,
-                insets == null ? 0 : insets.getInsets(systemBars).bottom);
-        // 键盘不改变窗口大小时（edge-to-edge）只能靠 insets
-        if (insets != null && insets.isVisible(WindowInsetsCompat.Type.ime())) {
-            bottom = Math.max(bottom, insets.getInsets(WindowInsetsCompat.Type.ime()).bottom);
-        }
+        // 底部一律不补：这个 ROM 上 `navigation_bar_height` 与窗口实际height对不上，
+        // 任何反推都会多补一条黑边（0.3.5 实测：输入条下面多出 ~50dp 黑带）。
+        // 手势条压住输入条 8dp 是可接受的，页面自己的内边距已经留了余量。
+        final int bottom = 0;
 
         if (contentRoot.getPaddingTop() != top || contentRoot.getPaddingBottom() != bottom) {
             contentRoot.setPadding(0, top, 0, bottom);
