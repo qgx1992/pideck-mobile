@@ -202,6 +202,7 @@ import {
   pushFlutterSettings,
   pushFlutterSidebar,
 } from "./platform/flutter-host.ts";
+import { isDesktopWebAvailable, openDesktopWeb } from "./platform/desktop-web.ts";
 import { FlutterChatMirror, buildChatSnapshot } from "./platform/flutter-chat.ts";
 import { buildSidebarSnapshot } from "./platform/flutter-sidebar.ts";
 import {
@@ -4163,6 +4164,12 @@ function openThemeSheet(): void {
 /* 连接管理：历史连接列表                                              */
 /* ------------------------------------------------------------------ */
 
+/** 当前包是否带「桌面网页版」原生入口（老包 / 浏览器里为 false）。 */
+let desktopWebReady = false;
+void isDesktopWebAvailable().then((ready) => {
+  desktopWebReady = ready;
+});
+
 function openConnectionSheet(): void {
   const current = runtime?.pairing;
   const history = listPairings();
@@ -4193,6 +4200,29 @@ function openConnectionSheet(): void {
       });
 
       sheet.append(row);
+    }
+
+    if (current) {
+      // 「UI 归桌面端」的入口：直接打开桌面端自带的那份 Web 端（同一套界面，只是这里全屏）。
+      // 桌面端没开 Web 服务时会停在桌面端自己的错误页，所以入口只在原生壳里出现。
+      if (desktopWebReady) {
+        sheet.append(
+          h("button", {
+            class: "sheet-item",
+            text: "用桌面网页版打开",
+            onclick: () => {
+              closeSheet();
+              void openDesktopWeb({
+                baseUrl: current.baseUrl,
+                token: current.token,
+                title: current.label ?? current.baseUrl,
+              }).then((opened) => {
+                if (!opened) toast("这台设备上打不开桌面网页版");
+              });
+            },
+          }),
+        );
+      }
     }
 
     sheet.append(

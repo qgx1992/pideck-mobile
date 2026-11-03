@@ -23,6 +23,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SsePlugin.class);
         // WebView → Flutter 页的开关（add-to-app）
         registerPlugin(FlutterLauncherPlugin.class);
+        // 「用桌面网页版」：全屏裸 WebView 打开桌面端自带的那份 UI
+        registerPlugin(DesktopWebPlugin.class);
         super.onCreate(savedInstanceState);
 
         // 扫码（BarcodeScanner.startScan）时相机预览铺在 WebView 之下，

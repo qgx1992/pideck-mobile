@@ -39,6 +39,16 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <activity
+            android:name=".DesktopWebActivity"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.FlutterHost"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".RunWatchService"
             android:exported="false"
