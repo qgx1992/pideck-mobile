@@ -11,7 +11,9 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.webkit.JavascriptInterface;
+import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -22,6 +24,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -63,6 +66,8 @@ public class DesktopWebActivity extends AppCompatActivity {
     private static final boolean forcedEdgeToEdge = Build.VERSION.SDK_INT >= 36;
     /** 承载 WebView 的容器：系统栏占位加在这上面，而不是 WebView 自己身上。 */
     private FrameLayout contentRoot;
+    /** 临时诊断条：把实际用到的几个尺寸画在页面上，方便按真机数值定死占位。 */
+    private TextView debugView;
     private WebView webView;
     private WebChromeClient.FileChooserParams pendingChooser;
     private LocalWebServer localServer;
@@ -194,6 +199,16 @@ public class DesktopWebActivity extends AppCompatActivity {
         contentRoot = new FrameLayout(this);
         contentRoot.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        debugView = new TextView(this);
+        debugView.setTextSize(9f);
+        debugView.setTextColor(Color.WHITE);
+        debugView.setBackgroundColor(0xCCD9004C);
+        debugView.setPadding(6, 2, 6, 2);
+        FrameLayout.LayoutParams debugLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        debugLp.gravity = Gravity.TOP | Gravity.START;
+        contentRoot.addView(debugView, debugLp);
+
         setContentView(contentRoot);
         ViewCompat.setOnApplyWindowInsetsListener(contentRoot, (view, insets) -> {
             applyBarInsets(insets);
@@ -281,6 +296,23 @@ public class DesktopWebActivity extends AppCompatActivity {
 
         if (contentRoot.getPaddingTop() != top || contentRoot.getPaddingBottom() != bottom) {
             contentRoot.setPadding(0, top, 0, bottom);
+        }
+
+        DisplayMetrics real = new DisplayMetrics();
+        DisplayMetrics usable = new DisplayMetrics();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            getDisplay().getRealMetrics(real);
+        } else {
+            getWindowManager().getDefaultDisplay().getRealMetrics(real);
+        }
+        getWindowManager().getDefaultDisplay().getMetrics(usable);
+        int insetsTop = insets == null ? -1 : insets.getInsets(systemBars | WindowInsetsCompat.Type.displayCutout()).top;
+        if (debugView != null) {
+            debugView.setText("y=" + screenPos[1] + " h=" + contentRoot.getHeight()
+                    + " sb=" + statusBar + " in=" + insetsTop
+                    + " pad=" + top + "/" + bottom
+                    + " real=" + real.heightPixels + " usable=" + usable.heightPixels
+                    + " dpi=" + real.densityDpi);
         }
     }
 
