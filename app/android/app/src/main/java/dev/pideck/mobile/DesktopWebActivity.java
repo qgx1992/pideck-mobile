@@ -157,6 +157,7 @@ public class DesktopWebActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 // 系统栏跟着页面主题走：页面底色是浅的就要深色图标，反之亦然。
                 view.evaluateJavascript(THEME_PROBE, null);
+                view.evaluateJavascript(SAFE_AREA_PROBE, null);
             }
 
             @Override
@@ -286,13 +287,15 @@ public class DesktopWebActivity extends AppCompatActivity {
         contentRoot.getLocationOnScreen(screenPos);
         int statusBar = systemDimen("status_bar_height");
 
-        // 页面自己让位了多少（`web.html` 写了 `pt-[env(safe-area-inset-top)]`，新 WebView 在
-        // edge-to-edge 下**会上报真实安全区**，这时页面已经把内容排到状态栏下面了）。
-        // 先信页面：它让了 N 个 CSS px，我们只补 `statusBar − N`，避免两端各让一次、凭空多一条空白；
-        // 页面报 0（老 WebView / env 不生效）时退回「实测差值」，兜住内容压进状态栏的情况。
+        // 顶部占位一律由原生补（只补「实测差值」）：这个 ROM 上窗口是真 edge-to-edge，容器 y=0，
+        // 差值就是状态栏高度；decor-fit 生效的机型差值为 0，自然不补。
+        //
+        // 为什么不用「页面自报安全区扣减」那一套：桌面 Web 端只有**聊天主壳**上写了
+        // `pt-[env(safe-area-inset-top)]`，侧栏抽屉（`fixed inset-y-0`）根本没写。
+        // 一旦按页面自报把原生占位扣成 0，抽屉顶上那排（新建项目 / 搜索）就直接压进状态栏；
+        // 反过来只补原生、再把主壳那份 `pt-[env(...)]` 清零，两者都落在状态栏下面。
         int measuredTop = Math.max(0, statusBar - screenPos[1]);
-        int pageTop = pageInsetTop > 0 ? Math.round(pageInsetTop * getResources().getDisplayMetrics().density) : 0;
-        int top = Math.max(0, measuredTop - pageTop);
+        final int top = measuredTop;
 
         // 底部一律不补：这个 ROM 上 `navigation_bar_height` 与窗口实际height对不上，
         // 任何反推都会多补一条黑边（0.3.5 实测：输入条下面多出 ~50dp 黑带）。
@@ -349,6 +352,24 @@ public class DesktopWebActivity extends AppCompatActivity {
      * 注入的探测脚本：读页面底色/主题，回报一次；之后监听主题切换（不靠定时器刷）。
      * 页面不一定有 `data-theme`（桌面 Web 端有自己的主题来源），所以以计算后的背景色为准。
      */
+    /**
+     * 顶部安全区统一由原生 padding 提供，所以把页面自己那份 `pt-[env(safe-area-inset-top)]` 清零，
+     * 否则新 WebView（会上报真实安全区）+ 原生 padding 会各让一次，顶栏上方多出一条空白。
+     */
+    private static final String SAFE_AREA_PROBE =
+            "(function(){"
+            + "if(window.__pideckSafeArea)return;"
+            + "window.__pideckSafeArea=true;"
+            + "function zero(){try{"
+            + "var els=document.querySelectorAll('[class*=\'safe-area-inset-top\']');"
+            + "for(var i=0;i<els.length;i++){var el=els[i];"
+            + "if(getComputedStyle(el).paddingTop!=='0px')el.style.paddingTop='0px';}"
+            + "}catch(e){}}"
+            + "zero();"
+            + "try{new MutationObserver(zero).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});}catch(e){}"
+            + "window.addEventListener('resize',zero);"
+            + "})();";
+
     private static final String THEME_PROBE =
             "(function(){"
             + "if(window.__pideckShellWatch)return;"
