@@ -68,6 +68,10 @@ Future<void> _pushSidebar(WidgetTester tester, Map<String, Object?> snapshot) as
   await tester.pump(const Duration(milliseconds: 200));
 }
 
+/// 输入框里现在是什么（草稿要按会话搬，靠它断言）。
+String _composerText(WidgetTester tester) =>
+    tester.widget<TextField>(find.byType(TextField).first).controller!.text;
+
 /// 侧栏：一条「最近会话」分段，两行会话。
 Map<String, Object?> _sidebar() {
   Map<String, Object?> row(String id, String title, bool active) => <String, Object?>{
@@ -145,5 +149,50 @@ void main() {
     // 还没等 Web 侧回任何东西：旧会话的内容就不能再留在页面上
     expect(find.text('会话一的消息'), findsNothing, reason: '点了会话二还显示会话一的内容');
     expect(find.text('会话二'), findsWidgets, reason: '标题没先换成点中的那个会话');
+  });
+
+  testWidgets('草稿跟着会话走：切走不丢，切回来还在', (WidgetTester tester) async {
+    await _mount(
+      tester,
+      _snapshot(sessionId: 's1', title: '会话一', messages: <String>['会话一的消息']),
+    );
+    await tester.enterText(find.byType(TextField).first, '没发完的话');
+    await tester.pump();
+
+    await _pushChat(
+      tester,
+      _snapshot(sessionId: 's2', title: '会话二', messages: <String>['会话二的消息']),
+    );
+    expect(_composerText(tester), isEmpty, reason: '上一个会话的草稿被带到新会话了');
+    expect(find.text('会话二的消息'), findsOneWidget);
+
+    await _pushChat(
+      tester,
+      _snapshot(sessionId: 's1', title: '会话一', messages: <String>['会话一的消息']),
+    );
+    expect(_composerText(tester), '没发完的话', reason: '切回原会话，草稿丢了');
+  });
+
+  testWidgets('点了会话之后，旧会话的推送不能把页面拽回去', (WidgetTester tester) async {
+    await _mount(
+      tester,
+      _snapshot(sessionId: 's1', title: '会话一', messages: <String>['会话一的消息']),
+    );
+    await _pushSidebar(tester, _sidebar());
+    await tester.tap(find.byIcon(Icons.menu_rounded));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('会话二'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // WebView 还没确认新会话，旧会话的收尾推送先到 —— 不能把页面拽回会话一
+    await _pushChat(
+      tester,
+      _snapshot(sessionId: 's1', title: '会话一', messages: <String>['会话一的消息', '旧会话又推来一条']),
+    );
+
+    expect(find.text('旧会话又推来一条'), findsNothing, reason: '旧会话的推送把页面切回去了');
+    expect(find.text('会话二'), findsWidgets, reason: '标题被旧会话的推送改回去了');
   });
 }

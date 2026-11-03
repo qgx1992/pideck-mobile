@@ -96,6 +96,24 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Dart 侧数据面（帧流 / 历史 / 待答请求）。宿主没给端点时为 null。
   ChatRuntime? _runtime;
 
+  /// 「我刚刚在抽屉里点了哪个会话」。
+  ///
+  /// 用户点下去之后，本地先切（`withSession`），但 WebView 那边还要走一遍
+  /// `openSession` 才会推新快照。这段空窗里如果来了**上一个会话**的推送
+  /// （收尾的 settle、旧 channel 的最后一帧），按推送切回去就会闪回旧会话 ——
+  /// 所以留一个短时意图：意图还在时，只认和意图一致的 sessionId。
+  String _intentSessionId = '';
+  DateTime? _intentAt;
+
+  /// 意图的有效期：超过这个时间还没等到 WebView 认同，就当它没发生。
+  static const Duration _intentTtl = Duration(seconds: 4);
+
+  /// 每个会话各自的草稿。
+  ///
+  /// 输入框在 Dart 这一页上，WebView 的 `sessionDrafts` 管不着它；不自己存一份，
+  /// 切走再切回来打了一半的内容就没了，切到别的会话还会带着上一个会话的字。
+  final Map<String, String> _drafts = <String, String>{};
+
   /// 工作区抽屉的数据来源（`git` / `files` / 预览）。
   ///
   /// 0.2.13 起跟着运行时一起建：它要靠状态仓解析「当前会话属于哪个项目」，
@@ -152,6 +170,12 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<PickedImage> _images = <PickedImage>[];
 
   bool _stick = true;
+
+  /// 换会话后，等新会话的历史真的到货，再对齐一次「最新那一条」。
+  ///
+  /// 切过去的第一帧列表还是空的（只有「加载中」），那时候量出来的滚动位置不可信；
+  /// 等到货这一帧再对一次，长会话才不会停在半截。
+  bool _scrollLatestWhenLoaded = false;
   String _lastRequestId = '';
   String _pendingDraft = '';
 
@@ -305,22 +329,48 @@ class _ChatScreenState extends State<ChatScreen> {
     _webJson = decoded;
     // 换会话了：运行时跟着换（它按 sessionId 建流，留着旧的就是喂错会话）。
     final String nextSession = str(decoded['sessionId']);
-    if (widget.nativeRuntime &&
-        nextSession.isNotEmpty &&
-        widget.baseUrl.isNotEmpty &&
-        _runtime?.sessionId != nextSession) {
-      _ensureRuntime(nextSession);
+    // 刚点过会话、WebView 还没跟上时，旧会话的推送不能把页面拽回去
+    // （收尾的 settle / 旧 channel 的最后一帧都可能晚到）。
+    if (_intentSessionId.isNotEmpty) {
+      final bool expired = _intentAt == null ||
+          DateTime.now().difference(_intentAt!) > _intentTtl;
+      if (expired) {
+        _intentSessionId = '';
+        _intentAt = null;
+      } else if (nextSession != _intentSessionId) {
+        return;
+      } else {
+        _intentSessionId = '';
+        _intentAt = null;
+      }
+    }
+    if (widget.nativeRuntime && nextSession.isNotEmpty && widget.baseUrl.isNotEmpty) {
+      if (_runtime?.sessionId != nextSession) _ensureRuntime(nextSession);
+    } else if (nextSession.isEmpty) {
+      // 回到主界面（没选会话）：运行时留着会继续收帧、继续推旧会话的内容，
+      // 页面就会停在刚才那个会话上。直接放掉，下次点会话再建。
+      _disposeRuntime();
     }
     _applySnapshot();
+  }
+
+  /// 放掉运行时与其附带的连接（换会话 / 回主界面）。
+  void _disposeRuntime() {
+    _runtimeFlush?.cancel();
+    _runtimeFlush = null;
+    _runtimeDirty = false;
+    _workspace?.dispose();
+    _workspace = null;
+    _runtime?.dispose();
+    _runtime = null;
   }
 
   /// 起（或换）Dart 运行时。
   void _ensureRuntime(String sessionId) {
     if (sessionId.isEmpty || widget.baseUrl.isEmpty) return;
-    _runtimeFlush?.cancel();
-    _runtimeFlush = null;
-    _runtimeDirty = false;
-    _runtime?.dispose();
+    // 旧的运行时连同它那条 `/api/events` 一起放掉：两个会话各留一条流，
+    // 后台就是两份流量，而且旧的那份还会按旧会话推快照。
+    _disposeRuntime();
     final ChatRuntime runtime = ChatRuntime(
       client: PiDeckClient(
         baseUrl: widget.baseUrl,
@@ -349,7 +399,6 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _runtime = runtime;
     // 工作区数据也跟着换会话重建：项目来自会话，留着旧的就是在画上一个项目。
-    _workspace?.dispose();
     final WorkspaceRuntime workspace = WorkspaceRuntime(
       client: runtime.client,
       store: runtime.store,
@@ -441,6 +490,10 @@ class _ChatScreenState extends State<ChatScreen> {
   Map<String, Object?> _mergedJson() {
     final ChatRuntime? runtime = _runtime;
     if (runtime == null || !runtime.historyLoaded) return _webJson;
+    // 运行时是**按会话**建的：它和这一屏正在画的会话不是同一个时，它那份数据
+    // 是上一个会话的（用户刚点了会话、本地已经切过去，WebView 的推送还没到）。
+    // 这时候盖上就是「新标题 + 旧消息」，看起来像没切过去，所以只认同一个会话。
+    if (str(_webJson['sessionId']) != runtime.sessionId) return _webJson;
     final Map<String, Object?> merged = <String, Object?>{
       ..._webJson,
       ...runtime.snapshotJson(),
@@ -472,9 +525,14 @@ class _ChatScreenState extends State<ChatScreen> {
     // 否则沿用上一个会话的滚动偏移，用户看到的是一堆旧消息，像是没切过去。
     final bool sessionChanged = next.sessionId != _snapshot.sessionId;
     if (sessionChanged) {
+      // 换会话：把这一屏输入框里的字归到上一个会话，再取出新会话的草稿。
+      _swapDraft(_snapshot.sessionId, next.sessionId);
       _stick = true;
       _highlightId = '';
       _historyKeys.clear();
+      // 新会话的历史是**后到**的（先画「加载中」再收到消息）：等它到货那一帧
+      // 还要再对齐一次，否则懒构建列表第一次量出来的位置是估的，人会停在半截。
+      _scrollLatestWhenLoaded = true;
     }
     // 主题：快照里带着 light / dark / system，写进全局 notifier 让 MaterialApp 重建。
     // 放在 setState 外面 —— 它是整棵树的事，不是这一页的事。
@@ -499,6 +557,10 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _snapshot = next);
     if (sessionChanged) {
       // 换会话：停在「最新那一条消息」，不是列表最底（最底是 footer）
+      _scrollToLatest();
+    } else if (_scrollLatestWhenLoaded && next.history.isNotEmpty) {
+      // 新会话的历史到货了：这时候才量得准，再对齐一次最新那一条。
+      _scrollLatestWhenLoaded = false;
       _scrollToLatest();
     } else {
       _afterLayout();
@@ -543,6 +605,11 @@ class _ChatScreenState extends State<ChatScreen> {
     if (type != 'openSession') return;
     final String id = '${action['id'] ?? ''}';
     if (id.isEmpty || id == _snapshot.sessionId) return;
+    // 记下意图：WebView 确认之前，别的会话的推送到不了这一屏（见 `_applyJson`）。
+    _intentSessionId = id;
+    _intentAt = DateTime.now();
+    // 草稿先按会话搬一次，本地切过去的这一屏输入框才是对的。
+    _swapDraft(_snapshot.sessionId, id);
     setState(() {
       // 内容先清空并显示加载中：否则抽屉收起后看到的是上一个会话的消息，
       // 用户会以为没点中（0.2.8 的「切换会话没效果」就是这个观感）。
@@ -552,6 +619,30 @@ class _ChatScreenState extends State<ChatScreen> {
       _historyKeys.clear();
     });
     _refreshSidebar();
+  }
+
+  /// 换会话时把输入框里的字存到上一个会话名下，再取出新会话的草稿。
+  ///
+  /// 输入框在 Dart 这一页上，WebView 的 `sessionDrafts` 管不到它：
+  /// 不自己搬的话，切走会丢草稿，切过去又会带着上一个会话打的字。
+  void _swapDraft(String from, String to) {
+    if (from == to) return;
+    if (from.isNotEmpty) {
+      final String text = _composer.text;
+      if (text.trim().isEmpty) {
+        _drafts.remove(from);
+      } else {
+        _drafts[from] = text;
+      }
+    }
+    final String next = to.isEmpty ? '' : (_drafts[to] ?? '');
+    if (next == _composer.text) return;
+    _composer.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: next.length),
+    );
+    _composerText = next;
+    _composerHoldsTrigger = false;
   }
 
   /// 数据类侧栏动作：Dart 自己调接口，成功了再让 WebView 重画。
@@ -737,6 +828,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _composer.clear();
     _composerText = '';
     _composerHoldsTrigger = false;
+    _drafts.remove(_snapshot.sessionId);
     _composerFocus.unfocus();
     setState(() => _stick = true);
 

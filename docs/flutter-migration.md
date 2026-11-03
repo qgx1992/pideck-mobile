@@ -1541,3 +1541,27 @@ Dart 的 `HttpResponse` 默认把 body 攒到 close 才发，而流式连接永�
 改用 `history_model.dart` 的 `messageText()`。这是 0.2.12 引入的缺陷，单测盖不到，端到端用例一跑就露。
 
 `flutter test` 现 260 条（+3）。
+
+### 0.2.16：切换会话这一条路径集中修
+
+「切会话」看起来只是一个 `openSession` 动作，实际跨了三条链路：抽屉（Dart）→ WebView 的
+`openSession()` → Dart 自己的运行时。任何一条慢了、晚了，用户看到的就是「点了没反应 / 闪回旧会话 /
+新标题配旧消息」。这一版把空窗期都补上：
+
+- **运行时按会话重建**：`_ensureRuntime()` 先 `_disposeRuntime()` 再建。旧运行时连的是旧会话的
+  `/api/sessions/:id/stream` 与 `/api/events`，留着就是两份流量，而且它会按旧会话继续推快照。
+  `sessionId` 变空（回主界面）也要放掉，否则页面停在刚才那个会话上。
+- **合并只认同一个会话**：`_mergedJson()` 里 `str(_webJson['sessionId']) != runtime.sessionId`
+  时整份退回 WebView。用户点了会话、本地已经 `withSession()` 切过去，但 WebView 那边还要
+  `openSession()` 一轮才推回来；这段空窗里旧运行时一 notify 就是「新标题 + 旧消息」。
+- **点会话先落意图**（`_intentSessionId`，4 秒 TTL）：意图还在时，别的 `sessionId` 的快照直接丢掉。
+  旧 channel 的收尾帧、`settle()` 的推送都会晚到，不挡就会闪回旧会话；WebView 认同后立刻清意图。
+- **草稿按会话搬**（`_swapDraft`）：输入框在 Dart 这一页上，WebView 的 `sessionDrafts` 管不到它。
+  不搬就是「切走丢草稿、切过去带着上一个会话打的字」。切换的两条路径（WebView 推送 /
+  点抽屉本地先行）都要搬，发出去之后删掉该会话的草稿。
+- **历史到货后再对齐一次滚动**（`_scrollLatestWhenLoaded`）：切过去的第一帧列表还是空的
+  （只有「加载中」），懒构建列表那会儿量出来的滚动位置是估的；等历史真的到货那一帧再
+  `_scrollToLatest()` 一次，长会话才不会停在半截。
+
+回归测试在 `flutter_module/test/chat_session_switch_test.dart`：新增「草稿跟着会话走」
+与「点了会话之后，旧会话的推送不能把页面拽回去」两条，`flutter test` 现 262 条。

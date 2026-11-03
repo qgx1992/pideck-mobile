@@ -361,6 +361,19 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   写这条用例的三个坑：假 `stream` 服务端要**保活**（帧是发送之后才推的，连上就写 `[DONE]` 后面一帧都收不到）、
   `snapshotJson()['live']` 永远不是 null（settle 的判据是 `blocks.isEmpty`）、`/api/files` 的
   `type` 是 `"directory"` 不是 `"dir"`。
+- **换会话是这一页最容易坏的地方**（0.2.16 集中修，见 `chat_page.dart`）：
+  1. `ChatRuntime` 必须**按 sessionId 重建**（`_ensureRuntime` 先 `_disposeRuntime()`）：旧运行时连着的是旧会话的
+     流，留着就是两份流量 + 按旧会话推快照。`sessionId` 变空（回主界面）也要放掉，否则页面停在刚才那个会话上。
+  2. `_mergedJson()` 只认同一个会话：`str(_webJson['sessionId']) != runtime.sessionId` 时**整份退回 WebView**。
+     用户点了会话、本地已 `withSession()` 切过去、WebView 还没推回来，这段空窗里旧运行时一 notify 就是
+     「新标题 + 旧消息」—— 看起来像没切过去。
+  3. 点会话时写 `_intentSessionId`（4 秒 TTL）：意图还在时，**别的 sessionId 的快照直接丢掉**。
+     旧 channel 的收尾帧、`settle()` 的推送都会晚到，不挡就会闪回旧会话。WebView 认同后清意图。
+  4. **草稿按会话搬**（`_swapDraft`）：输入框在 Dart 这页上，WebView 的 `sessionDrafts` 管不到它。
+     不搬就是「切走丢草稿、切过去带着上一个会话的字」。`_applySnapshot` 的 sessionChanged 分支与
+     点会话那条本地先行路径都要搬；发出去之后要把该会话的草稿删掉。
+  5. 新会话历史是**后到**的：切过去第一帧列表是空的（只画加载中），`_scrollLatestWhenLoaded` 要等历史到货
+     那一帧再 `_scrollToLatest()` 一次，否则懒构建列表第一次量出来的位置是估的，人会停在半截。
 
 ## 改动完成后必须跑的验证
 
