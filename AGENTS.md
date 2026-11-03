@@ -154,6 +154,9 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
   状态栏里看不见。`app/shell/safe-area-css.ts` 的 `OVERLAY_RULES` 按 class 字符串精确命中这三种
   面板补内边距；上游改 class 就会静默失效，所以 `app/shell/overlay-selectors.test.ts` 直接读
   vendor 源码对账，同步上游后测试红一次就能发现。
+- **靠 CSS 变成覆盖层的也要让位**：左侧会话栏 `.chat-list-pane` 在 ≤760px 时被 `web.css:422`
+  改成 `position: fixed; inset: 0 auto 0 0`，同样绕开主壳内边距。`MOBILE_OVERLAY_CLASSES`
+  在 `@media (max-width: 760px)` 里补上下内边距（桌面宽度它只是 flex 子项，补了会双份）。
 - 状态栏图标不会自己跟主题：主题只是 `documentElement.dataset.theme`，图标明暗在系统手里。
   `app/shell/system-bars.ts` 用 `MutationObserver` 盯 `data-theme`，同步 `StatusBar.setStyle`
   （`Style.Dark` = 浅色图标）与 `NavigationBar.setColor({ lightIcons })`；启动页固定深色。

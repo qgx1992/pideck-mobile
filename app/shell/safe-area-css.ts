@@ -54,6 +54,28 @@ export const OVERLAY_RULES: Array<{ token: string; sides: Array<"top" | "bottom"
 	},
 ];
 
+/**
+ * 靠 CSS 类（不是 utility 字符串）变成覆盖层的元素。
+ *
+ * 左侧会话栏在 ≤760px 时由 `web.css` 改成 `position: fixed; inset: 0 auto 0 0`
+ * （`web.css:422-435` 的媒体查询），于是它和一个独立的 fixed 抽屉一样从视口顶边起画，
+ * 主壳的 padding 不再管用——标题栏和右上角关闭按钮又会被状态栏盖住。
+ * 只在移动宽度下补，桌面宽度它仍是普通 flex 子项（补了会双份）。
+ */
+export const MOBILE_OVERLAY_CLASSES: Array<{
+	selector: string;
+	sides: Array<"top" | "bottom">;
+	where: string;
+	media: string;
+}> = [
+	{
+		selector: ".app.wechat-shell > .chat-list-pane",
+		sides: ["top", "bottom"],
+		where: "vendor/pideck/src/renderer/src/web/web.css:422（≤760px 的左侧会话栏）",
+		media: "(max-width: 760px)",
+	},
+];
+
 export const round = (value: number): number => {
 	const rounded = Math.round(value * 100) / 100;
 	// 负零会写进 CSS 变成 `-0px`，归一掉
@@ -83,5 +105,9 @@ export function buildSafeAreaCss(extra: { top: number; bottom: number }): string
 		({ token, sides }) =>
 			`[class*="${token}"] { ${sides.map((side) => `padding-${side}: ${inset(side)};`).join(" ")} }`,
 	);
-	return [vars, canvas, ...rules, ...overlays].join("\n");
+	const mobileOverlays = MOBILE_OVERLAY_CLASSES.map(
+		({ selector, sides, media }) =>
+			`@media ${media} { ${selector} { ${sides.map((side) => `padding-${side}: ${inset(side)} !important;`).join(" ")} } }`,
+	);
+	return [vars, canvas, ...rules, ...overlays, ...mobileOverlays].join("\n");
 }

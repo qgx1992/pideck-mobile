@@ -7,9 +7,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
 
-import { OVERLAY_RULES, PATCHED_CLASSES } from "./safe-area-css.ts";
+import { MOBILE_OVERLAY_CLASSES, OVERLAY_RULES, PATCHED_CLASSES } from "./safe-area-css.ts";
 
-const webDir = path.join(import.meta.dirname, "..", "vendor", "pideck", "src", "renderer", "src", "web");
+const rendererDir = path.join(import.meta.dirname, "..", "vendor", "pideck", "src", "renderer", "src");
+const webDir = path.join(rendererDir, "web");
 const read = (file: string): string => readFileSync(path.join(webDir, file), "utf8");
 /** `where` 记的是 `路径/文件.tsx:行号（说明）`，对账只需要文件名。 */
 const fileOf = (where: string): string => /([\w.-]+\.tsx):\d+/.exec(where)?.[1] ?? "";
@@ -28,6 +29,19 @@ describe("主壳的 env() utility 仍然在上游源码里", () => {
 		const needle = rule.token.replace(/\[$/, "");
 		it(`${rule.where} 里还有 \`${needle}\``, () => {
 			assert.ok(read(fileOf(rule.where)).includes(needle), `上游改了 class：${needle}`);
+		});
+	}
+});
+
+describe("移动端 CSS 覆盖层仍然存在", () => {
+	const css = readFileSync(path.join(webDir, "web.css"), "utf8");
+
+	for (const rule of MOBILE_OVERLAY_CLASSES) {
+		it(`web.css 里还有 \`${rule.selector}\` 的 fixed 规则（${rule.where}）`, () => {
+			// 同一个选择器在桌面上也有一次（flex 子项），移动端那份在媒体查询里，要取最后一处
+			const at = css.lastIndexOf(rule.selector);
+			assert.ok(at >= 0, `上游改了选择器：${rule.selector}`);
+			assert.ok(/position:\s*fixed/.test(css.slice(at, at + 400)), `上游不再把它改成 fixed：${rule.selector}`);
 		});
 	}
 });

@@ -29,6 +29,12 @@ describe("buildSafeAreaCss", () => {
 		assert.match(css, /--pideck-safe-bottom: 0px/);
 	});
 
+	it("移动端左侧会话栏在 media query 里补上下内边距", () => {
+		const css = buildSafeAreaCss({ top: 0, bottom: 0 });
+		assert.match(css, /@media \(max-width: 760px\) \{ \.app\.wechat-shell > \.chat-list-pane \{/);
+		assert.match(css, /padding-top: max\(env\(safe-area-inset-top, 0px\), var\(--pideck-inset-top, 0px\)\) !important/);
+	});
+
 	it("round 保留两位小数，避免 calc 里出现长尾浮点", () => {
 		assert.equal(round(21.333333), 21.33);
 		assert.equal(round(-0.0001), 0);
