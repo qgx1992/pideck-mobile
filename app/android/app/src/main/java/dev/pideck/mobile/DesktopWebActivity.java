@@ -60,6 +60,8 @@ public class DesktopWebActivity extends AppCompatActivity {
      * 内容必然画到系统栏底下 —— 那种机型只能靠 insets 给 WebView 加 padding 兜住。
      */
     private static final boolean forcedEdgeToEdge = Build.VERSION.SDK_INT >= 36;
+    /** 承载 WebView 的容器：系统栏占位加在这上面，而不是 WebView 自己身上。 */
+    private FrameLayout contentRoot;
     private WebView webView;
     private WebChromeClient.FileChooserParams pendingChooser;
     private LocalWebServer localServer;
@@ -123,10 +125,7 @@ public class DesktopWebActivity extends AppCompatActivity {
         // 这两条都可能落空（ROM 忽略 opt-out、insets 在 decor-fit 时恒为 0），一旦落空页面顶边就回到
         // 屏幕 0 行，桌面 Web 端的顶栏（y≈9dp 的汉堡按钮）正好骑在状态栏下面：看不见也点不到。
         // 所以再加一层实测：WebView 在屏幕上的 y 坐标 < 状态栏高度，就补足这段 padding。
-        ViewCompat.setOnApplyWindowInsetsListener(webView, (view, insets) -> {
-            applyContentInsets(insets);
-            return insets;
-        });
+
         // 页面自己画背景；WebView 保持不透明，避免键盘弹出时露出系统底色的黑边
         webView.setBackgroundColor(Color.parseColor("#101014"));
 
@@ -191,9 +190,16 @@ public class DesktopWebActivity extends AppCompatActivity {
             }
         });
 
-        setContentView(webView);
-        // 布局完成后再量一次：insets 首次派发时 WebView 还没排好，位置读不到
-        webView.post(() -> applyContentInsets(ViewCompat.getRootWindowInsets(webView)));
+        contentRoot = new FrameLayout(this);
+        contentRoot.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        setContentView(contentRoot);
+        ViewCompat.setOnApplyWindowInsetsListener(contentRoot, (view, insets) -> {
+            applyBarInsets(insets);
+            return insets;
+        });
+        // 布局完成后再量一次：insets 首次派发时容器还没排好，位置读不到
+        contentRoot.post(() -> applyBarInsets(ViewCompat.getRootWindowInsets(contentRoot)));
         webView.addJavascriptInterface(new ShellBridge(), "PiDeckShell");
         webView.loadUrl(url);
     }
@@ -237,34 +243,30 @@ public class DesktopWebActivity extends AppCompatActivity {
     }
 
     /**
-     * 按「实测位置」补齐系统栏占位，取值三路取最大：
-     * 1) 系统上报的 insets（真 edge-to-edge 时才有值）；
-     * 2) 状态栏 / 手势条的实际高度与 WebView 当前屏幕位置的差（decor-fit 已生效时为 0）；
-     * 3) Android 16+ 的键盘 inset（decor 不 fit 时窗口不随键盘缩小）。
+     * 系统栏占位：加在**容器**的 padding 上，让 WebView 本身变矮变窄 —— 绝不能加在 WebView 身上。
+     *
+     * 给 WebView 加 padding 时，页面里的 `100dvh` / 固定定位仍按整块 WebView 计算，内容会被
+     * 裁掉一截（Android 17 上实测就是「输入框越界」）；而容器 padding 换来的是真正的视口缩小，
+     * 桌面 Web 端自己的 `h-[100dvh]` 与输入条就自然落在栏之间。
+     *
+     * 取值：系统 insets 与「状态栏高度 - 容器在屏幕上的 y」二者取大（ROM 忽略 opt-out、
+     * insets 又回 0 时靠后者兜住）；底部取 `max(手势条, 键盘)`。
      */
-    private void applyContentInsets(@Nullable WindowInsetsCompat insets) {
-        if (webView == null) return;
-        int edge = WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout();
-        int top = insets == null ? 0 : insets.getInsets(edge).top;
-        int bottom = insets == null ? 0 : insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom;
-
-        int[] screenPos = new int[2];
-        webView.getLocationOnScreen(screenPos);
-        int statusBar = systemDimen("status_bar_height");
-        int navBar = systemDimen("navigation_bar_height");
-        int screenHeight = getResources().getDisplayMetrics().heightPixels;
-
-        // 内容顶边不能比状态栏底边更高
-        top = Math.max(top, Math.max(0, statusBar - screenPos[1]));
-        // 内容底边不能比手势条顶边更低
-        int overlapBottom = (screenPos[1] + webView.getHeight()) - (screenHeight - navBar);
-        bottom = Math.max(bottom, Math.max(0, overlapBottom));
-        if (forcedEdgeToEdge && insets != null) {
+    private void applyBarInsets(@Nullable WindowInsetsCompat insets) {
+        if (contentRoot == null) return;
+        int systemBars = WindowInsetsCompat.Type.systemBars();
+        int top = insets == null ? 0 : insets.getInsets(systemBars | WindowInsetsCompat.Type.displayCutout()).top;
+        int bottom = insets == null ? 0 : insets.getInsets(systemBars).bottom;
+        if (insets != null) {
             bottom = Math.max(bottom, insets.getInsets(WindowInsetsCompat.Type.ime()).bottom);
         }
 
-        if (webView.getPaddingTop() != top || webView.getPaddingBottom() != bottom) {
-            webView.setPadding(0, top, 0, bottom);
+        int[] screenPos = new int[2];
+        contentRoot.getLocationOnScreen(screenPos);
+        top = Math.max(top, Math.max(0, systemDimen("status_bar_height") - screenPos[1]));
+
+        if (contentRoot.getPaddingTop() != top || contentRoot.getPaddingBottom() != bottom) {
+            contentRoot.setPadding(0, top, 0, bottom);
         }
     }
 
@@ -278,7 +280,9 @@ public class DesktopWebActivity extends AppCompatActivity {
     public void onConfigurationChanged(@NonNull android.content.res.Configuration config) {
         super.onConfigurationChanged(config);
         // 旋转 / 分屏后位置全变了，重新量一次（insets 不一定会再发）
-        if (webView != null) webView.post(() -> applyContentInsets(ViewCompat.getRootWindowInsets(webView)));
+        if (contentRoot != null) {
+            contentRoot.post(() -> applyBarInsets(ViewCompat.getRootWindowInsets(contentRoot)));
+        }
     }
 
     /** 接受 `#rrggbb` 与 `rgb()/rgba()`（页面取到的是 computed style）。 */
