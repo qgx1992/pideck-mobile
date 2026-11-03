@@ -55,6 +55,11 @@ public class DesktopWebActivity extends AppCompatActivity {
 
     private static final int REQUEST_FILE_CHOOSER = 0x5D11;
 
+    /**
+     * Android 16 起 `windowOptOutEdgeToEdgeEnforcement` 被移除，系统强制铺满，
+     * 内容必然画到系统栏底下 —— 那种机型只能靠 insets 给 WebView 加 padding 兜住。
+     */
+    private static final boolean forcedEdgeToEdge = Build.VERSION.SDK_INT >= 36;
     private WebView webView;
     private WebChromeClient.FileChooserParams pendingChooser;
     private LocalWebServer localServer;
@@ -91,14 +96,19 @@ public class DesktopWebActivity extends AppCompatActivity {
             return;
         }
 
-        // 系统栏透明，页面画到它们底下；但**让位由原生做**，见下面的 insets 监听。
+        // 系统栏：**内容不进栏底下**（见 AppTheme.WebShell 的 windowOptOutEdgeToEdgeEnforcement），
+        // 栏的颜色由 applyBarTheme() 跟着页面底色同步，视觉上仍是连成一片的。
         //
-        // 为什么不能指望页面自己让：web.html 的确写了 `pt-[env(safe-area-inset-top)]`，
-        // 可那是浏览器（有 UI 框、报告 safe-area）里才成立的。这里是裸 WebView、又是
-        // 真 edge-to-edge，`env(safe-area-inset-*)` 拿到的是 0 —— 于是抽屉（`fixed inset-y-0`）
-        // 顶栏和顶部会话标题直接顶进状态栏里，被状态栏的图标和时间压住。
-        getWindow().setStatusBarColor(Color.TRANSPARENT);
-        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        // 为什么不学 0.3.0 那样铺到栏底下、让页面自己让位：web.html 的确写了
+        // `pt-[env(safe-area-inset-top)]`，可那是真浏览器（有 UI 框、会上报 safe-area）里才成立；
+        // 裸 WebView 里 `env(safe-area-inset-*)` 恒为 0，抽屉（`fixed inset-y-0`）的顶栏和会话标题
+        // 就顶进状态栏，连点都点不到。0.3.1 用给 WebView 加 padding 兜过，但内容只是「不画在那里」，
+        // 栏底下那一带的触摸还是归系统 —— 用户要的是内容压根别上去。
+        // 显式定死布局模式：opt-out 生效的机型（≤ Android 15）让系统把内容排在栏下面，
+        // Android 16+ 没有 opt-out，只能铺满 + insets padding。
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), !forcedEdgeToEdge);
+        getWindow().setStatusBarColor(Color.parseColor("#101014"));
+        getWindow().setNavigationBarColor(Color.parseColor("#101014"));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             getWindow().setStatusBarContrastEnforced(false);
             getWindow().setNavigationBarContrastEnforced(false);
@@ -113,8 +123,12 @@ public class DesktopWebActivity extends AppCompatActivity {
         ViewCompat.setOnApplyWindowInsetsListener(webView, (view, insets) -> {
             int edge = WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout();
             int top = insets.getInsets(edge).top;
-            int bottom = Math.max(insets.getInsets(edge).bottom,
-                    insets.getInsets(WindowInsetsCompat.Type.ime()).bottom);
+            int bottom = insets.getInsets(edge).bottom;
+            if (forcedEdgeToEdge) {
+                // 只剩 Android 16+ 走这条路：系统不再认 opt-out，窗口不随键盘缩小，
+                // 键盘让位只能靠 insets。decor 仍 fit 的机型由 adjustResize 负责，不能重复加。
+                bottom = Math.max(bottom, insets.getInsets(WindowInsetsCompat.Type.ime()).bottom);
+            }
             if (view.getPaddingTop() != top || view.getPaddingBottom() != bottom) {
                 view.setPadding(0, top, 0, bottom);
             }
@@ -209,6 +223,14 @@ public class DesktopWebActivity extends AppCompatActivity {
             webView.setBackgroundColor(background_int);
         }
         Window window = getWindow();
+        // 两条栏跟着页面底色：栏是不透明的（内容不在它底下，点了也不会点到状态栏），
+        // 但颜色一样，看起来仍是一整块。API 35 退出强制后 statusBarColor 依旧生效。
+        try {
+            window.setStatusBarColor(background_int);
+            window.setNavigationBarColor(background_int);
+        } catch (Exception error) {
+            Log.w(TAG, "设置系统栏颜色失败: " + error);
+        }
         WindowInsetsControllerCompat controller =
                 WindowCompat.getInsetsController(window, window.getDecorView());
         controller.setAppearanceLightStatusBars(!dark);

@@ -35,10 +35,23 @@
       但桌面网页版要画到状态栏/手势条底下，两条栏必须透明，图标明暗由运行时
       `DesktopWebActivity.applyBarTheme()` 按页面主题切换（写死深色会在浅色主题下变成白底白图标）。
     -->
+    <!--
+      桌面网页版（DesktopWebActivity）的专属主题：**不让内容进系统栏**。
+
+      0.3.0/0.3.1 走的是真 edge-to-edge（两条栏透明、页面画到栏底下），靠页面自己的
+      `env(safe-area-inset-*)` 让位。但裸 WebView 里那个 env 恒为 0，0.3.1 改成原生加
+      padding 兜住 —— 仍然是「内容铺到栏底下、只是不画在那里」，状态栏那一带的点击照样
+      被系统吃掉（用户的实际感受就是「顶进去就点不到」）。
+
+      所以这里回到传统的 decor-fit：系统把内容排在状态栏下面，栏是不透明色条，
+      颜色由运行时 `applyBarTheme()` 按页面底色实时同步（视觉上仍是接在一起的深/浅色）。
+      Android 16 起 windowOptOutEdgeToEdgeEnforcement 会被移除，那时由
+      DesktopWebActivity 里的 insets 监听兜住，不会又顶回去。
+    -->
     <style name="AppTheme.WebShell" parent="AppTheme.NoActionBar">
-        <item name="android:windowOptOutEdgeToEdgeEnforcement">false</item>
-        <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+        <item name="android:statusBarColor">@color/appBackgroundDark</item>
+        <item name="android:navigationBarColor">@color/appBackgroundDark</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
         <!-- 首帧前的一瞬间：用深色兜底，避免闪白 -->
