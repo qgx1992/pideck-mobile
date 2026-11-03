@@ -15,15 +15,15 @@
 
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
-| `src/` | 协议与状态核心 + 探针 CLI（**56 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（Vite + Capacitor，**465 条测试**） | `cd app && npm run dev` / `npm run apk` |
+| `src/` | 协议与状态核心 + 探针 CLI（**69 条测试**） | `npm test` · `npm run probe -- health --pair "<链接>"` |
+| `app/` | 手机客户端（Vite + Capacitor，**627 条测试**） | `cd app && npm run dev` / `npm run apk` |
 
 `app/` 通过 `@core` 别名直接引用本目录的 `src/`，不复制代码。
 
 ## 目录结构
 
 ```
-src/                        协议核心（与 UI 无关，RN / Capacitor / Flutter 都能用）
+src/                        协议核心（与 UI 无关，RN / Capacitor / 浏览器都能用）
 ├─ api/
 │  ├─ sse.ts                增量 SSE 解析 + 流式 UTF-8 解码（含 Hermes 无 TextDecoder 的降级）
 │  ├─ frames.ts             会话流帧 → ChatBlock[]（文本/思考/工具）

@@ -3,15 +3,3 @@ include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
 
 apply from: 'capacitor.settings.gradle'
-
-// ---------------------------------------------------------------------------
-// Flutter add-to-app：把仓库根目录的 flutter_module 作为 `:flutter` 库模块接进来。
-//
-// 1. include_flutter.groovy 自己会 include ':flutter' 并 apply
-//    module_plugin_loader.gradle，所以这里不要再手工 include 模块目录。
-// 2. `cap sync` 只会重写 capacitor.settings.gradle，不会动这个文件，改动是安全的。
-// 3. Flutter 侧要求 minSdk 24 / compileSdk 36（见 flutter_tools/lib/src/android/
-//    gradle_utils.dart），宿主 app 的 minSdk 已在 variables.gradle 抬到 24。
-// ---------------------------------------------------------------------------
-setBinding(new Binding([gradle: this]))
-evaluate(new File(settingsDir, '../../flutter_module/.android/include_flutter.groovy'))

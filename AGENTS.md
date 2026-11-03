@@ -99,303 +99,24 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 页面里的二维码用 `app/scripts/gen-qr.py` 生成、`app/scripts/verify-qr.mjs --expect <地址>` 校验。
 - 静态服务器没有 deny 规则，要挡住某个文件只能让它不在这棵目录树里。
 
-## Flutter 混合栈（add-to-app）
+## 界面栈：WebView 本地 UI + 桌面网页版（0.3.0 起，Flutter 已移除）
 
-客户端正在从「Capacitor WebView 外壳」逐步迁到 Flutter，**混合栈已经接通**（0.1.19 起）。
-细节见 `docs/flutter-migration.md`，这里只列必须记住的硬约束：
+0.2.x 期间客户端曾走「Flutter add-to-app」把聊天/侧栏/工作区搬进 Dart。这条路在 0.3.0 全部拆掉
+（`flutter_module/`、`FlutterHostActivity`、`src/platform/flutter-*.ts` 及其测试都已删除），原因：
+同一套界面维护两遍，协议再移植一份，每次桌面端加字段都要两边对表，而真正「对齐桌面端」的解法是
+**直接用桌面端那份 UI**。现在 App 里只有两套东西：
 
-- Flutter 模块在 `flutter_module/`，Gradle 通过 `app/android/settings.gradle` 里的
-  `evaluate(include_flutter.groovy)` 暴露成 `:flutter`；`app/android/app/build.gradle` 里
-  有 `implementation project(':flutter')`。**没有 Flutter SDK 的机器现在出不了包。**
-- 工具链版本是卡死的，不要随手降：Gradle **8.14.3**、AGP **8.11.1**、minSdk **24**、
-  NDK **28.2.13676358**（写在 `app/android/variables.gradle` 的 `ndkVersion`）。
-  少了 `ndkVersion` 这一行，AGP 不 strip，release 包会变成 **327 MB**（实测），strip 后 42 MB。
-- `flutter_module/.android/` 要提交（`include_flutter.groovy` 在里面），只忽略
-  `local.properties`（含本机 `flutter.sdk` 绝对路径）和 `build/`。
-- WebView 侧入口在 `app/src/platform/flutter-host.ts`（`openFlutterPage(route, sessionId?)`），
-  设置页「实验」区块只在原生插件可用时出现，浏览器里点不到。
-- 可见性判定已从 `MainActivity.onResume/onPause` 移到 `PiDeckApp`（`Application.ActivityLifecycleCallbacks`
-  + `startedCount`），新增 Activity 不需要再手动喂 `RunWatchService.setAppVisible`。
-- **`document.visibilityState` 不等于「App 是否在前台」**：跳进 Flutter 页时 WebView 会被
-  `onPause`，它变成 `hidden`，而用户就在看屏幕。所以：
-  1. 可见性只允许由 `PiDeckApp.isAppVisible()` 判定，**不要**再从 JS 上报
-     （`RunWatchPlugin.setVisible` 已改成 no-op，别把它改回去）；
-  2. JS 判后台一律用 `isAppInBackground({ visibilityHidden, flutterPageOpen })`
-     （`app/src/platform/run-watch.ts`），不要手写 `visibilityState === "hidden"`；
-  3. `flutterPageOpen` 来自原生 `pageVisibility` 事件（`onFlutterPageVisibility()`），
-     由 `FlutterHostActivity.onStart/onStop` 发出。新增任何盖住 WebView 的原生页都要接这条。
-- 国内出包：Gradle 直连 Google 仓库极慢（看起来像卡死）。本机用
-  `$env:GRADLE_OPTS="-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7897 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7897"`，
-  **不要**写进 `gradle.properties`（CI 没有代理会炸）。
-- **Dart → 宿主的带参调用一律传 Map**：`invokeMethod(m, {'json': ...})`。宿主的
-  `MethodCall.argument()` 在 arguments 不是 Map 时**抛 ClassCastException**（不是返回 null），
-  异常会逃出 `setMethodCallHandler`，Dart 只拿到被 `catch (_)` 吞掉的 PlatformException ——
-  症状是整页按钮全失灵且日志安静（0.1.21 踩过）。宿主取值用
-  `FlutterHostActivity.settingsJsonFrom(call)`，`test/host_channel_test.dart` 锁住形状。
-- 设置页（0.1.21 起）在原生壳里就是 Flutter 版，走「视图迁移」：数据仍由
-  `app/src/main.ts` 的 `settingsData()` 组装并 `pushFlutterSettings` 推过去，用户动作走
-  `settingsAction` 回传到 `dispatchFlutterSettingsAction()`，**与 Web 版共用同一套 handler**
-  （`createSettingsHandlers()`）。别在 Flutter 侧另存一份状态，也别往 handler 里加第二份逻辑。
-- 需要「一定成功」的返回动作走专用方法让宿主直接 `finish()`（`closeHost()`），
-  不要绕 WebView 转一圈。
-- **Flutter 页面里不许写死颜色**：一律 `PiColors.of(context)`（`flutter_module/lib/app_theme.dart`
-  的 `ThemeExtension`，深浅两套由 `buildPiTheme(Brightness)` 挂上去）。主题的唯一来源是 Web 侧
-  `theme.mode`，经 `setSettings` 推送 → `themeModeFrom()` → `MaterialApp.themeMode`；
-  Flutter 侧不存主题，也不要自己读 `MediaQuery.platformBrightness`（0.1.23 踩过：页面写死深色）。
-- 聊天页（0.1.27 起）同样走「视图迁移」，并且有一条额外硬规矩：**聊天状态机只存在于
-  `src/api/frames.ts` 的 `ChatReducer`**。Dart 侧（`flutter_module/lib/chat/`）只允许画
-  `ChatSnapshot` 里已有的字段，**不许拼 delta、猜工具状态、自己算 token** —— 复制一份 reducer
-  就是两个真相源，协议一加帧类型必然漂移。
-- 聊天快照一律经 `FlutterChatMirror` 推（`app/src/platform/flutter-chat.ts`，40ms 尾沿合并 +
-  内容不变不推），**不要**在渲染路径里直接 `pushFlutterChat()` 每帧过桥。
-- 聊天页里任何「每 40ms 会重建」的部件都不能在 `build` 里创建状态：提问卡的输入框用常驻
-  `TextEditingController`、多选的临时选择放 State（0.1.27 踩过：每次重建光标跳回开头、勾选被清空）。
-- 侧栏（0.1.28 起）是**最彻底的视图迁移**：分组 / 折叠 / 搜索 / 预览截断 / 多设备分块全部只在
-  `src/ui/sidebar-model.ts` 与 `src/ui/sidebar-tabs-model.ts` 里算，Dart 侧
-  （`flutter_module/lib/sidebar/`）只实现 `flat` / `device` / `group` 三种段的通用渲染器，
-  **不许在 Dart 里判任何规则**（尤其「展开其余 N 个」的截断与「当前会话被截断时临时展开」）。
-- 侧栏动作里 `toggleSection` 必须按 key 前缀分派：`project:<id>` → `toggleSessionsExpanded()`，
-  其余 → `toggleFlat()`。两个展开集合（`expandedSessions` / `flatExpanded`）互不相干。
-- WebView 的弹层被 Flutter 页盖着看不见。**新加弹层先走通用弹层**（`app/src/platform/flutter-sheet.ts`
-  的 `SheetView` + Dart 的 `AppSheetHost`）：WebView 算行（`id` / `label` / `description` / `group` /
-  `selected` / `actionable`），Flutter 画并回传 `sheetPick { id }`，执行逻辑仍在 `main.ts`。
-  只有下面这几种才用 `leaveFlutterThen()`（先 `closeFlutterPage()` 再开会话/弹层）：
-  页面级导航（扫码配对 `webSheet("connection")`）、Web 顶栏独有的五张弹层（主题 / 连接 / 端点 / 用量）、
-  以及要滚动排版的长文本（DSH 子代理历史）。
-- 侧栏长按菜单**在 Flutter 里画**（0.1.34 起项目菜单也是；会话菜单 0.1.28 起就是本地的）：
-  动作用侧栏通道同名发回去（`sessionRename` / `sessionCopy` / `sessionExport` / `sessionDelete` /
-  `projectRemove` / `createSession` / `toggleProject`），执行逻辑只有 `main.ts` 一份。
-  二次确认（删会话、移除项目）在 Dart 侧做——Web 的 `openSheet` 确认框被抽屉挡着，用户看不见。
-- **快照驱动的页面里，`setState` 必须能说出「哪个可见元素依赖它」**。说不出就是在用整页重建换一个没人看的
-  变量（0.1.38 的输入框 `onChanged` 就是这样：每敲一个字重建整页）。纯函数式转换（markdown 解析、base64 解码）
-  输入稳定就缓存，缓存必须有上限（FIFO），否则流式时每帧一个新 key 就是内存泄漏；图片永远给 `cacheWidth`。
-- **视觉基准是 Material 3，不是 `app/src/styles.css`**（0.2.0 起重构为原生 UI）。页面里**不写像素值**
-  （字号/圆角/内边距）——走 `textTheme` 或组件主题；能用 `ActionChip` / `SegmentedButton` / `ListTile` /
-  `Card` / `IconButton.filledTonal` 就别自己画（手画的控件对不上主题切换与无障碍）。M3 角色色（`primaryContainer` 等）
-  直接取 `Theme.of(context).colorScheme`，不要往 `PiColors` 里加字段 —— 它只是「语义色」的薄适配层。
-- **视觉参数照 `app/src/styles.css` 抄，别凭手感**（0.1.x 时代的规则，仅用于解释历史代码；新代码按上一条）：`--radius` = 12、气泡内边距 10/12、角色行 11px、
-  时间行 10px 且在气泡外、消息图 128×128、输入框圆角 10、空态是「徽标 + 标题 + 副标题 + 提示词」整块。
-  0.1.37 之前的偏差清单见 `docs/flutter-migration.md`。半透明色一律 `Color.alphaBlend(色.withValues(alpha: x), 真正的底色)`，
-  不要直接叠页面底色（Web 的 `color-mix` 是对着 `--bg-soft` 混的）。纯黑底的页面（看图页）不许用主题色画按钮。
-- **App 级状态要进快照或全局 notifier**（0.2.3）：主题 / 语言 / 安全等级这类「整棵树」的状态，
-  不能只存在某个页面自己的回调里 —— 换一个入口改，另一个入口看不见（踩过：Web 改「跟随系统」，
-  Flutter 主界面还按缓存的 dark 画）。主题走 `flutter_module/lib/theme_mode.dart` 的 `piThemeMode`，
-  快照里的 `themeMode` 只是「Web 侧的当前值」。
-- **抽屉开合 = 本地意图 + Web 快照**（0.2.3 起，0.2.4 修正）：用户点击/滑动写 `_workspaceIntent`
-  并立刻按意图画，同时把 `workspaceOpen` / `workspaceClose` 发给 Web；快照的 `open` 和意图一致后才清掉意图。
-  **只挂 `endDrawer` 不会让抽屉出现**，必须显式调 `openEndDrawer()`（踩过：只按快照开合 + 禁掉滑动，
-  用户点按钮毫无反应）。数据一律 Web 侧取（git 状态 / 目录 / 待办在 `main.ts` 的 `reloadFlutterWorkspace()`）。
-  抽屉里的关闭按钮**必须走 `_setWorkspaceOpen(false)`**（`WorkspaceDrawer.onClose`），不能只发
-  `workspaceClose` —— 本地意图还停在 `true`，快照回来说关反而跟意图打架，下一帧又被打开
-  （踩过：右上角 X 怎么点都关不掉，0.2.8 修）。
-- **快照里 `sessionId` 为空是合法状态**（还没选会话的主界面），`_applyJson()` 不许因为它丢掉整份快照
-  （踩过：切会话 / 回主界面 / 改标题全都不刷新，页面停在上一次收到的内容上，0.2.8 修）。
-  换会话时同时把滚动锚点掰回「贴底」并清掉历史项的 `GlobalKey`，否则会沿用上一个会话的滚动偏移，
-  用户看到一堆旧消息，以为没切过去。
-- **点侧栏会话要先本地切过去**（`_onSidebarAction` → `ChatSnapshot.withSession()`）：Web 侧要等
-  历史加载完才推快照，那几百毫秒里页面还是上一个会话的内容，用户判定「点了没反应」就再点一次。
-  先把会话 id / 标题换掉并置 `loading`，真实快照到了直接覆盖。
-- 往 Dart 搬菜单时**不要照搬到不了的分支**：`openProjectMenu` 里「内置 Chat 项目不能移除」
-  永远走不到（Chat 项目在「聊天」段平铺，进不了项目分组），所以 Dart 侧没有这个判断，
-  快照里也就没有对应的 `chatProject` 字段。搬之前先验证前端能不能触发那条分支。
-- 消息长按菜单（0.1.29 起）**不许在 Dart 里维护动作表**：菜单项由 `ChatSnapshot.messageMenus`
-  带来，源头是 `src/ui/message-actions-model.ts` 的 `actionsForRole(role, backend)`
-  （ACP 会话只剩「复制」）。Dart 只决定怎么画（danger 标红）与哪两步本地确认
-  （删除二次确认、编辑输入框）—— 这两步的确认框原本在 WebView 里，被盖着看不见。
-- **抽屉 / 弹层这种「挂在路由上的东西」不要用「挂不挂」表达开关**（0.2.9）：`endDrawer: open ? X : null`
-  看着干净，但 widget 被摘掉后路由上那条 local history 还在，再配 `Navigator.pop()` 就会把**整页路由**
-  弹掉 —— 症状是点关闭黑屏、再按返回退回网页版。抽屉常驻（没数据喂占位快照），开合只用
-  `openEndDrawer()` / `closeEndDrawer()`，**任何地方都不要用 `Navigator.pop()` 关抽屉**。
-- **切换会话要显式重置滚动锚点，而且「贴底」≠「停在最新一条」**（0.2.9）：`jumpTo(maxScrollExtent)`
-  落点是列表最底，最后一项是 footer（加载中 / 错误卡 / 提问卡 / token 统计），长会话里看起来像停在
-  页尾空白。切会话走 `_scrollToLatest()`：先跳到底把最后一条建出来，下一帧再
-  `Scrollable.ensureVisible(key, alignment: 1)` 对齐最新那条的底边。
-- **主界面是 Flutter 页，WebView 只当协议引擎**（0.2.1 起）：`bootstrap()` 连上后 `enterFlutterShell()`
-  直接把聊天页盖到整屏（`localStorage` 键 `pideck-flutter-shell`，值 `"flutter"` / `"web"`）。
-  壳可以换，`src/api/frames.ts` 的 reducer / SSE 解析**只能有一份**；Flutter 侧的动作必须落回
-  `dispatchFlutterChatAction` / `dispatchFlutterSidebarAction` 里的同一条 Web 路径，别在 Dart 里另写发送逻辑。
-- 用户点了聊天页的「返回网页版」就置 `chatUseWebView = true` 并 `setShellMode(false)`（写进 localStorage，
-  下次启动直接进网页版），之后点侧栏会话直接 `openSession()`。改 `renderSidebarInner` 的 `onOpenSession` 时
-  必须保留 `onEndpoint(run, …)` 那层包装，否则多设备下会连错端点。
-- **盖住整屏的 Flutter 页必须处理返回键**（`PopScope`）：先收抽屉、再收面板，都收不掉才发 `exitApp`
-  （Web 侧 `CapacitorApp.exitApp()`）。Android 上没有任何兜底——不拦就直接 finish 掉整个 App。
-- **Flutter 宿主 Activity 必须用 `@style/AppTheme.FlutterHost`**（0.2.2）：`AppTheme.NoActionBar` 为了让
-  `@capacitor/status-bar` 能控制网页版状态栏，`windowOptOutEdgeToEdgeEnforcement=true`，谁能用它画 Flutter 页，
-  谁的顶上就永远有一条固定深灰色带（跟主题无关）。`AppTheme.FlutterHost` 反过来：不退出强制 edge-to-edge、
-  两条系统栏透明、`windowBackground` 兜底深色。改 `AndroidManifest.xml` 里任何新增的 Flutter Activity 时照抄这个主题。
-- **`FlutterHostActivity` 可能是任务栈恢复出来的「孤儿页」**（0.2.6）：进程被回收后重启，系统先重建
-  栈顶那个 Activity，而栈顶通常是 Flutter 页 —— 这时 WebView 宿主（`MainActivity`）还没起，
-  没有任何人给它喂快照（宿主缓存是 `static volatile`，随进程一起没），用户看到的是空壳页面、
-  返回键还会 `exitApp` 直接退出。`onCreate` 里用 `FlutterLauncherPlugin.webViewAlive()`
-  （= 插件实例存在）判断冷启动，是就拉起 `MainActivity` 再 `finish()` 自己。
-  清单属性：`launchMode="singleTop"` + `excludeFromRecents="true"`。
-- **`setShellMode(false)` 是持久开关，不要在「打开失败」时写**：一次偶发失败会让用户之后每次启动
-  都进网页版，且没有入口改回来。失败只 warn（留本次在网页版）；用户主动点「返回网页版」才写。
-  对应的自救入口是设置页「界面 → 用原生界面做主界面」（`SettingsData.shell.native` / 动作 `shell`）。
-  `openSessionFromSidebar()` 里也要加 `!shellModeEnabled()`，否则关掉之后点会话又被弹进 Flutter 页。
-- **冷启动不恢复「最后一个会话」，只恢复「明确选中的会话」**（0.2.7）：`enterFlutterShell()`
-  用 `activeSessionId ?? ""`，**不要**退回 `sessions[0]` —— 那会让人一开机被塞进列表里最老的会话。
-  空 sessionId = 主界面（抽屉里选会话）。
-- **开 Flutter 页的顺序：先开页、后加载会话**（0.2.7）：`openFlutterChatPage()` 里
-  `await openSession()` 放在 `await openFlutterPage()` **之后**。反过来会先渲染一遍网页版，
-  用户看到「闪一下网页版再进原生页」。
-- **工作区抽屉不许无限 loading**（0.2.7）：Web 侧 `withDeadline()`（12s）兜住挂住的请求，
-  Dart 侧 `_kickWorkspaceWatchdog()`（4s × 3）补问 `workspaceRefresh`。
-  默认页是「文件」，改默认值要同时改三处（`emptyWorkspaceSnapshot().tab` /
-  `flutterWorkspace.tab` / `WorkspaceSnapshot.tab`）。
-- 系统栏只在一处定义：`piSystemUiOverlayStyle(dark)`（`flutter_module/lib/app_theme.dart`），
-  由 `MaterialApp.builder` 的 `AnnotatedRegion` 下发；`SystemUiMode.edgeToEdge` + 透明栏 +
-  `ContrastEnforced: false`，否则系统补的遮罩色会让状态栏/手势条和主题对不上。
-- 文件落盘只允许走 `SavedFiles.save()`（`app/android/app/src/main/java/dev/pideck/mobile/SavedFiles.java`）：
-  WebView 的 `FileSaverPlugin` 与 Flutter 通道的 `saveFile` 共用它。**不要**在任一入口另写一份
-  MediaStore 代码 —— 两边规则一旦不同，就会出现「网页版能存、Flutter 版报错」。
-- 选图只走 `FlutterFiles.readImage()`：压缩参数（`MAX_EDGE = 1600` / `JPEG_QUALITY = 82` /
-  `MAX_FILE_BYTES = 8 MB`）与 `app/src/ui/image-attach-model.ts` 保持一致，且**必须按 EXIF 旋转**
-  （浏览器 canvas 自动应用 EXIF，`BitmapFactory` 不会，少了这步竖拍照片会躺着）。Dart 侧不许
-  自己 `decodeImage` 后缩放（大图会 OOM，原生是解码时降采样）。
-- 扫码**不在 Flutter 里重写**：`BarcodeScanner.scan()` 靠 Capacitor bridge 接 ActivityResult，
-  Flutter 宿主的 Activity 拿不到结果。走 `openWebSheet('connection')` → 原生先发 `webSheet`
-  事件再 `finish()` → JS 侧 `leaveFlutterThen(() => openConnectionSheet())`。**顺序不能反**。
-- 顶栏与输入框附属面板（0.1.31 起）同理：`ChatHeaderView`（`app/src/platform/flutter-chat-header.ts`）
-  里只有「画什么」，**Dart 侧不许出现 `if (backend === "acp")` 这类能力判断** —— 那是
-  `composerToolChips()` / `buildHeaderView()` 的事。`chips[].key` 就是动作名，
-  新增一个 chip 必须同时在 `dispatchFlutterChatAction` 里加 `case "chip"` 的分支。
-- 选择面板（模型 / 思考 / 安全 / 提示词 / 上下文）跟着 `ChatSnapshot.picker` 一起推，
-  **不要**另开 `setChatPicker` 通道；Dart 侧用内联面板渲染，不用 `showModalBottomSheet`
-  （弹层状态归 `Navigator` 管、内容归快照管，不同步就会出现「关了又弹」）。
-  搜索在 Dart 本地过滤，只在回车时发一次 `pickerQuery`（`context` 字段原样带回，
-  @ 提及靠它留在当前目录）。
-- 面板条目带 `insert`（提示词 / 斜线 / @ 文件）就**由 Dart 自己插进输入框**再发 `closePicker`：
-  面板开着时输入框的文字以 Dart 为准，绕回 WebView 插进那个隐藏的输入框用户看不见。
-  插入与触发字符的规则在 `flutter_module/lib/chat/composer_insert.dart`（纯函数，有单测）——
-  别在 `chat_page.dart` 里重写一遍，那里踩过两个坑：`/` 插成 `//goal`、光标 -1 时把整段文字删掉。
-- 看图用 `flutter_module/lib/chat/image_viewer.dart`，**不要换回 `PageView` 自带滑动**：
-  `InteractiveViewer` 会抢走横向拖动，翻页只能听 `onInteractionEnd` 的速度。
-- 「历史」跳转（0.1.33 起）**在 Dart 本地滚**，不发 `pickerSelect` 回 WebView：历史 id → 下标就在
-  `ChatSnapshot.history` 里。懒构建列表里定位用**二分**（`_renderedHistoryRange()` 看这一帧构建出
-  哪些下标），不要用「平均高度 × 下标」估算 —— 长回答和短回答差一个数量级，长会话里最不准。
-- 待办清单的**展开态是 Dart 本地状态**（`_todoExpanded`），不要推回 WebView；清单条目本身不可点选
-  （由 agent 维护）。`ChatTodoSummary.total` 老快照没有时要退回 `open + done`，否则会显示 `0/0`。
-- **`TextEditingController` 驱动的可见状态必须挂监听**（0.2.5）：按钮可用性、清空按钮、字数提示这类
-  只读一次 `controller.text` 就写进 `build` 的地方，输入变化时**不会重建**。症状是「打完字发送键
-  还是灰的，滚一下列表才亮」「搜索框打了字清空按钮不出现」。用 `ValueListenableBuilder` 包住那个
-  控件（重建范围锁在它自己身上），**不要**回到整页 `setState`（0.1.38 卡顿就是它）。
-- **`SelectableText` 会吃掉长按**（0.2.5）：`MarkdownView` 正文默认 `selectable: false`，否则外层
-  `GestureDetector.onLongPress` 收不到，长按消息弹不出菜单。代码块仍可选中。
-- **新增 Flutter 动作必须同时进 `app/tests/flutter-actions.test.ts` 的对账范围**：它扫 Dart 的
-  `'type'` / `_send('x')` / `_act('x')` 与 `main.ts` 三个 dispatch 的 `case`，缺一边就红。
-  动态动作名（`question.kind` 这类）要登记进 `DYNAMIC_ALLOW`。
-- 组件交互测试（`flutter_module/test/*_components_test.dart`）用假宿主通道逐键点过去断言动作；
-  写的时候注意两个坑：`Scaffold.drawer` 里的 widget 没打开也在树里（找到 ≠ 点到，测内容就直接
-  把抽屉当页面画）；带输入框的页面 `pumpAndSettle()` 永远超时（光标闪烁），用固定 `pump(Duration)`。
-- 空态提示词（`ChatSnapshot.suggestions`）点一下**只填输入框、不直接发送**。
-- 首屏空态的显示条件只有「没有历史 + 不在加载」，**不要**再加 `suggestions.isNotEmpty`
-  这类条件：没提示词的项目会变成一片空白，用户以为页面挂了（0.2.8 修）。
+1. **本地 Web UI**（`app/src/**`，Capacitor WebView）：保留的兜底界面，`npm run build` 的产物，
+   也是设置页、连接面板等入口的所在地。它自己维护协议（`src/api/`），功能面比桌面网页版窄。
+2. **桌面网页版**（下面一节）：把桌面端自带的浏览器 UI 直接跑在 App 里，功能面与桌面端一致。
 
-- **聊天数据面可以下沉到 Dart（0.2.10 起）**：`flutter_module/lib/runtime/` 里是协议核心的 Dart 移植
-  （`sse.dart` / `frames.dart` / `api_client.dart` / `history_model.dart` / `chat_runtime.dart`）。
-  规矩只有一条：**Dart 只产数据面字段**（sessionId/title/status/statusText/error/loading/history/live/pending），
-  控制面（`messageMenus` / `header` / `picker` / `suggestions` / `sheet` / `workspace` / `themeMode`）继续由
-  WebView 那份快照提供，页面按 `{..._webJson, ...runtime.snapshotJson()}` 合并（Dart 赢冲突键）。
-  发消息（`send`）**仍然走 WebView** —— 计划模式注入、排队/插话、todo 归档、无会话自动建会话
-  都在 `send()` 里，搬过去就是两个真相源。**`stop` 与「回答提问卡」（`respond`）0.2.11 起改由 Dart 直发**
-  （`ChatRuntime.stop()` / `.respond()`），失败或 `historyLoaded` 为假时才回退 WebView：这两个动作
-  按下去就要有反应，绕回 WebView 得等那边的 JS 被唤醒一次。
-- 合并前必须查 `runtime.historyLoaded`：没成功拉到过历史时 Dart 那份全是空值，盖上去就是白屏。
-- 端点 + token 走 intent extra（`pideckFlutterEndpoint` / `pideckFlutterToken` / `pideckFlutterNativeRuntime`），
-  **不要**改用 `getSettings()` 里那份 connection —— 设置缓存只在打开设置页时推，换过端点就是旧的。
-- 回退开关是 `localStorage["pideck-native-chat"] = "off"`（`app/src/main.ts` 的 `nativeChatEnabled()`）。
-  出「聊天页空白 / 不更新」这类现场问题时先让用户关掉它，确认是不是 Dart 运行时那侧。
-- `app/tests/flutter-actions.test.ts` 会把 Dart 里任何 `'type': <字符串字面量>` 当成聊天动作名，
-  它分不清帧类型和动作名：`[DONE]` → finish 帧要用 `api_client.dart` 的 `doneFrame()` 逐键赋值，
-  **注释里也别写出那个字面量**（踩过：注释把它写进去，测试报「Dart 发了个叫 finish 的动作」）。
-- 移植协议核心时**先写测试再移植**：`runtime_sse_test.dart` / `runtime_frames_test.dart` /
-  `runtime_history_test.dart` 的用例是从 `tests/sse.test.ts` / `tests/frames.test.ts` 与 TS 对拍来的，
-  新增帧类型要在这三处同时补。
-- **发送 0.2.12 起也归 Dart**（`ChatRuntime.submit()`，逐条对应 Web 的 `send()`）：只发图时 message 用
-  `看下这张图`、计划模式走 `buildPlanSubmission()`、运行中才带 `streamingBehavior`、失败按
-  `shouldRollbackRejection` 收不收气泡。三个坑：① `/prompt` 的透传字段是**平铺**的
-  （`agentMessage` 在顶层，套一层 `{extra: ...}` 服务端读不到，计划模式会静默失效）；
-  ② 发出去到第一帧 `start` 到达之间要按「运行中」画（`_awaitingTurn`），否则发送键会闪回可点；
-  ③ 乐观回显只能靠 650ms 后的历史对账清掉，别在发送成功时就删 —— 对账里的「这条落盘了吗」
-  必须用 `history_model.dart` 的 `messageText()` 取正文：消息的 `content` 可能是块数组
-  （`[{type:'text',text:…}]`），只认字符串会让对账永远判不出，用户那句话在页面上留两份（0.2.15 修）。
-- **状态流也归 Dart 了**（`runtime/state_store.dart`，对齐 `src/state/store.ts`）：`/api/events`
-  只处理 `event === "state"`，先 `refresh()` 对账再进流，auth 错误停、协议不支持或连续失败 3 次降轮询，
-  轮询/重连退避 1s→15s。`store.ready` 为假（还没拿到过完整状态）时**不许**拿它算任何界面数据。
-- **侧栏快照在 Dart 里算**（`sidebar/sidebar_native.dart`，`buildSidebarSnapshot()` 的逐字节移植）：
-  规则源头仍是 `app/src/platform/flutter-sidebar.ts` + `sidebar-model.ts` + `sidebar-tabs-model.ts`，
-  改规则要三处一起改并重跑 `test/sidebar_native_test.dart` 的 23 组 TS 真值对拍。用户意图
-  （页签 / 搜索 / 折叠 / 展开）存 `sidebar/drawer_state.dart`，点一下先本地改再发 WebView。
-  只在 `runtime.store.ready && _webSidebar.deviceCount <= 1` 时接管：多设备聚合同样要每条端点的 state，
-  Dart 只连着自己那台，硬算会漏设备。弹层（新建会话 / 切后端）仍由 WebView 开，本地只负责列表。
-- **`header.running` 以 Dart 状态为准**：顶栏 chips 是 WebView 算的，但它被挂起时 `running` 会停在旧值，
-  合并后要按运行时状态覆盖，否则该显示「停止」的时候显示「发送」。
-- **Dart 发完消息要自己拉起后台看护**：`host_channel.startRunWatch()` → 宿主 `RunWatchService.start()`。
-  用户发完常常直接上滑回桌面，等 WebView 的 SSE 推到 running 再启动前台服务，进程可能已被冻结，
-  那一轮跑完就没有通知（Android 12+ 也不允许后台启动前台服务）。
+改代码时的两条硬约束：
+- **不要再往 App 里移植桌面端界面**：需要桌面端的能力就走桌面网页版，需要壳的能力（通知、后台看护、
+  文件落盘、扫码）才写原生。
+- **`document.visibilityState` 重新变回可信信号**：没有 Flutter 页盖 WebView 了，
+  `isAppInBackground()` 只看 `visibilityHidden`（`app/src/platform/run-watch.ts`）。
 
-- **工作区数据 0.2.13 起归 Dart**（`workspace/workspace_runtime.dart` + `workspace/workspace_native.dart`）：
-  `git` / `files` 两个页签与文件预览由原生侧直接打接口（`gitStatus` / `gitLog` / `listFiles` / `fileContent`），
-  `todos` 页签仍由 WebView 算（待办历史的持久化在 WebView 的 localStorage，搬它要另起一套存储，收益低）。
-  门禁是 `store.ready && 自己那份 tab != 'todos'`——**看 `WorkspaceRuntime.tab` 而不是快照里的 tab**，
-  否则刚点完页签、快照还没回来时会拿错数据源。`workspaceEnter` / `workspaceCrumb` 的 `depth` 语义是
-  「保留几段 stack」（0 = 回到项目根），不是「第几段面包屑」。列表路径参数名是 `dir` 不是 `path`。
-- **侧栏里会改数据的动作 0.2.13 起由 Dart 调接口**（`sidebar/session_actions.dart`）：
-  `sessionRename` / `sessionCopy` / `sessionDelete`（仅非当前会话）/ `projectRemove` / `createSession`。
-  成功后**带 `native: true` 回传**给 WebView，`dispatchFlutterSidebarAction` 里那条 native 分支只刷新 + 重画，
-  绝不能再调一次接口 —— 一个动作只能有一次副作用（改名两次、删两次、建出两个会话都是这么来的）。
-  删当前会话仍走 WebView：它要清 `activeSessionId`、关 channel、把页面退回空态。
-  会话导出（`sessionExport`，0.2.14 起）也归 Dart：`GET /api/sessions/:id/export-html` 用
-  **Authorization 头**取字节（不要拼 `?token=`，会落到浏览器历史 / 下载记录 / 系统 Intent），
-  再走宿主 `saveTextFile()` 落盘；文件名规则与 Web 的 `safeFileStem` 逐字一致
-  （`sidebar/session_actions.dart` 里的 `safeFileStem` / `exportStamp`，有单测锁住）。
-- **收一条 SSE 流必须靠 `abort`，`Subscription.cancel()` 在 `async*` 上是假动作**（0.2.18）：
-  `streamSse` 是 `async*`，而生成器**只在 `yield` 点处理取消请求** —— 它挂在
-  `await for (chunk in response.transform(utf8.decoder))` 等字节时永远到不了 `yield` 点，
-  `cancel()` 的 Future **永远不完成**（实测 3s 仍挂着、服务端连接也没断）。
-  所以 `StreamPump.open` 的签名是 `Stream<T> Function(void Function() onActivity, Future<void> abort)`，
-  `abort` 必须一路透传到 `streamSse(abort: ...)`（内部 `_abortable()` 在 abort 完成时结束内层流，
-  生成器才走得到结尾）。漏传的症状就是「回前台换连接」静默失效：`kick()` 之后 `run()` 不返回，
-  外层重连循环再也不转，用户看到连接一直挂着但一个字节都不来。
-  回归用例：`flutter_module/test/stream_abort_test.dart`（真开一个只 flush 一个字节就吊住的服务端）。
-- **假 SSE 服务端必须 `response.bufferOutput = false`**：Dart 的 `HttpResponse` 默认把 body 攒到 close 才发，
-  而流式连接永远不 close，客户端一帧都收不到（症状是 `store.ready` 永远不为真、测试 30s 超时）。
-  测试和服务端 mock 一个都不能漏这一行。
-- `flutter-actions.test.ts` 的「聊天页动作」扫描现在取 `dispatchFlutterChatAction` + `dispatchFlutterSidebarAction`
-  两个 dispatcher 的并集：数据动作虽然由 Dart 执行，但回传时落在 sidebar dispatcher 上。
-- **接缝要有一条端到端自测**：`flutter_module/test/runtime_full_turn_test.dart` 真开 `HttpServer`，把
-  「发送 → 收帧 → 收口 → 重拉历史 → live 清空 → 回显对账」「工作区（文件 / 改动 / 预览）」「侧栏快照」
-  串成三条用例。单测各自绿的时候，坏掉的往往正是它们中间那一格（0.2.15 的回显重复就是它抓出来的）。
-  写这条用例的三个坑：假 `stream` 服务端要**保活**（帧是发送之后才推的，连上就写 `[DONE]` 后面一帧都收不到）、
-  `snapshotJson()['live']` 永远不是 null（settle 的判据是 `blocks.isEmpty`）、`/api/files` 的
-  `type` 是 `"directory"` 不是 `"dir"`。
-- **换会话是这一页最容易坏的地方**（0.2.16 集中修，见 `chat_page.dart`）：
-  1. `ChatRuntime` 必须**按 sessionId 重建**（`_ensureRuntime` 先 `_disposeRuntime()`）：旧运行时连着的是旧会话的
-     流，留着就是两份流量 + 按旧会话推快照。`sessionId` 变空（回主界面）也要放掉，否则页面停在刚才那个会话上。
-  2. `_mergedJson()` 只认同一个会话：`str(_webJson['sessionId']) != runtime.sessionId` 时**整份退回 WebView**。
-     用户点了会话、本地已 `withSession()` 切过去、WebView 还没推回来，这段空窗里旧运行时一 notify 就是
-     「新标题 + 旧消息」—— 看起来像没切过去。
-  3. 点会话时写 `_intentSessionId`（4 秒 TTL）：意图还在时，**别的 sessionId 的快照直接丢掉**。
-     旧 channel 的收尾帧、`settle()` 的推送都会晚到，不挡就会闪回旧会话。WebView 认同后清意图。
-  4. **草稿按会话搬**（`_swapDraft`）：输入框在 Dart 这页上，WebView 的 `sessionDrafts` 管不到它。
-     不搬就是「切走丢草稿、切过去带着上一个会话的字」。`_applySnapshot` 的 sessionChanged 分支与
-     点会话那条本地先行路径都要搬；发出去之后要把该会话的草稿删掉。
-  5. 新会话历史是**后到**的：切过去第一帧列表是空的（只画加载中），`_scrollLatestWhenLoaded` 要等历史到货
-     那一帧再 `_scrollToLatest()` 一次，否则懒构建列表第一次量出来的位置是估的，人会停在半截。
-- **「会话文件还没写出来」不是错误**（0.2.17）：桌面端新建的会话要等第一条消息落盘才有 transcript，
-  在那之前 `GET /api/sessions/:id/messages` 稳定回 **5xx `webError.internal`**（不是 404、也不是空数组；
-  `POST /api/sessions` 刚建好的 draft 还是 200 空，一旦 `runtime/activate` 把 `sessionPath` 定死到那个
-  还不存在的 `.jsonl` 上就开始 500）。两侧都按「还没有历史」处理：
-  1. Dart `ChatRuntime._loadHistory()`：5xx → `_historyLoaded = true` + 空历史 + 一次提示 + 静默重试
-     （`historyRetryDelay` 默认 3s、最多 5 次，测试里调到 40ms）。**失败时 `_historyLoaded` 必须是 true** ——
-     留着 false 会让 `_mergedJson()` 整份退回 WebView 那份，而它此时停在 `loading: true`，就是「一直空白加载」。
-     非 5xx（403/401 等）仍然是错误卡，且不重试。
-  2. WebView `reloadHistory()`：同样的 `isMissingTranscript()` 判断 → `renderEmptyState()`，不画错误卡。
-  3. 页面上的刷新（顶栏转圈按钮、错误卡的「重试」）要调 `_refresh()`：先 `runtime.reloadHistory()` 再发
-     `{'type':'refresh'}` —— 历史归 Dart 之后，只发动作回去，这边画面不会动。
-
-## 桌面网页版与本地外壳（0.2.20 起，迁移方向）
+## 桌面网页版与本地外壳（0.2.20 起，主推荐路径）
 
 桌面端 0.9.9 自带一份**给浏览器用的同一套 UI**（`out/renderer/web.html`，靠 `createBrowserApi`
 把整个 `window.piDesktop` 映射成同源 `fetch`），并且已经做过手机走查。客户端的终态是
@@ -410,8 +131,14 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   静态资源回源一次后落盘缓存（桌面掉线也能出界面），`/api/*` 转发并统一注入
   `Authorization: Bearer`，SSE 逐块 flush。**改它必须跑**
   `powershell -NoProfile -ExecutionPolicy Bypass -File app/android/tools/localweb-test/run.ps1`（14 项）。
-- 三个踩过的坑：① 入口页在桌面端是 `GET /`（优先回 `web.html`），**不是** `/index.html`；
-  ② 上游 404 要透出 404，不能拿入口页兜底；③ 响应头 `Connection` 必须改写成 `close`。
+- 五个踩过的坑：① 入口页在桌面端是 `GET /`（优先回 `web.html`），**不是** `/index.html`；
+  ② 上游 404 要透出 404，不能拿入口页兜底；③ 响应头 `Connection` 必须改写成 `close`；
+  ④ **静态回源必须自己拆分帧** —— 桌面端对 HTML/JS 用 `Transfer-Encoding: chunked`，把原始 body
+  当正文发出去，`903
+
+` 这种 chunk 头就成了页面内容，React 不挂载 = 白屏（0.2.20 事故）；
+  gzip 回源同理要解开。⑤ **缓存要带格式版本号**（`CACHE_VERSION`），否则取坏的副本会一直留在
+  手机上，升级 App 也照样白屏。
 - 写 `.ps1` 带中文必须 **UTF-8 with BOM**（Windows PowerShell 5.1 按 GBK 解），
   `-D...` 开头的 java 参数必须整个加引号，否则会被 PowerShell 当成自己的参数。
 
@@ -421,8 +148,9 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 npm test && npm run typecheck                 # 协议核心
 cd app && npm test && npm run typecheck       # 客户端
 cd app && npm run build && npm run verify:send
-cd flutter_module && flutter analyze && flutter test   # Flutter 侧
 powershell -NoProfile -ExecutionPolicy Bypass -File app/android/tools/localweb-test/run.ps1  # 本地外壳 14 项
 ```
+
+出包前还要确认 Android 侧能编过：`cd app/android && ./gradlew assembleDebug`（或直接 `npm run apk:release`）。
 
 `verify:send` 是 mock 的发送链路（14 项），能挡住「发送后不回显 / 流式块重复 / 按钮状态错」这类回归。

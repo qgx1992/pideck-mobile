@@ -16,8 +16,8 @@ import java.io.OutputStream;
  *
  * 抽出来是因为现在有两条入口要用同一套规则：
  *   - WebView 侧的 `FileSaver` 插件（`FileSaverPlugin.save`）；
- *   - Flutter 侧的 `pideck/flutter_host` 通道（`saveFile`）。
- * 两边各写一份 MediaStore 代码，迟早会出现「网页版能保存、Flutter 版报错」这种分叉。
+ *   - 其余原生入口（同一份实现）。
+ * 各写一份 MediaStore 代码，迟早会出现「网页版能保存、另一个入口报错」这种分叉。
  *
  * 落盘位置（与 0.1.10 起的 WebView 版一致）：
  *   - API 29+：MediaStore 公共「下载/PiDeck」—— 系统文件管理器、其他 App 都能看到，

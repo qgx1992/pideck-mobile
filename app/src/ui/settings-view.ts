@@ -27,9 +27,6 @@ export interface SettingsDeviceRow {
 export interface SettingsData {
   theme: { mode: string; options: ReadonlyArray<{ value: string; label: string }> };
   notify: { enabled: boolean };
-  /** 主界面形态：true = 原生（Flutter）界面，false = 网页版。
-   *  两边都能改，因为被卡在网页版时用户唯一能进的设置入口就是这里。 */
-  shell: { native: boolean };
   connection: { serviceUrl: string; token: string; status: string; version: string; sseNative?: boolean };
   devices: SettingsDeviceRow[];
   models: ModelRow[];
@@ -37,7 +34,7 @@ export interface SettingsData {
   extensions: ExtensionRow[];
   dshPlugins: DshPluginRow[];
   /** 当前可用于 DSH 插件操作的会话描述（空串 = 没有）。数据里带而不是走 handler，
-   *  因为 Flutter 版只收 JSON、拿不到闭包。 */
+   *  页面只收数据、不拿闭包。 */
   dshTarget: string;
   /** DSH 插件清单自己的错误（桌面端这个接口会单独报错，不该拖黑整页） */
   dshError?: string;
@@ -51,7 +48,6 @@ export interface SettingsHandlers {
   onClose: () => void;
   onTheme: (mode: string) => void;
   onToggleNotify: (enabled: boolean) => void;
-  onToggleShell: (native: boolean) => void;
   onDeviceActivate: (id: string) => void;
   onDeviceMenu: (id: string) => void;
   onAddDevice: () => void;
@@ -297,15 +293,6 @@ export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {  
       ]),
     );
 
-    // ── 界面 ──
-    body.append(
-      section("界面", [
-        switchRow("用原生界面做主界面", data.shell.native, (next) => handlers.onToggleShell(next), {
-          sub: "关掉就回到网页版界面（协议仍由网页版跑，两者行为一致）",
-        }),
-      ]),
-    );
-
     // ── 连接与设备 ──
     const deviceRows: HTMLElement[] = data.devices.map((device) => {
       const badges = [
@@ -424,10 +411,6 @@ export function createSettingsPage(handlers: SettingsHandlers): SettingsPage {  
 
     // ── DSH 插件 ──
     body.append(dshPluginSection(data, handlers));
-
-    // 注：这里原本有个「实验 → 打开 Flutter 页」的入口。
-    // 0.1.21 起设置页在原生壳里默认就是 Flutter 版（main.ts 的 openSettingsView），
-    // 这一页只在浏览器 / 老包里作为回退出现，所以那个入口已经没有意义。
 
     // ── 关于 ──
     body.append(

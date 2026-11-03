@@ -149,8 +149,6 @@ import {
   modelSubtitle,
   thinkingHint,
   thinkingLabel,
-  LEVEL_ORDER,
-  modelKey,
 } from "./ui/model-picker.ts";
 import type { ModelPickerSection } from "./ui/model-picker.ts";
 import { h, clear, toast } from "./ui/dom.ts";
@@ -167,15 +165,6 @@ import type { SendMode } from "./ui/send-mode.ts";
 import { attachPressable } from "./ui/press.ts";
 import { attachDrawerGestures } from "./ui/drawer-gestures.ts";
 import { attachBackButton } from "./platform/back-button.ts";
-import {
-  crumbsToPath,
-  emptyWorkspaceSnapshot,
-  lastSegment,
-  sortWorkspaceEntries,
-  truncatePreview,
-} from "./platform/flutter-workspace.ts";
-import type { WorkspaceSnapshot, WorkspaceTab as FlutterWorkspaceTab } from "./platform/flutter-workspace.ts";
-import { App as CapacitorApp } from "@capacitor/app";
 import { armSplashWatchdog, hideSplash, setSplashHint } from "./ui/splash.ts";
 import {
   collectRunWatchTitles,
@@ -188,33 +177,7 @@ import {
   startRunWatch,
   stopRunWatch,
 } from "./platform/run-watch.ts";
-import {
-  closeFlutterPage,
-  isFlutterHostAvailable,
-  onFlutterChatAction,
-  onFlutterPageVisibility,
-  onFlutterSettingsAction,
-  onFlutterSidebarAction,
-  onFlutterWebSheet,
-  openFlutterPage,
-  pushFlutterChat,
-  pushFlutterNotice,
-  pushFlutterSettings,
-  pushFlutterSidebar,
-} from "./platform/flutter-host.ts";
 import { isDesktopWebAvailable, openDesktopWeb } from "./platform/desktop-web.ts";
-import { FlutterChatMirror, buildChatSnapshot } from "./platform/flutter-chat.ts";
-import { buildSidebarSnapshot } from "./platform/flutter-sidebar.ts";
-import {
-  buildChatHeaderView,
-  buildModelPicker,
-  buildSecurityPicker,
-  buildThinkingPicker,
-  shortTokens,
-} from "./platform/flutter-chat-header.ts";
-import type { ChatHeaderView, ChatPickerItem, ChatPickerView } from "./platform/flutter-chat-header.ts";
-import { backendSheetItems } from "./platform/flutter-sheet.ts";
-import type { SheetItemView, SheetView } from "./platform/flutter-sheet.ts";
 import {
   modelChipLabel,
   modelChipTitle,
@@ -374,93 +337,6 @@ const notifiedAsksByService = new Set<string>();
 const learnedPrefs = new Map<string, LearnedPrefs>();
 let disposers: Array<() => void> = [];
 
-/**
- * Flutter 页是否盖在 WebView 上面。
- *
- * 混合栈下 document.visibilityState 只说明「WebView 有没有被盖住」，
- * 不说明「App 在不在前台」—— 跳进 Flutter 页时它会变 hidden，而用户就在看屏幕。
- * 原生 FlutterHostActivity.onStart/onStop 会把这个真实情况报过来。
- */
-let flutterPageOpen = false;
-
-/**
- * 设置页当前是不是 Flutter 版（而不是 Web 版）。
- *
- * 两件事依赖它：① renderSettings() 要把数据推过去；② 提示语要走原生 SnackBar，
- * 因为 WebView 的 toast 在 Flutter 页盖住时根本看不见。
- */
-let flutterSettingsOpen = false;
-
-/** Flutter 聊天页是否盖在上面。 */
-let flutterChatOpen = false;
-
-/** 聊天页快照的推送器（只在 Flutter 聊天页打开期间存在）。 */
-let flutterChatMirror: FlutterChatMirror | null = null;
-
-/** 上一次推给 Flutter 的侧栏 JSON；用来跳过完全相同的重复推送。 */
-let flutterSidebarJson = "";
-
-/**
- * 用户主动选了「网页版聊天页」—— 之后点侧栏会话不再弹 Flutter 页。
- * 不回写 localStorage：重启 App 就回到 Flutter 版（默认形态）。
- */
-let chatUseWebView = false;
-
-/**
- * 「Flutter 当主界面」开关（0.2.1 起默认开）。
- *
- * 启动流程是：WebView 先把协议连上、把当前会话开好，然后**立刻**用 Flutter 页盖住整屏，
- * 用户看到的第一个界面就是原生的会话列表 + 聊天。WebView 退到后台继续当协议引擎
- * （SSE、reducer、发送链路都在它身上），两边靠既有的快照/动作通道说话 —— 不搬协议就不会分叉。
- *
- * 为什么要有开关：万一某台机型上后台 WebView 被系统冻住（松手后收不到流式帧），
- * 用户点侧栏的「返回网页版」就能退回纯 Web 形态，不至于被困在一个不刷新的界面里。
- */
-const SHELL_PREF_KEY = "pideck-flutter-shell";
-
-function shellModeEnabled(): boolean {
-  try {
-    return localStorage.getItem(SHELL_PREF_KEY) !== "web";
-  } catch {
-    return true;
-  }
-}
-
-function setShellMode(enabled: boolean): void {
-  try {
-    localStorage.setItem(SHELL_PREF_KEY, enabled ? "flutter" : "web");
-  } catch {
-    // 隐私模式 / 存储满：降级成「本次会话有效」，不影响本次启动
-  }
-}
-
-/**
- * 启动收尾时调用：能进 Flutter 就进，进不去就安静地留在网页版。
- *
- * 失败**不写 localStorage**：只有「当前这台机器压根没有 Flutter 模块」
- * （插件调不通）才算永久性不支持，那是 `openFlutterPage` 里 isFlutterHostAvailable 的分支。
- * 偶发失败（Activity 还没就绪、启动过程中被切后台）不该让用户之后每次启动都进网页版 ——
- * 踩过：早先这里是 `if (!opened) setShellMode(false)`，一次启动失败就把开关永久关掉了，
- * 用户看到的就是「重启 App 不显示主界面」。
- */
-async function enterFlutterShell(): Promise<void> {
-  if (!shellModeEnabled() || flutterChatOpen) return;
-  try {
-    // **只有当前已经选中的会话才恢复**，不要拿 `sessions[0]` 兜底：
-    // 冷启动时 `activeSessionId` 是空的，兜底会让人一开机就被塞进一个旧会话，
-    // 而且那个会话还是列表里最早的一个（用户原话：「冷启动一直进一个旧的会话」）。
-    // 空字符串 = 打开「主界面」，会话列表在抽屉里，点哪个进哪个。
-    await openFlutterChatPage(activeSessionId ?? "");
-  } catch (error) {
-    console.warn("[shell] 打开原生主界面失败，本次留在网页版", error);
-  }
-}
-
-/** 历史加载失败的提示；快照里的 error 取自这里。 */
-let chatError: { title: string; detail?: string; hint?: string } | null = null;
-
-/** 历史还没回来（画「加载中…」）。 */
-let chatLoading = false;
 
 /* ------------------------------------------------------------------ */
 /* 侧栏视图状态（项目分组 / 折叠 / 搜索）                                */
@@ -1141,7 +1017,6 @@ function renderMain(): void {
     onMessageAction: (messageId, role) => openMessageActions(messageId, role),
     onFileRef: (path, line) => void openChatFileRef(path, line),
   });
-  mirrorChatView(chatView);
   renderEmptyState(null);
 
   refs = {
@@ -1204,57 +1079,12 @@ function renderMain(): void {
   // 这里主动补一次状态、重拉历史、并强制重连会话流。
   const onVisibleAgain = (): void => {
     if (typeof document === "undefined") return;
-    // 可见性不再上报给原生看护服务：只有原生的 Activity 计数能判断「App 在不在前台」，
-    // WebView 的 visibilityState 在 Flutter 页盖住时会误报后台（踩过：在 Flutter 页停留时照弹通知）。
+    // 可见性不上报给原生看护服务：只有原生的 Activity 计数能判断「App 在不在前台」。
     if (document.visibilityState !== "visible") return;
-    // WebView 重新可见 = Flutter 页肯定已经不在上面了。
-    // 兼当兵底：万一 onStop 那条事件因为 WebView 被暂停而丢失，标志也不会卡在 true。
-    flutterPageOpen = false;
-    flutterSettingsOpen = false;
     void resumeAfterBackground();
   };
   document.addEventListener("visibilitychange", onVisibleAgain);
   disposers.push(() => document.removeEventListener("visibilitychange", onVisibleAgain));
-
-  // 跳进 Flutter 页时 WebView 被 pause，visibilityState 变 hidden，但 App 还在前台。
-  // 用原生回传的标志把「被盖住」和「真后台」分开，否则会在用户看着屏幕时弹完成通知。
-  void onFlutterPageVisibility((open) => {
-    flutterPageOpen = open;
-    // Flutter 页关掉了 —— 不管它是设置页还是别的，设置页都不在上面了。
-    // 不依赖 Dart 侧记得发 close 动作：用户按返回键、被系统回收都要能复位。
-    if (!open) {
-      flutterSettingsOpen = false;
-      flutterChatOpen = false;
-      // 镜像器没有别的持有者，关页就释放；不然下一次开页会叠一个在上面
-      flutterChatMirror?.dispose();
-      flutterChatMirror = null;
-      // 侧栏快照跟着页一起失效，下次开页要重新推一份
-      flutterSidebarJson = "";
-    }
-  }).then((detach) => disposers.push(detach));
-
-  // Flutter 设置页上的一次操作，回传给与 Web 版共用的 handler 执行。
-  void onFlutterSettingsAction((action) => {
-    dispatchFlutterSettingsAction(action);
-  }).then((detach) => disposers.push(detach));
-
-  // Flutter 聊天页上的一次操作（发消息 / 停止 / 回答 / 长按菜单）。
-  void onFlutterChatAction((action) => {
-    dispatchFlutterChatAction(action);
-  }).then((detach) => disposers.push(detach));
-
-  // Flutter 侧栏上的一次操作（点会话 / 切分段 / 搜索 / 长按菜单）。
-  void onFlutterSidebarAction((action) => {
-    dispatchFlutterSidebarAction(action);
-  }).then((detach) => disposers.push(detach));
-
-  // Flutter 页要把某个弹层交给 WebView 开（目前只有扫码配对）。
-  // 必须走 leaveFlutterThen：先关掉 Flutter 页，否则弹层开在看不见的 WebView 上。
-  void onFlutterWebSheet((name) => {
-    leaveFlutterThen(() => {
-      if (name === "connection") openConnectionSheet();
-    });
-  }).then((detach) => disposers.push(detach));
 
   // 窄屏手势：左右两个抽屉由同一个控制器管理，保证互斥——
   // 已有一侧打开时，反方向手势是「关闭它」，而不是去开另一侧。
@@ -1592,25 +1422,6 @@ function toggleProject(projectId: string): void {
   if (runtime) renderSidebar(runtime.store.state);
 }
 
-/**
- * 点侧栏里的会话 = 直接进 Flutter 聊天页（0.1.29 起）。
- *
- * 回退条件（任何一条成立就走 WebView 版）：
- *   - 这个包不带 Flutter 模块（浏览器里打开、装的是老包）；
- *   - 用户刚在 Flutter 聊天页里点过「返回网页版」—— 不给他一个回来的入口。
- *     （想看 Flutter 版，从设置页「关于 → 聊天页预览」重新进。）
- */
-async function openSessionFromSidebar(sessionId: string): Promise<void> {
-  // `!shellModeEnabled()` 也要算进来：用户在设置里关掉「用原生界面做主界面」之后，
-  // 点会话不该又被弹进 Flutter 页（那条开关是持久化的，这里也得跟着它）。
-  if (flutterChatOpen || chatUseWebView || !shellModeEnabled()) {
-    await openSession(sessionId);
-    return;
-  }
-  const opened = await openFlutterChatPage(sessionId);
-  if (!opened) await openSession(sessionId);
-}
-
 /** 侧栏 = 项目分组 + 组内会话。搜索时跨项目过滤，并强制展开命中的分组。 */
 /** 展开 / 收起某项目的剩余会话（不影响项目本身的折叠状态）。 */
 function toggleSessionsExpanded(projectId: string): void {
@@ -1630,9 +1441,6 @@ function isSessionsExpanded(projectId: string, state: PiDeckState): boolean {
 
 function renderSidebar(state: PiDeckState): void {
   renderSidebarInner(state);
-  // 侧栏只有一个入口，在这里统一同步给 Flutter 的抽屉最省心 ——
-  // 折叠、搜索、切分段、会话增删都走 renderSidebar，不用每处都记得推。
-  syncFlutterSidebar();
 }
 
 function renderSidebarInner(state: PiDeckState): void {
@@ -1666,7 +1474,7 @@ function renderSidebarInner(state: PiDeckState): void {
       handlers: {
         onToggleProject: (projectId: string) => toggleProject(projectId),
         onOpenSession: (sessionId: string) =>
-          onEndpoint(run, () => void openSessionFromSidebar(sessionId)),
+          onEndpoint(run, () => void openSession(sessionId)),
         // 项目行上的「+」是快捷新建：沿用上次选的后端（ACP 工具被删则自动退回 pi）
         onCreateSession: (projectId: string) =>
           onEndpoint(run, () =>
@@ -2077,8 +1885,6 @@ async function openSession(sessionId: string): Promise<void> {
   activeProjectId = store.session(sessionId)?.projectId ?? activeProjectId;
   chatView.clear();
   chatView.setEmpty("加载中…");
-  chatLoading = true;
-  chatError = null;
 
   // 计划模式也是每会话各自记（发送成功后会被置回 false）
   planModeOn = planModeBySession.get(epKey(sessionId)) ?? false;
@@ -2106,8 +1912,6 @@ async function openSession(sessionId: string): Promise<void> {
     const page = await client.getMessages(sessionId);
     if (activeSessionId !== sessionId) return;
     sessionHistory = page.messages;
-    chatLoading = false;
-    chatError = null;
     chatView.setHistory(page.messages);
     // 这个会话在别处已经跑起来了（比如桌面端发的，或者切走时发出去的那轮）：
     // 拿最后一条提问的时间当回合起点，计时才不会从 0 开始数
@@ -2116,8 +1920,6 @@ async function openSession(sessionId: string): Promise<void> {
     if (runningOnServer) chatView.seedTurn(lastUserTimestamp(page.messages));
   } catch (error) {
     if (activeSessionId !== sessionId) return;
-    chatLoading = false;
-    chatError = describeHistoryFailure(error, session?.backend);
     chatView.setError(describeHistoryFailure(error, session?.backend));
   }
 
@@ -2208,11 +2010,9 @@ function detectCompletedRuns(endpointId: string, state: PiDeckState): void {
     void learnRuntimePrefs(activeSessionId);
   }
 
-  // 「App 真的退到后台」：WebView 被盖住 **且** 不是被 Flutter 页盖住。
-  // Flutter 页盖住时用户就在看屏幕，属于前台，不能当成后台去弹通知。
+  // 「App 真的退到后台」：WebView 被盖住（document.visibilityState 是可信信号）。
   const hidden = isAppInBackground({
     visibilityHidden: typeof document !== "undefined" && document.visibilityState === "hidden",
-    flutterPageOpen,
   });
 
   // AI 提问：agent 会一直阻塞等回答，所以这个通知比「跑完了」更该及时
@@ -2706,7 +2506,6 @@ function renderTodoStrip(): void {
   // 用户手动收起过就听用户的；否则有「进行中」就自动展开
   const collapsed = remembered ?? !shouldAutoExpand(todoView);
   refs.todoStrip.update(todoView, { collapsed });
-  syncFlutterChat();
 }
 
 /* ---------------------------- 子代理活动条 ---------------------------- */
@@ -2771,7 +2570,6 @@ function renderSubagentStrip(): void {
   const remembered = sessionId ? subagentCollapsed.get(epKey(sessionId)) : undefined;
   const collapsed = remembered ?? true;
   refs.subagentStrip.update(subagentView, { collapsed });
-  syncFlutterChat();
 }
 
 /* ---------------------------- 上下文用量 ---------------------------- */
@@ -2860,7 +2658,6 @@ function renderContextChip(): void {
   refs.contextBtn.title = contextChipTitle(usage);
   refs.contextBtn.setAttribute("aria-label", contextChipTitle(usage));
   refs.contextRing.style.setProperty("--ctx-pct", String(ringPercent(usage)));
-  syncFlutterChat();
 }
 
 /** 上下文用量面板：大号百分比 + 明细 + 压缩按钮（对齐 Web 端 ContextUsageSheetBody）。 */
@@ -3128,7 +2925,6 @@ async function reloadHistory(sessionId: string): Promise<void> {
   try {
     const page = await runtime.client.getMessages(sessionId);
     if (sessionId === activeSessionId) sessionHistory = page.messages;
-    if (sessionId === activeSessionId) chatError = null;
     if (page.messages.length === 0) {
       // 空会话：给引导页（标题 + 三条提示词）。
       // 已经有内容时不要把画面清掉 —— 这多半是落盘延迟或回放还没到。
@@ -3139,9 +2935,7 @@ async function reloadHistory(sessionId: string): Promise<void> {
   } catch (error) {
     // 新建的会话在写出会话文件之前，桌面端对 /messages 直接回 5xx。
     // 那不是「历史读坏了」，而是「还没有历史」：给引导页，让用户直接发消息。
-    // （Dart 侧 `ChatRuntime._loadHistory()` 有同样的判断，见 0.2.17。）
     if (isMissingTranscript(error)) {
-      chatError = null;
       if (!chatView.hasContent()) renderEmptyState(sessionId);
       return;
     }
@@ -3151,7 +2945,6 @@ async function reloadHistory(sessionId: string): Promise<void> {
       return;
     }
     chatView.setError(describeHistoryFailure(error, runtime.store.session(sessionId)?.backend));
-    chatError = describeHistoryFailure(error, runtime.store.session(sessionId)?.backend);
   }
 }
 
@@ -4845,13 +4638,6 @@ function pickResultId(result: unknown, keys: readonly string[]): string | null {
   return null;
 }
 
-const MESSAGE_ACTION_IDS: readonly MessageAction[] = ["copy", "edit", "resend", "delete", "fork"];
-
-/** Flutter 回传的 action 是字符串，收口成联合类型（否则 TS 不认）。 */
-function isMessageAction(value: string): value is MessageAction {
-  return (MESSAGE_ACTION_IDS as readonly string[]).includes(value);
-}
-
 async function runMessageAction(action: MessageAction, messageId: string, text: string): Promise<void> {
   if (!runtime || !activeSessionId) return;
   if (action === "copy") {
@@ -5284,7 +5070,6 @@ function settingsData(): SettingsData {
       options: THEME_MODES.map((mode) => ({ value: mode, label: themeLabel(mode) })),
     },
     notify: { enabled: isTaskNotifyEnabled() },
-    shell: { native: shellModeEnabled() },
     connection: {
       serviceUrl: runtime?.pairing.baseUrl ?? "",
       token: runtime?.pairing.token ?? "",
@@ -5315,8 +5100,6 @@ function settingsData(): SettingsData {
 function renderSettings(): void {
   const data = settingsData();
   if (settingsPage) settingsPage.update(data);
-  // Flutter 版是纯视图，数据变了就整份推过去（它没有回拉的能力）。
-  if (flutterSettingsOpen) void pushFlutterSettings(JSON.stringify(data));
 }
 
 /**
@@ -5359,1367 +5142,10 @@ async function refreshSettings(): Promise<void> {
   renderSettings();
 }
 
-/**
- * 给 ChatView 挂一个「渲染完毕」的钩子，用来把最新状态镜像到 Flutter 聊天页。
- *
- * 为什么用包一层而不是改 ChatView：它的十个入口都是命令式 DOM 写入，
- * 真正需要的是「数据变了」这个信号；在调用方统一拦截比在 1254 行的渲染器里
- * 插十处 `this.onRender?.()` 更不容易漏。没开 Flutter 页时 `syncFlutterChat()` 直接返回，
- * 所以 Web 版的开销只是十个函数调。
- */
-const MIRRORED_CHAT_METHODS = [
-  "clear",
-  "setHistory",
-  "setLive",
-  "setPending",
-  "setRunStats",
-  "setError",
-  "setEmpty",
-  "setEmptyState",
-  "clearLive",
-  "appendLocalUser",
-] as const;
-
-function mirrorChatView(view: ChatView): void {
-  const target = view as unknown as Record<string, (...args: unknown[]) => unknown>;
-  for (const name of MIRRORED_CHAT_METHODS) {
-    const original = view[name].bind(view) as (...args: unknown[]) => unknown;
-    target[name] = (...args: unknown[]): unknown => {
-      const result = original(...args);
-      syncFlutterChat();
-      return result;
-    };
-  }
-}
-
-/**
- * 把侧栏当前状态推给 Flutter 的抽屉（没开 Flutter 聊天页时什么都不做）。
- *
- * 侧栏只在状态变化时重画，所以这里不做节流：`renderSidebar()` 已经天然被合并。
- * 内容没变就跳过（`flutterSidebarJson` 去重），避免重复过桥。
- */
-function syncFlutterSidebar(): void {
-  if (!flutterChatOpen || !runtime) return;
-  const json = JSON.stringify(
-    buildSidebarSnapshot({
-      tab: sidebarTab,
-      query: sidebarQuery,
-      endpoints: endpointStates(),
-      activeEndpointId: runtime.id,
-      activeSessionId,
-      activeProjectId,
-      collapsedProjects,
-      expandedSessions,
-      flatExpanded,
-      sheet: flutterSidebarSheet,
-    }),
-  );
-  if (json === flutterSidebarJson) return;
-  flutterSidebarJson = json;
-  void pushFlutterSidebar(json);
-}
-
-/** 关掉 Flutter 页再执行 —— 给「只能在 WebView 里看」的界面用（工作区选择器、菜单弹层）。 */
-function leaveFlutterThen(action: () => void): void {
-  flutterChatOpen = false;
-  flutterSidebarJson = "";
-  flutterChatMirror?.dispose();
-  flutterChatMirror = null;
-  void closeFlutterPage().then(() => action());
-}
-
-/**
- * Flutter 侧栏回传的动作。
- *
- * 分工：纯状态的（切分段 / 搜索 / 折叠）直接改本地状态再重画；
- * 需要 WebView 界面配合的（工作区选择器、会话菜单、项目菜单）先关掉 Flutter 页
- * —— 那些弹层长在 WebView 的 DOM 上，被 Flutter 页盖着就看不见。
- */
-function dispatchFlutterSidebarAction(action: Record<string, unknown>): void {
-  if (!runtime) return;
-  const type = typeof action.type === "string" ? action.type : "";
-  const text = (key: string): string => (typeof action[key] === "string" ? (action[key] as string) : "");
-
-  // 0.2.13：会话改名 / 复制 / 删除 / 移除项目 / 新建会话的**接口调用**已经归 Dart。
-  // 带 native 回传说明「副作用已经做完了」，这里只刷新状态与重画 ——
-  // 再调一次接口就会变成两次副作用（重命名两次、删两次、建出两个会话）。
-  if (action.native === true || action.native === "true") {
-    switch (type) {
-      case "sessionExport": {
-        // 文件已经在原生侧落盘并提示过了，这里只把可能还开着的会话菜单收掉。
-        closeSheet();
-        return;
-      }
-      case "sessionRename":
-      case "sessionCopy":
-      case "sessionDelete":
-      case "projectRemove":
-      case "createSession": {
-        const id = text("id");
-        // 闭包里不能再依赖 `runtime` 的非空收窄，先抓一份。
-        const current = runtime;
-        closeSheet();
-        void current.store.refresh().then(() => {
-          renderSidebar(current.store.state);
-          renderHeader(current.store.state);
-          if (type === "createSession" && id) void openSession(id);
-        });
-        return;
-      }
-      default:
-        break;
-    }
-  }
-
-  switch (type) {
-    case "close":
-      leaveFlutterThen(() => undefined);
-      return;
-    case "openSession": {
-      const id = text("id");
-      if (id) void openSession(id);
-      return;
-    }
-    case "toggleTab": {
-      const tab = text("tab");
-      if (tab !== "active" && tab !== "chats" && tab !== "projects") return;
-      sidebarTab = tab;
-      saveSidebarTab(sidebarTab);
-      renderSidebar(runtime.store.state);
-      return;
-    }
-    case "search":
-      sidebarQuery = text("query");
-      renderSidebar(runtime.store.state);
-      return;
-    case "toggleProject": {
-      const projectId = text("projectId");
-      if (projectId) toggleProject(projectId);
-      return;
-    }
-    case "toggleSection": {
-      const key = text("key");
-      if (!key) return;
-      // 项目组走「展开全部会话」，扁平段走「展开其余」—— 两个状态集合不是一回事
-      if (key.startsWith("project:")) toggleSessionsExpanded(key.slice("project:".length));
-      else toggleFlat(key);
-      return;
-    }
-    case "createSession": {
-      const projectId = text("projectId");
-      void createSession(projectId || undefined);
-      return;
-    }
-    case "sessionRename": {
-      const id = text("id");
-      const title = text("title").trim();
-      if (!id) return;
-      if (!title) {
-        void pushFlutterNotice("标题不能为空");
-        return;
-      }
-      void runSessionAction(id, "update", "已重命名", { title });
-      return;
-    }
-    case "sessionCopy": {
-      const id = text("id");
-      if (id) void runSessionAction(id, "copy", "已复制会话");
-      return;
-    }
-    case "sessionExport": {
-      const id = text("id");
-      if (id) exportSessionHtml(id);
-      return;
-    }
-    case "sessionDelete": {
-      const id = text("id");
-      if (id) void runSessionAction(id, "delete", "已删除会话", {}, id);
-      return;
-    }
-    case "sessionBackend": {
-      const id = text("id");
-      if (id) openFlutterBackendSheet(id);
-      return;
-    }
-    case "projectRemove": {
-      // 二次确认已经在 Flutter 那边做过（那条路径原来会 leaveFlutterThen 回网页版弹层）
-      const projectId = text("projectId");
-      if (projectId) void removeProject(projectId);
-      return;
-    }
-    case "newSession":
-      openFlutterNewSessionSheet();
-      return;
-    case "sheetPick": {
-      const id = text("id");
-      const pick = flutterSidebarSheetPick;
-      if (pick && id) pick(id);
-      return;
-    }
-    case "sheetClose":
-      closeSidebarSheet();
-      return;
-    case "openSettings":
-      openSettings();
-      return;
-  }
-}
-
-/** 把聊天页当前状态组装成快照推给 Flutter（没开 Flutter 页时什么都不做）。 */
-/**
- * Flutter 右侧「工作区」抽屉的状态。
- *
- * 数据仍然由 Web 侧取（Git 状态、目录列表、待办历史），Dart 只画快照 ——
- * 和侧栏/聊天页同一套原则：规则一份，界面可以两份。
- */
-interface FlutterWorkspaceState {
-  open: boolean;
-  tab: FlutterWorkspaceTab;
-  /** 文件 Tab 的目录栈（相对项目根） */
-  stack: string[];
-  preview: { path: string; content: string; truncated: boolean } | null;
-  snapshot: WorkspaceSnapshot;
-}
-
-let flutterWorkspace: FlutterWorkspaceState = {
-  open: false,
-  // 默认看文件：大多数人打开这个抽屉是为了找/预览一个文件，
-  // 「改动」只在真的在改代码时才有内容，当默认页十次有八次是空的。
-  tab: "files",
-  stack: [],
-  preview: null,
-  snapshot: emptyWorkspaceSnapshot(),
-};
-
-/** 工作区跟着当前会话的项目走；没有会话就退回当前项目 / 第一个项目。 */
-function workspaceProjectId(): string | null {
-  if (!runtime) return null;
-  const session = activeSessionId ? runtime.store.session(activeSessionId) : undefined;
-  if (session?.projectId) return session.projectId;
-  if (activeProjectId) return activeProjectId;
-  // 没会话也没选项目（冷启动主界面）时，别退回内置 Chat 项目 —— 它没有目录，
-  // 抽屉里只会显示「这个项目没有目录」。优先挑第一个真有路径的项目。
-  const projects = runtime.store.projects();
-  const withPath = projects.find((item) => typeof item.path === "string" && item.path !== "");
-  return (withPath ?? projects[0])?.id ?? null;
-}
-
-function workspaceProjectPath(): string {
-  if (!runtime) return "";
-  const project = runtime.store.projects().find((item) => item.id === workspaceProjectId());
-  return typeof project?.path === "string" ? project.path : "";
-}
-
-async function openFlutterWorkspace(): Promise<void> {
-  if (!runtime) return;
-  if (!workspaceProjectId()) {
-    pushFlutterNotice("没有可用项目：请先在桌面端添加项目目录");
-    return;
-  }
-  flutterWorkspace = { ...flutterWorkspace, open: true, preview: null, stack: [] };
-  await reloadFlutterWorkspace();
-}
-
-function closeFlutterWorkspace(): void {
-  flutterWorkspace = { ...flutterWorkspace, open: false, preview: null };
-  syncFlutterChat();
-}
-
-/** 重新算一份快照：先推「加载中」，再推结果，抽屉里不会一片空白。 */
-/** 桌面端迟迟不回时不要一直转圈：超时当成一次失败，把错误文案推过去。 */
-const WORKSPACE_TIMEOUT_MS = 12000;
-
-async function withDeadline<T>(task: Promise<T>, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      task,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label}超时（桌面端没有响应）`)), WORKSPACE_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    if (timer !== null) clearTimeout(timer);
-  }
-}
-
-async function reloadFlutterWorkspace(): Promise<void> {
-  if (!runtime) return;
-  const projectId = workspaceProjectId();
-  const project = projectId ? runtime.store.projects().find((item) => item.id === projectId) : undefined;
-  const title = project ? projectLabel(project) ?? "项目" : "";
-  const base: WorkspaceSnapshot = {
-    ...emptyWorkspaceSnapshot(),
-    open: true,
-    tab: flutterWorkspace.tab,
-    title,
-    loading: true,
-    crumbs: [title || "项目", ...flutterWorkspace.stack],
-    preview: flutterWorkspace.preview,
-  };
-  flutterWorkspace.snapshot = base;
-  syncFlutterChat();
-  if (!projectId) {
-    flutterWorkspace.snapshot = { ...base, loading: false, empty: "没有可用项目" };
-    syncFlutterChat();
-    return;
-  }
-  // 内置 Chat 项目没有目录：别拿空路径去问桌面端要文件列表（那边会一直不回）
-  if (workspaceProjectPath() === "" && flutterWorkspace.tab !== "todos") {
-    flutterWorkspace.snapshot = { ...base, loading: false, empty: "这个项目没有目录" };
-    syncFlutterChat();
-    return;
-  }
-
-  let next: WorkspaceSnapshot = { ...base, loading: false };
-  try {
-    if (flutterWorkspace.tab === "todos") {
-      const entries = currentTodoHistory();
-      next.todos = entries.map((entry) => ({
-        text: entry.items
-          .map((item) => {
-            const mark = item.status === "completed" ? "✓" : item.status === "in_progress" ? "▸" : "•";
-            return `${mark} ${item.text}`;
-          })
-          .join("\n"),
-        status: entry.finished ? "completed" : "pending",
-        at: `${entry.done}/${entry.total} · ${fmtShortTime(entry.lastChangedAt)}`,
-      }));
-      if (next.todos.length === 0) next.empty = "这个会话还没有待办清单";
-    } else if (flutterWorkspace.tab === "git") {
-      const [statusRaw, logRaw] = await withDeadline(
-        Promise.all([
-          runtime.client.gitStatus(projectId),
-          runtime.client.gitLog(projectId, 20).catch(() => null),
-        ]),
-        "读取 Git 状态",
-      );
-      const status = parseGitStatus(statusRaw, workspaceProjectPath());
-      if (!status.isRepo) {
-        next.empty = "这个项目不是 Git 仓库";
-      } else {
-        next.branch = status.branch;
-        next.changedTotal = status.total;
-        next.changes = status.groups.flatMap((group) =>
-          group.files.map((file) => ({ letter: file.letter, path: file.relativePath, group: group.title })),
-        );
-        next.commits = (logRaw ? parseGitLog(logRaw) : []).map((commit) => ({
-          sha: commit.shortHash,
-          subject: commit.message,
-          date: formatCommitDate(commit.authorDate),
-        }));
-      }
-    } else {
-      const nodes = await withDeadline(
-        runtime.client.listFiles(projectId, crumbsToPath(base.crumbs)),
-        "读取目录",
-      );
-      next.entries = sortWorkspaceEntries(
-        nodes.map((node) => ({
-          name: node.name,
-          path: node.relativePath,
-          dir: node.type === "directory",
-        })),
-      );
-      if (next.entries.length === 0) next.empty = "空目录";
-    }
-  } catch (error) {
-    next = { ...next, empty: `读取失败：${describeError(error)}` };
-  }
-  // 期间用户可能已经关了抽屉或换了 Tab：过期的结果直接丢掉
-  if (!flutterWorkspace.open || flutterWorkspace.tab !== next.tab) return;
-  flutterWorkspace.snapshot = next;
-  syncFlutterChat();
-}
-
-async function previewFlutterWorkspaceFile(path: string): Promise<void> {
-  if (!runtime) return;
-  const projectId = workspaceProjectId();
-  if (!projectId) return;
-  const base: WorkspaceSnapshot = {
-    ...flutterWorkspace.snapshot,
-    loading: true,
-    empty: "",
-  };
-  flutterWorkspace.snapshot = base;
-  syncFlutterChat();
-  try {
-    const raw = await runtime.client.fileContent(projectId, path);
-    const text = typeof raw === "string" ? raw : JSON.stringify(raw);
-    const cut = truncatePreview(text);
-    flutterWorkspace.preview = { path, ...cut };
-    flutterWorkspace.snapshot = { ...base, loading: false, preview: flutterWorkspace.preview };
-  } catch (error) {
-    flutterWorkspace.preview = null;
-    flutterWorkspace.snapshot = { ...base, loading: false, empty: `读不了这个文件：${describeError(error)}` };
-  }
-  flutterWorkspace.preview = flutterWorkspace.snapshot.preview;
-  syncFlutterChat();
-}
-
-/**
- * 空态副标题。
- *
- * 「一个会话都没选」不等于「还没有会话」：老用户冷启动进主界面时，
- * 会话全躺在抽屉里，副标题得告诉他去哪儿找，而不是继续念新用户的话术。
- */
-function emptySubtitle(): string {
-  const hasSessions = (runtime?.store.state.sessions.length ?? 0) > 0;
-  if (!activeSessionId && hasSessions) return "点左上角菜单选择会话，或者直接发消息开始新的对话";
-  const project = activeProjectId ? runtime?.store.projects().find((item) => item.id === activeProjectId) : undefined;
-  return emptyStateSubtitle(suggestionContext(project));
-}
-
-function syncFlutterChat(): void {
-  const mirror = flutterChatMirror;
-  if (!mirror || !flutterChatOpen) return;
-  const session = activeSessionId && runtime ? runtime.store.session(activeSessionId) : undefined;
-  const reducer = channel?.reducer ?? null;
-  mirror.update(
-    buildChatSnapshot({
-      sessionId: activeSessionId,
-      // 没有会话就是「主界面」，标题给个兜底，否则顶部会是一条空白栏
-      title: session?.title || "PiDeck",
-      messages: sessionHistory,
-      status: reducer?.status ?? "idle",
-      error: chatError,
-      loading: chatLoading,
-      live: reducer ? { messageId: reducer.messageId, blocks: reducer.blocks } : null,
-      pending: activeSessionId && runtime ? runtime.store.pendingFor(activeSessionId) : [],
-      perf: perfMetrics,
-      backend: activeBackend(),
-      header: chatHeaderView(),
-      picker: flutterPicker,
-      suggestions: emptySuggestions(),
-    themeMode: getThemeMode(),
-    workspace: flutterWorkspace.open ? flutterWorkspace.snapshot : null,
-      emptyTitle: emptyStateTitle(),
-      emptySubtitle: emptySubtitle(),
-      sheet: flutterChatSheet,
-    }),
-  );
-}
-
-/* ------------------------- 顶栏快照与选择面板 ------------------------- */
-
-/**
- * 顶栏快照。
- *
- * 数据源与 Web 版顶栏、输入框 chips 完全同一套（`buildHeaderView()` /
- * `resolveSessionPrefs()` / `securityChoices()` / `contextUsage` / `todoView` /
- * `subagentView`），这里只做摊平 —— 不在 Flutter 侧重新判断「ACP 有没有模型入口」
- * 这类事，否则后端能力一变两边就会分叉。
- */
-/**
- * 空会话的快捷提示词（按项目类型给不同的三条）。
- *
- * 只在「没有已加载历史」时推 —— Dart 侧也在没历史时才画，两边都不做多余判断。
- */
-function emptySuggestions(): string[] {
-  if (!runtime || sessionHistory.length > 0) return [];
-  const session = activeSessionId ? runtime.store.session(activeSessionId) : undefined;
-  const project = session ? runtime.store.projects().find((item) => item.id === session.projectId) : undefined;
-  return [...suggestionsFor(suggestionContext(project))];
-}
-
-function chatHeaderView(): ChatHeaderView {
-  const sessionId = activeSessionId;
-  const session = sessionId && runtime ? runtime.store.session(sessionId) : undefined;
-  const backend = session?.backend;
-  const caps = backendCapabilities(backend);
-  const securityState = runtime ? parseSecurityState(runtime.store.state.security) : null;
-  const chips = composerToolChips(backend, securityState, sessionId !== null);
-  const prefs = resolveSessionPrefs(session, sessionId ? learnedPrefs.get(epKey(sessionId)) : undefined);
-  const header = runtime
-    ? buildHeaderView(
-        runtime.store.state,
-        sessionId,
-        session?.projectId ?? null,
-        sessionId ? learnedPrefs.get(epKey(sessionId)) : undefined,
-      )
-    : { title: session?.title ?? "", meta: "", isRunning: false };
-
-  const securityLevel = securityState ? securityLevelFor(securityState, sessionId).level : null;
-  const todos = todoView;
-  const current = todos?.items.find((item) => item.status === "in_progress");
-
-  return buildChatHeaderView({
-    title: header.title,
-    meta: header.meta,
-    running: header.isRunning,
-    caps: {
-      model: caps.model,
-      thinking: caps.thinking,
-      plan: caps.plan,
-      steer: caps.steer,
-      dsh: chips.dsh,
-    },
-    model: { label: modelChipLabel(prefs, 18), placeholder: prefs.placeholder },
-    thinking: { level: prefs.thinkingLevel, label: thinkingLabel(prefs.thinkingLevel) },
-    security: chips.security
-      ? { label: securityChipLabel(securityLevel), muted: !securityLevel }
-      : null,
-    dsh: chips.dsh,
-    planOn: planModeOn,
-    context: contextUsage,
-    sendMode,
-    promptCount: promptTemplateCount,
-    todo:
-      todos && todos.total > 0
-        ? {
-            open: todos.total - todos.done,
-            done: todos.done,
-            total: todos.total,
-            ...(current ? { current: current.text } : {}),
-            items: todos.items.map((item) => ({ text: item.text, status: item.status })),
-          }
-        : null,
-    subagents:
-      subagentView.length > 0
-        ? {
-            active: subagentView.filter((item) => item.active).length,
-            total: subagentView.length,
-          }
-        : null,
-    // 只有已经加载出历史才给「历史」入口：没有历史时点开只会看到空面板
-    hasHistory: sessionHistory.length > 0,
-  });
-}
-
-/** 当前推给 Flutter 的选择面板（null = 不显示）。 */
-let flutterPicker: ChatPickerView | null = null;
-/** 已导入的提示词模板数量（`openPromptPicker()` 成功拉过一次后才有值）。 */
-let promptTemplateCount = 0;
-
-function setFlutterPicker(view: ChatPickerView | null): void {
-  flutterPicker = view;
-  syncFlutterChat();
-}
-
-/**
- * 侧栏发起的底部弹层（新建会话 / 切换后端）。
- *
- * 这几个界面原来只能 `leaveFlutterThen()` 闪回网页版——数据其实很简单，
- * 所以改成「WebView 算行、Flutter 画行、选中回传 id」。选中态留在这一侧：
- * 面板因此是无状态的，关掉再打开不用同步两处状态，代价是每次点选要重算整份视图。
- */
-let flutterSidebarSheet: SheetView | null = null;
-let flutterSidebarSheetPick: ((id: string) => void) | null = null;
-
-function pushSidebarSheet(view: SheetView, onPick: (id: string) => void): void {
-  flutterSidebarSheet = view;
-  flutterSidebarSheetPick = onPick;
-  syncFlutterSidebar();
-}
-
-function closeSidebarSheet(): void {
-  flutterSidebarSheet = null;
-  flutterSidebarSheetPick = null;
-  syncFlutterSidebar();
-}
-
-/** 聊天页发起的底部弹层（DSH 工具）。与侧栏那份分开，避免两边各画一份。 */
-let flutterChatSheet: SheetView | null = null;
-let flutterChatSheetPick: ((id: string) => void) | null = null;
-
-function pushChatSheet(view: SheetView, onPick: (id: string) => void): void {
-  flutterChatSheet = view;
-  flutterChatSheetPick = onPick;
-  syncFlutterChat();
-}
-
-function closeChatSheet(): void {
-  flutterChatSheet = null;
-  flutterChatSheetPick = null;
-  syncFlutterChat();
-}
-
-/** 新建会话：先挑后端（只有一个后端时不占地方），再挑工作区。 */
-function openFlutterNewSessionSheet(): void {
-  if (!runtime) return;
-  const state = runtime.store.state;
-  const projects = sortProjectsForPicker(state.projects ?? [], state.sessions ?? []);
-  if (projects.length === 0) {
-    void pushFlutterNotice("没有可用项目：请先在桌面端添加项目目录");
-    return;
-  }
-  const counts = sessionCountByProject(state.sessions ?? []);
-  const options = backendOptions(state.acpTools);
-  let choice: BackendChoice = loadLastBackendChoice(options);
-
-  const render = (): void => {
-    const items: SheetItemView[] = [];
-    if (options.length > 1) {
-      items.push(...backendSheetItems(options, choiceKey(choice), { group: "后端" }));
-    }
-    for (const project of projects) {
-      const isChat = project.kind === "chat";
-      const label = projectLabel(project) ?? project.id;
-      items.push({
-        id: `project:${project.id}`,
-        label: isChat ? `${label}（内置）` : label,
-        description: `${isChat ? "内置聊天" : (project.path ?? project.id)} · ${counts.get(project.id) ?? 0} 个会话`,
-        group: "工作区",
-        actionable: true,
-      });
-    }
-    pushSidebarSheet(
-      {
-        kind: "newSession",
-        title: "新建会话",
-        ...(options.length > 1 ? { note: `后端：${describeChoice(choice, state.acpTools)}` } : {}),
-        items,
-      },
-      (id) => {
-        if (id.startsWith("backend:")) {
-          const next = options.find((option) => `backend:${option.key}` === id);
-          if (!next) return;
-          choice = next.choice;
-          render();
-          return;
-        }
-        if (id.startsWith("project:")) {
-          const projectId = id.slice("project:".length);
-          rememberBackendChoice(choice);
-          closeSidebarSheet();
-          void createSession(projectId, choice);
-        }
-      },
-    );
-  };
-  render();
-}
-
-/** 会话菜单里的「切换后端」：点一行即应用（Web 版是「选完再按应用」，两步在手机上多余）。 */
-function openFlutterBackendSheet(sessionId: string): void {
-  if (!runtime) return;
-  const session = runtime.store.session(sessionId);
-  if (!session) return;
-  const state = runtime.store.state;
-  const options = backendOptions(state.acpTools);
-  const current: BackendChoice = {
-    backend: normalizeBackend(session.backend),
-    acpToolId: typeof session.acpToolId === "string" ? session.acpToolId : null,
-  };
-  const switchable = backendSwitchAllowed(state.runtimes ?? [], sessionId);
-  if (!switchable) {
-    void pushFlutterNotice(backendLockedHint(current, state.acpTools));
-    return;
-  }
-
-  pushSidebarSheet(
-    {
-      kind: "backend",
-      title: "切换后端",
-      note: `当前：${describeChoice(current, state.acpTools)}。换后端会重开这个会话（旧内容不再适用）。`,
-      items: backendSheetItems(options, choiceKey(current), { actionable: true }),
-    },
-    (id) => {
-      if (!id.startsWith("backend:")) return;
-      const next = options.find((option) => `backend:${option.key}` === id);
-      if (!next) return;
-      if (choiceKey(next.choice) === choiceKey(current)) {
-        closeSidebarSheet();
-        return;
-      }
-      if (missingAcpTool(next.choice)) {
-        void pushFlutterNotice("选了 ACP 后端就得先指定一个 CLI 工具");
-        return;
-      }
-      closeSidebarSheet();
-      rememberBackendChoice(next.choice);
-      const target = describeChoice(next.choice, state.acpTools);
-      // 换后端后旧会话的内容不再适用：切完直接重开这个会话，让标题/能力重新拉
-      void runSessionAction(sessionId, "update", `已切到 ${target} 后端`, backendPatch(next.choice, current)).then(() => {
-        if (sessionId === activeSessionId) void openSession(sessionId);
-      });
-    },
-  );
-}
-
-/** DSH 工具面板（目标 / 子代理 / 技能）。内容只读，只有子代理能点进去看历史。 */
-async function openFlutterDshSheet(): Promise<void> {
-  if (!runtime || !activeSessionId) return;
-  const client = runtime.client;
-  const sessionId = activeSessionId;
-
-  pushChatSheet({ kind: "dsh", title: "DSH 工具", note: "加载中…", items: [] }, () => undefined);
-
-  const [goal, subs, skills] = await Promise.allSettled([
-    client.getDshGoal(sessionId),
-    client.getDshSubagents(sessionId),
-    client.getDshSkills(sessionId),
-  ]);
-  // 加载期间用户可能切了会话或关了面板，别把陈数据画到别的会话上
-  if (activeSessionId !== sessionId || flutterChatSheet?.kind !== "dsh") return;
-
-  const goalView = goal.status === "fulfilled" ? parseDshGoal(goal.value) : null;
-  const subagentRows = subs.status === "fulfilled" ? parseDshSubagents(subs.value) : [];
-  const skillRows = skills.status === "fulfilled" ? parseDshSkills(skills.value) : [];
-  const failure = [goal, subs, skills].find((result) => result.status === "rejected");
-  const items: SheetItemView[] = [];
-
-  if (!goalView) {
-    items.push({ id: "goal", label: DSH_EMPTY_GOAL, group: "目标" });
-  } else {
-    const meta = [goalPhaseLabel(goalView.phase), goalRoundsText(goalView)].filter(Boolean).join(" · ");
-    items.push({ id: "goal", label: goalView.objective, description: meta, group: "目标" });
-  }
-
-  if (subagentRows.length === 0) {
-    items.push({ id: "no-sub", label: DSH_EMPTY_SUBAGENTS, group: "子代理（0）" });
-  } else {
-    for (const subagent of subagentRows) {
-      items.push({
-        id: `sub:${subagent.id}`,
-        label: subagent.label,
-        description: [subagent.running ? "运行中" : "空闲", subagent.diagnostic ? "诊断" : "", subagent.modeLabel]
-          .filter(Boolean)
-          .join(" · "),
-        group: `子代理（${subagentRows.length}）`,
-        actionable: true,
-      });
-    }
-  }
-
-  if (skillRows.length === 0) {
-    items.push({ id: "no-skill", label: DSH_EMPTY_SKILLS, group: "技能（0）" });
-  } else {
-    for (const skill of skillRows) {
-      items.push({
-        id: `skill:${skill.name}`,
-        label: `/${skill.name}`,
-        description: [skill.description, skill.modelInvocable ? "" : "仅用户可调", skill.whenToUse]
-          .filter(Boolean)
-          .join(" · "),
-        group: `技能（${skillRows.length}）`,
-      });
-    }
-  }
-
-  pushChatSheet(
-    {
-      kind: "dsh",
-      title: "DSH 工具",
-      ...(failure && failure.status === "rejected" ? { note: `读取失败：${describeError(failure.reason)}` } : {}),
-      items,
-    },
-    (id) => {
-      if (!id.startsWith("sub:")) return;
-      const childId = id.slice("sub:".length);
-      const row = subagentRows.find((item) => item.id === childId);
-      closeChatSheet();
-      // 子代理历史是纯文本流，仍然在 WebView 里画（要滚动与角色前缀排版，收益不高）
-      leaveFlutterThen(() => void openDshSubagentHistory(sessionId, childId, row?.label ?? "子代理"));
-    },
-  );
-}
-
-
-/**
- * 在 Flutter 里打开一个选择面板。
- *
- * 模型 / 思考 / 安全 / 提示词四类数据都要异步取（模型列表、运行时命令表），
- * 所以这里先推一个「加载中」再推真实内容 —— 手机上看不出差别，但不会出现
- * 点了 chip 之后弹层里空着一秒的错觉。
- */
-async function openFlutterPicker(kind: string, query = "", trail: string[] = []): Promise<void> {
-  if (!runtime || !activeSessionId) return;
-  const session = runtime.store.session(activeSessionId);
-  const prefs = resolveSessionPrefs(session, learnedPrefs.get(epKey(activeSessionId)));
-
-  if (kind === "model") {
-    setFlutterPicker({ kind, title: "选择模型", searchable: true, empty: "正在加载模型列表…", items: [] });
-    let sections: ModelPickerSection[];
-    try {
-      sections = await loadModelSections();
-    } catch (error) {
-      setFlutterPicker({ kind, title: "选择模型", empty: `模型列表加载失败：${describeError(error)}`, items: [] });
-      return;
-    }
-    const filtered = query.trim() ? filterModelSections(sections, query) : sections;
-    setFlutterPicker(buildModelPicker(filtered, modelKey(prefs.provider, prefs.modelId)));
-    return;
-  }
-
-  if (kind === "thinking") {
-    // 服务端没有「这个模型支持哪些档位」的同步来源，全列出来让用户自己试 ——
-    // 与 Web 版一致：选了不支持的档位，服务端会忽略它。
-    const levels = LEVEL_ORDER;
-    setFlutterPicker(buildThinkingPicker(levels, prefs.thinkingLevel, thinkingLabel, thinkingHint));
-    return;
-  }
-
-  if (kind === "security") {
-    const state = parseSecurityState(runtime.store.state.security);
-    setFlutterPicker(buildSecurityPicker(securityChoices(state, activeSessionId)));
-    return;
-  }
-
-  if (kind === "prompt") {
-    setFlutterPicker({ kind, title: "提示词", searchable: true, empty: "正在读取提示词…", items: [] });
-    const entries = await loadPromptEntries();
-    promptTemplateCount = entries.length;
-    const filtered = filterPromptEntries(entries, query);
-    setFlutterPicker({
-      kind,
-      title: "提示词",
-      subtitle: entries.length > 0 ? `共 ${entries.length} 个模板，选中后插入输入框` : undefined,
-      searchable: true,
-      empty: entries.length === 0 ? PROMPT_EMPTY_HINT : "没有匹配的提示词",
-      items: filtered.map((entry) => ({
-        id: entry.name,
-        label: `/${entry.name}`,
-        description: entry.description || undefined,
-        insert: promptInsertText(entry),
-      })),
-    });
-    return;
-  }
-
-  if (kind === "slash") {
-    // 一次拉全再推：运行时命令与提示词都不大，分两段先给内置命令再补
-    // 会让面板在用户已经输入搜索词时闪一下（Web 版是老式弹层，看不出这个问题）。
-    const { client, store } = runtime;
-    const target = store.targetOf(activeSessionId);
-    if (!target) {
-      setFlutterPicker({ kind, title: "斜线命令", empty: "这个会话还没有可用的运行时", items: [] });
-      return;
-    }
-    setFlutterPicker({ kind, title: "斜线命令", searchable: true, empty: "正在读取命令…", items: [] });
-    const runtimeCommands = await client.listRuntimeCommands(activeSessionId, target).catch(() => []);
-    const all = mergeSlashItems({ runtime: runtimeCommands, builtin: BUILTIN_SLASH });
-    const filtered = filterSlashItems(all, query);
-    const items = groupSlashItems(filtered).flatMap((section) =>
-      section.items.map((item) => ({
-        id: item.name,
-        label: `/${item.name}`,
-        description: item.description || undefined,
-        section: section.title,
-        insert: slashText(item),
-      })),
-    );
-    setFlutterPicker({
-      kind,
-      title: "斜线命令",
-      subtitle: all.length > 0 ? `共 ${all.length} 个命令` : undefined,
-      searchable: true,
-      empty: items.length === 0 ? "没有匹配的命令" : "",
-      items,
-    });
-    return;
-  }
-
-  if (kind === "mention") {
-    const { client, store } = runtime;
-    const session = store.session(activeSessionId);
-    const projectId = session?.projectId ?? activeProjectId;
-    const project = store.projects().find((item) => item.id === projectId);
-    if (!projectId || !project) {
-      setFlutterPicker({ kind, title: "引用文件", empty: "没有可用项目：请先在桌面端添加项目目录", items: [] });
-      return;
-    }
-    setFlutterPicker({
-      kind,
-      title: "引用文件",
-      searchable: true,
-      empty: "正在读取目录…",
-      context: joinPath(trail),
-      items: [],
-    });
-    let nodes: FileNode[];
-    try {
-      nodes = await client.listFiles(projectId, joinPath(trail));
-    } catch (error) {
-      // 文件接口当年不带跨域头，靠错误文案指路（与 Web 版一致）
-      setFlutterPicker({ kind, title: "引用文件", empty: `读取目录失败：${describeError(error)}`, items: [] });
-      return;
-    }
-    const view = buildMentionView(projectLabel(project) ?? "项目", trail, nodes, query);
-    const items: ChatPickerItem[] = [];
-    if (trail.length > 0) items.push({ id: `dir:${joinPath(trail.slice(0, -1))}`, label: "..", description: "上一级" });
-    for (const node of view.nodes) {
-      if (isDirectory(node)) {
-        // 目录用 `dir:` 前缀：Dart 看到它不改输入框、只回一条 pickerSelect 让这里往下钻
-        items.push({ id: `dir:${node.relativePath}`, label: `${node.name}/`, description: "目录" });
-        continue;
-      }
-      items.push({ id: `file:${node.relativePath}`, label: node.name, description: node.relativePath, insert: mentionText(node) });
-    }
-    setFlutterPicker({
-      kind,
-      title: "引用文件",
-      subtitle: view.crumbs.map((crumb) => crumb.label).join(" / "),
-      searchable: true,
-      empty: view.nodes.length > 0 ? "没有匹配的文件" : "这个目录里没有文件",
-      context: joinPath(trail),
-      items,
-    });
-    return;
-  }
-
-  if (kind === "history") {
-    // 条目来源与 Web 版一致：`collectJumpTargets(sessionHistory)`。
-    // 选中后由 **Dart 自己滚**（它手里就有这份历史的 id → 下标），
-    // 不绕回 WebView 去操作一个用户看不见的 DOM。
-    const all = collectJumpTargets(sessionHistory);
-    const items = filterJumpTargets(all, query);
-    setFlutterPicker({
-      kind,
-      title: `跳转到消息（${items.length}）`,
-      subtitle: "只覆盖已加载的历史，更早的消息要先向上滚动加载",
-      searchable: true,
-      empty: all.length === 0 ? "这个会话里还没有可定位的消息" : "没有匹配的消息",
-      items: items.map((item) => ({
-        id: item.id,
-        label: `${roleLabel(item.role)} · ${item.preview}`,
-        description: item.timestamp ? fmtShortTime(item.timestamp) : undefined,
-      })),
-    });
-    return;
-  }
-
-  if (kind === "context") {
-    const usage = contextUsage;
-    setFlutterPicker({
-      kind,
-      title: "上下文用量",
-      subtitle: usage ? contextChipLabel(usage) : "还没有拿到上下文数据",
-      items: [
-        {
-          id: "info",
-          label: usage ? `已用 ${usage.contextPercent.toFixed(1)}%` : "未知",
-          description: usage
-            ? [
-                `输入 ${shortTokens(usage.inputTokens ?? 0)}`,
-                `输出 ${shortTokens(usage.outputTokens ?? 0)}`,
-                usage.cacheHitPercent === undefined ? "" : `缓存命中 ${usage.cacheHitPercent.toFixed(0)}%`,
-              ]
-                .filter(Boolean)
-                .join(" · ")
-            : "跑一轮之后才有数据",
-          selected: true,
-        },
-        {
-          id: "compact",
-          label: "压缩上下文",
-          description: "把历史压成摘要，腾出窗口（当前轮结束后才生效）",
-          danger: usage ? usage.contextOverflow : false,
-        },
-      ],
-    });
-  }
-}
-
-/** 读一次运行时命令表里的提示词模板（`source: "prompt"`）。 */
-async function loadPromptEntries(): Promise<PromptEntry[]> {
-  if (!runtime) return [];
-  const { client, store } = runtime;
-  const sourceSession = promptCommandSource(store.state.runtimes, activeSessionId);
-  const target = sourceSession ? store.targetOf(sourceSession) : undefined;
-  if (!sourceSession || !target) return [];
-  try {
-    const commands = await client.listRuntimeCommands(sourceSession, target);
-    return importedPrompts(commands);
-  } catch {
-    return [];
-  }
-}
-
-/** 选中一个面板项之后落地（模型 / 思考 / 安全 / 提示词 / 上下文）。 */
-async function applyFlutterPickerChoice(kind: string, id: string): Promise<void> {
-  if (!runtime || !activeSessionId) return;
-  if (kind === "model") {
-    const sections = await loadModelSections();
-    const option = sections.flatMap((section) => section.models).find((model) => model.key === id);
-    if (!option) {
-      pushFlutterNotice("这个模型已经不在列表里了");
-      return;
-    }
-    await applyModel(option.provider, option.modelId, option.name);
-    return;
-  }
-  if (kind === "thinking") {
-    await applyThinking(id);
-    return;
-  }
-  if (kind === "security") {
-    await applySecurityLevel(id === "" ? null : id);
-    return;
-  }
-  if (kind === "prompt") {
-    const entry = (await loadPromptEntries()).find((item) => item.name === id);
-    if (!entry) return;
-    insertAtCursor(promptInsertText(entry));
-    pushFlutterNotice(`已插入 /${entry.name}`);
-    return;
-  }
-  if (kind === "context" && id === "compact") {
-    await compactContext(activeSessionId);
-  }
-}
-
-/**
- * Dart 侧接管聊天数据面的总开关。
- *
- * 为什么留开关：数据面搬到 Dart 之后，「连不上 / 空列表」这类问题的定位点从
- * WebView 挪到了 Dart，现场排障需要一条立刻退回旧路径的口子。值 `off` 关掉。
- */
-const NATIVE_CHAT_KEY = "pideck-native-chat";
-
-function nativeChatEnabled(): boolean {
-  try {
-    return localStorage.getItem(NATIVE_CHAT_KEY) !== "off";
-  } catch {
-    return true;
-  }
-}
-
-/**
- * 在 Flutter 里打开某个会话的聊天页。
- *
- * 顺序很重要：**先让 WebView 把这个会话打开**（历史、SSE、reducer 都在它身上），
- * 再推快照、再 startActivity。否则 Flutter 拿到的是一份不属于它的空会话。
- */
-async function openFlutterChatPage(sessionId: string): Promise<boolean> {
-  // 冷启动可能一个会话都没有（或还没恢复出 activeSessionId）：
-  // 这时也照样把 Flutter 页打开，让它自己画空态，不要拿空串去 openSession。
-  const needsSession = sessionId !== "" && activeSessionId !== sessionId;
-  flutterChatMirror = new FlutterChatMirror({ push: (json) => pushFlutterChat(json) });
-  flutterChatOpen = true;
-  flutterSidebarJson = "";
-  syncFlutterChat();
-  flutterChatMirror.flush();
-  syncFlutterSidebar();
-  // 提示词模板数量决定「提示词」按钮出不出现：这里顺手拉一次，
-  // 拉不到就保持 0（按钮不显示），不阻塞开页。
-  void loadPromptEntries().then((entries) => {
-    if (entries.length !== promptTemplateCount) {
-      promptTemplateCount = entries.length;
-      syncFlutterChat();
-    }
-  });
-  // **先把 Flutter 页盖上来，再去背后开会话**。
-  // 反过来的话 `openSession()` 会先渲染一遍网页版（侧栏 + 空聊天区），
-  // 用户看到的就是「闪一下网页版再进原生页」。
-  // 端点 + token 走 intent extra 带给 Dart 运行时：聊天页自己要开帧流、拉历史，
-  // 用的是「此刻真正连着的那台」，不是设置页缓存里那份可能过期的。
-  const endpointUrl = runtime?.pairing.baseUrl ?? "";
-  const endpointToken = runtime?.pairing.token ?? "";
-  const opened = await openFlutterPage("chat", sessionId, {
-    endpoint: endpointUrl,
-    token: endpointToken,
-    nativeRuntime: nativeChatEnabled() && endpointUrl !== "" && sessionId !== "",
-  });
-  if (!opened) {
-    flutterChatOpen = false;
-    flutterChatMirror?.dispose();
-    flutterChatMirror = null;
-    return false;
-  }
-  if (needsSession) {
-    // 页已经挡住整屏了，这一跳用户看不见；快照会通过 mirror 流式推过去
-    try {
-      await openSession(sessionId);
-    } catch (error) {
-      console.warn("[shell] 背后加载会话失败", error);
-    }
-  }
-  if (flutterWorkspace.open) void reloadFlutterWorkspace();
-  return true;
-}
-
-/**
- * Flutter 聊天页回传的动作。
- *
- * 和设置页一样只做「摊平」，具体行为全走 Web 版同一条路径：
- * 发消息就是往输入框写进去再调 `send()`，停止就是 `stop()`，
- * 这样两个界面的行为不会分叉（包括计划模式、排队/插话这些分支）。
- */
-/**
- * Flutter 侧传过来的 `[{ data, mimeType, width, height }]` → `PendingImage[]`。
- *
- * Dart 那边发的是**裸** base64（原生压完直接给的），这里补回 data URL 前缀，
- * 后面就走与 Web 版完全相同的 `send()`。`bytes` 由 base64 长度反推 ——
- * 只为在缩略图下面显示体积，不必精确到字节。
- */
-function attachmentsOf(raw: unknown): PendingImage[] {
-  if (!Array.isArray(raw)) return [];
-  const out: PendingImage[] = [];
-  for (const item of raw) {
-    if (out.length >= MAX_IMAGES) break;
-    if (!item || typeof item !== "object") continue;
-    const record = item as Record<string, unknown>;
-    const data = typeof record.data === "string" ? record.data : "";
-    if (!data) continue;
-    const mimeType = typeof record.mimeType === "string" && record.mimeType ? record.mimeType : "image/jpeg";
-    const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
-    out.push({
-      dataUrl: `data:${mimeType};base64,${data}`,
-      mimeType,
-      width: typeof record.width === "number" ? record.width : 0,
-      height: typeof record.height === "number" ? record.height : 0,
-      bytes: Math.max(0, Math.floor((data.length * 3) / 4) - padding),
-    });
-  }
-  return out;
-}
-
-function dispatchFlutterChatAction(action: Record<string, unknown>): void {
-  if (!runtime) return;
-  const type = typeof action.type === "string" ? action.type : "";
-  const text = (key: string): string => (typeof action[key] === "string" ? (action[key] as string) : "");
-
-  switch (type) {
-    case "close":
-      flutterChatOpen = false;
-      flutterSidebarJson = "";
-      flutterChatMirror?.dispose();
-      flutterChatMirror = null;
-      // 用户按「返回网页版」：接下来的会话点击都走 WebView，别把人又弹回去
-      chatUseWebView = true;
-      // 记住这个选择：下次启动直接进网页版（否则每次重启又被 Flutter 盖住）
-      setShellMode(false);
-      void closeFlutterPage();
-      return;
-    case "workspaceOpen":
-      void openFlutterWorkspace();
-      return;
-    case "workspaceClose":
-      closeFlutterWorkspace();
-      return;
-    case "workspaceTab": {
-      const tab = text("tab");
-      flutterWorkspace.tab = tab === "git" || tab === "todos" ? tab : "files";
-      flutterWorkspace.stack = [];
-      flutterWorkspace.preview = null;
-      void reloadFlutterWorkspace();
-      return;
-    }
-    case "workspaceEnter": {
-      const path = text("path");
-      if (path) flutterWorkspace.stack = [...flutterWorkspace.stack, lastSegment(path)];
-      flutterWorkspace.preview = null;
-      void reloadFlutterWorkspace();
-      return;
-    }
-    case "workspaceCrumb": {
-      const depth = Number(action["depth"]);
-      if (Number.isFinite(depth) && depth >= 0) {
-        flutterWorkspace.stack = flutterWorkspace.stack.slice(0, depth);
-        flutterWorkspace.preview = null;
-        void reloadFlutterWorkspace();
-      }
-      return;
-    }
-    case "workspaceRefresh":
-      void reloadFlutterWorkspace();
-      return;
-    case "workspacePreview":
-      void previewFlutterWorkspaceFile(text("path"));
-      return;
-    case "workspacePreviewClose":
-      flutterWorkspace.preview = null;
-      flutterWorkspace.snapshot = { ...flutterWorkspace.snapshot, preview: null };
-      syncFlutterChat();
-      return;
-    case "workspaceMention": {
-      const path = text("path");
-      if (!path) return;
-      closeFlutterWorkspace();
-      insertAtCursor(`@${path}`);
-      pushFlutterNotice("已引用到输入框");
-      return;
-    }
-    case "resume": {
-      // Flutter 页盖着 WebView 时 MainActivity 是 paused，`visibilitychange` 不会触发，
-      // `resumeAfterBackground()` 就不会跑 —— 顶栏 / 选择面板 / 侧栏停在进后台前那份快照上。
-      // Dart 回到前台发这个动作，让它走**同一条**对账路径（不另开一套逻辑）。
-      void resumeAfterBackground().then((_) => syncFlutterChat());
-      return;
-    }
-    case "exitApp": {
-      // Flutter 页上的返回键。shell 模式下它盖着整屏，退回去就是"什么都没有"的网页版，
-      // 所以直接退出 App；用户之前明确选了网页版，就按「返回网页版」处理。
-      if (!shellModeEnabled()) return;
-      void closeFlutterPage();
-      void CapacitorApp.exitApp();
-      return;
-    }
-    case "send": {
-      const body = text("text").trim();
-      if (!refs) return;
-      // Flutter 侧只能把图当 base64 传过来（原生已按 1600px/0.82 压过）。
-      // 塞进 currentImages() 之后复用与 Web 版完全相同的发送链路。
-      const images = attachmentsOf(action.images);
-      if (images.length > 0) {
-        const list = currentImages();
-        list.length = 0;
-        list.push(...images);
-        renderAttachments();
-      }
-      if (!body && images.length === 0) return;
-      refs.composer.value = body;
-      autosize(refs.composer);
-      void send();
-      return;
-    }
-    case "stop":
-      void stop();
-      return;
-    case "respond": {
-      const requestId = text("requestId");
-      if (!requestId || !activeSessionId) return;
-      const pending = runtime.store.pendingFor(activeSessionId).find((item) => item.requestId === requestId);
-      if (!pending) return;
-      const response =
-        action.response && typeof action.response === "object" && !Array.isArray(action.response)
-          ? (action.response as Record<string, unknown>)
-          : {};
-      void respondToUi(pending, response);
-      return;
-    }
-    case "messageAction": {
-      const id = text("id");
-      const role = text("role") || "assistant";
-      const action = text("action");
-      if (!id) return;
-      if (!action) {
-        // 老调用（没带 action）：回 WebView 弹它自己的菜单
-        leaveFlutterThen(() => openMessageActions(id, role));
-        return;
-      }
-      if (!isMessageAction(action)) return;
-      const message = findMessageById(id);
-      const original = message ? messageText(message) : "";
-      // 编辑时 text 是新内容，其余动作用原文（copy / 删除都按原文）；
-      // 删除的二次确认已经在 Flutter 那边做过，这里直接执行。
-      const body = action === "edit" ? text("text") : text("text") || original;
-      if (action === "edit" && !body.trim()) {
-        void pushFlutterNotice("内容不能为空");
-        return;
-      }
-      void applyMessageAction(action, id, body);
-      return;
-    }
-    case "refresh":
-      if (activeSessionId) void reloadHistory(activeSessionId);
-      return;
-    case "chip": {
-      // 顶栏 chip：计划模式直接切，其余弹选择面板
-      const key = text("key");
-      if (key === "plan") {
-        planModeOn = !planModeOn;
-        renderComposerState();
-        syncFlutterChat();
-        void pushFlutterNotice(planModeOn ? "计划模式已开启：本轮只做只读分析并给计划" : "已切回普通模式");
-        return;
-      }
-      if (key === "dsh") {
-        void openFlutterDshSheet();
-        return;
-      }
-      if (key === "model" || key === "thinking" || key === "security") void openFlutterPicker(key);
-      if (key === "history") void openFlutterPicker("history");
-      return;
-    }
-    case "context":
-      void openFlutterPicker("context");
-      return;
-    case "prompts":
-      void openFlutterPicker("prompt");
-      return;
-    case "sheetPick": {
-      const id = text("id");
-      const pick = flutterChatSheetPick;
-      if (pick && id) pick(id);
-      return;
-    }
-    case "sheetClose":
-      closeChatSheet();
-      return;
-    case "slash":
-      void openFlutterPicker("slash");
-      return;
-    case "mention":
-      void openFlutterPicker("mention");
-      return;
-    case "sendMode":
-      sendMode = toggleSendMode(sendMode);
-      renderComposerState();
-      syncFlutterChat();
-      void pushFlutterNotice(sendModeSwitchToast(sendMode));
-      return;
-    case "pickerQuery": {
-      const kind = text("kind");
-      const query = text("query");
-      if (!kind) return;
-      // `context` 是面板自己带出来的位置（目前只有 @ 提及的目录用），Dart 只负责原样带回
-      const context = text("context");
-      void openFlutterPicker(kind, query, context ? context.split("/").filter(Boolean) : []);
-      return;
-    }
-    case "pickerSelect": {
-      const kind = text("kind");
-      const id = text("id");
-      if (!kind) return;
-      // @ 提及的目录是「原地往下钻」：面板不关，直接换成新目录的内容
-      if (kind === "mention" && id.startsWith("dir:")) {
-        void openFlutterPicker("mention", "", id.slice(4).split("/").filter(Boolean));
-        return;
-      }
-      // 先关面板再执行：压缩上下文要好几秒，面板一直开着会让人以为没点中
-      setFlutterPicker(null);
-      void applyFlutterPickerChoice(kind, id).then(() => syncFlutterChat());
-      return;
-    }
-    case "closePicker":
-      setFlutterPicker(null);
-      return;
-    default:
-      return;
-  }
-}
-
 function openSettings(): void {
   if (!runtime) return;
   closeSheet();
-  void openSettingsView();
-}
-
-/**
- * 设置页有两套实现：原生壳里是 Flutter（迁移目标），浏览器 / 老包里是 Web 版。
- *
- * 走「视图迁移」：数据仍由本文件组装（`settingsData()`），动作仍由下面这套 handler 执行，
- * Flutter 只负责画 —— 主题、通知、设备切换这些状态本来就在 WebView 里，
- * 让 Flutter 再存一份只会两套状态打架。
- */
-async function openSettingsView(): Promise<void> {
-  if (await isFlutterHostAvailable()) {
-    await openFlutterSettingsPage();
-    return;
-  }
   openWebSettingsPage();
-}
-
-/**
- * 打开 Flutter 设置页。
- *
- * 关键在顺序：**先 push 数据，再 startActivity**。原生把 JSON 缓存在插件里，
- * Flutter 首帧用 getSettings() 同步取走，不会先白一下再等一次往返。
- * 概况类数据（模型/技能/扩展）要请求服务端，等 `refreshSettings()` 回来会再推一次。
- */
-async function openFlutterSettingsPage(): Promise<void> {
-  flutterSettingsOpen = true;
-  await pushFlutterSettings(JSON.stringify(settingsData()));
-  const opened = await openFlutterPage("settings");
-  if (!opened) {
-    // 插件在、但 Activity 没起来（极端情况），不能让用户对着空屏。
-    flutterSettingsOpen = false;
-    openWebSettingsPage();
-    return;
-  }
-  void refreshSettings();
 }
 
 function openWebSettingsPage(): void {
@@ -6731,92 +5157,6 @@ function openWebSettingsPage(): void {
   void refreshSettings();
 }
 
-/**
- * Flutter 设置页回传的动作分发。
- *
- * 只做「把 JSON 摊平成 handler 调用」，不含任何业务逻辑 —— 这样两个界面的行为
- * 不会分叉（改一处两边都变）。
- */
-function dispatchFlutterSettingsAction(action: Record<string, unknown>): void {
-  if (!runtime) return;
-  const handlers = getSettingsHandlers();
-  const type = typeof action.type === "string" ? action.type : "";
-  const text = (key: string): string => (typeof action[key] === "string" ? (action[key] as string) : "");
-
-  switch (type) {
-    case "close":
-      handlers.onClose();
-      return;
-    case "refresh":
-      handlers.onRefresh();
-      return;
-    case "theme": {
-      const value = text("value");
-      if (value) handlers.onTheme(value);
-      return;
-    }
-    case "notify":
-      handlers.onToggleNotify(action.enabled === true);
-      return;
-    case "shell":
-      handlers.onToggleShell(action.native === true);
-      return;
-    case "deviceActivate": {
-      const id = text("id");
-      if (id) handlers.onDeviceActivate(id);
-      return;
-    }
-    case "addDevice":
-      handlers.onAddDevice();
-      return;
-    case "disconnect":
-      handlers.onDisconnect();
-      return;
-    case "openUsage":
-      handlers.onOpenUsage();
-      return;
-    case "sseProbe":
-      // 调试用：流式探针页要拿当前会话 id 才能测会话流
-      void openFlutterPage("sse-probe", activeSessionId ?? undefined);
-      return;
-    case "chatPreview":
-      // 调试用：拿当前会话开 Flutter 聊天页（还没替换主入口）
-      if (activeSessionId) void openFlutterChatPage(activeSessionId);
-      return;
-    case "toggleSkill": {
-      const sourceId = text("sourceId");
-      const name = text("name");
-      const section = settingsSkills.find((item) => item.sourceId === sourceId);
-      if (section && name) handlers.onToggleSkill(section, name, action.enabled === true);
-      return;
-    }
-    case "toggleExtension": {
-      const key = text("key");
-      const extension = settingsExtensions.find((item) => item.key === key);
-      if (extension) handlers.onToggleExtension(extension, action.enabled === true);
-      return;
-    }
-    case "dshAction": {
-      const id = text("id");
-      const verb = text("action");
-      const plugin = settingsDshPlugins.find((item) => item.id === id);
-      if (plugin && (verb === "run" || verb === "stop" || verb === "uninstall")) {
-        handlers.onDshPluginAction(plugin, verb);
-      }
-      return;
-    }
-    case "dshInstall": {
-      const idPrefix = text("idPrefix");
-      const name = text("name");
-      if (!idPrefix || !name) return;
-      handlers.onDshPluginInstall({ idPrefix, name, purpose: text("purpose") });
-      return;
-    }
-    default:
-      return;
-  }
-}
-
 let settingsHandlers: SettingsHandlers | null = null;
 
 function getSettingsHandlers(): SettingsHandlers {
@@ -6824,42 +5164,16 @@ function getSettingsHandlers(): SettingsHandlers {
   return settingsHandlers;
 }
 
-/** 两个界面共用同一套动作，行为不会分叉。 */
 function createSettingsHandlers(): SettingsHandlers {
-  /**
-   * 提示：Flutter 页盖在 WebView 上时，WebView 的 toast 在下面的窗口里，用户看不见。
-   * 所以设置页是 Flutter 版时改走原生推送到 Dart 侧的 SnackBar。
-   */
   const notify = (message: string): void => {
-    if (flutterSettingsOpen) {
-      void pushFlutterNotice(message);
-      return;
-    }
     toast(message);
   };
 
   return {
-    onClose: () => closeSettings(),    onTheme: (mode) => {
+    onClose: () => closeSettings(),
+    onTheme: (mode) => {
       setThemeMode(mode as ThemeMode);
       renderSettings();
-    },
-    onToggleShell: (native) => {
-      setShellMode(native);
-      renderSettings();
-      if (native) {
-        // 打开开关就立刻切过去：用户点这个开关就是为了看到原生界面。
-        void enterFlutterShell();
-      } else {
-        // 关掉时如果正停在 Flutter 页上，先把页关掉再画网页版，
-        // 否则页还盖在上面，用户会以为开关没生效。
-        if (flutterChatOpen) {
-          flutterChatOpen = false;
-          chatUseWebView = true;
-          flutterChatMirror?.dispose();
-          flutterChatMirror = null;
-          void closeFlutterPage();
-        }
-      }
     },
     onToggleNotify: (enabled) => {
       setTaskNotifyEnabled(enabled);
@@ -6978,11 +5292,6 @@ function createSettingsHandlers(): SettingsHandlers {
 function closeSettings(): void {
   settingsPage?.destroy();
   settingsPage = null;
-  // Web 版关掉后什么都没了；Flutter 版还盖在上面，得让原生 finish 掉。
-  if (flutterSettingsOpen) {
-    flutterSettingsOpen = false;
-    void closeFlutterPage();
-  }
 }
 
 /**
@@ -7253,8 +5562,8 @@ function confirmRemoveProject(projectId: string): void {
 /**
  * 真的移除项目（二次确认由调用方负责）。
  *
- * Web 的确认弹层与 Flutter 的确认框都走这一个函数 —— 两边各写一份的结果
- * 一定是「网页版删干净了、Flutter 版漏了清 activeProjectId」。
+ * 网页版与桌面网页版共用这一个函数 —— 各写一份的结果一定是
+ * 「一处删干净了、另一处漏了清 activeProjectId」。
  */
 async function removeProject(projectId: string): Promise<void> {
   if (!runtime) return;
@@ -7279,10 +5588,6 @@ function bootstrap(): void {
   armSplashWatchdog();
   // 首次跑多端版本：只让当前这台同时连接，其余等用户主动开
   ensureMultiEndpointDefaults();
-  // 主题一变就把新快照推过去：Flutter 主界面盖在整屏上，它不跟着变就成了「设置改了没反应」
-  onThemeChange(() => {
-    if (flutterChatOpen) syncFlutterChat();
-  });
 
   const saved = loadPairing();
   // 同时连接的是「启用的那几台」；一台都没启用就退回单台（兼容老数据）
@@ -7297,8 +5602,6 @@ function bootstrap(): void {
   void connectAll(list, { activeBaseUrl: saved?.baseUrl }).then(
     () => {
       hideSplash();
-      // 连上就交给 Flutter 页（它一上来就盖住整屏，用户不会看到网页版）
-      void enterFlutterShell();
     },
     (error: unknown) => {
       renderPairing({

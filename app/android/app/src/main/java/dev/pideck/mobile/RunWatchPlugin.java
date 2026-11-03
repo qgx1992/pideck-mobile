@@ -50,7 +50,7 @@ public class RunWatchPlugin extends Plugin {
      * 旧版的「JS 报告可见性」接口。
      *
      * 已废弃且故意保留成 no-op：JS 只能看到 WebView 的 visibilityState，
-     * 跳进 Flutter 页时那个值会变成 hidden，而 App 还在前台。
+     * 跳进桌面网页版时那个值会变成 hidden，而 App 还在前台。
      * 可见性现在只由 PiDeckApp 的 Activity 计数决定，外部不要覆盖。
      */
     @Deprecated

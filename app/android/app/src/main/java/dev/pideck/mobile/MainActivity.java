@@ -21,8 +21,6 @@ public class MainActivity extends BridgeActivity {
         // SSE 走原生栈：CapacitorHttp 不支持流式响应体，所以自己读流
         // （见 platform/sse-stream.ts 与 SsePlugin.java 的注释）
         registerPlugin(SsePlugin.class);
-        // WebView → Flutter 页的开关（add-to-app）
-        registerPlugin(FlutterLauncherPlugin.class);
         // 「用桌面网页版」：全屏裸 WebView 打开桌面端自带的那份 UI
         registerPlugin(DesktopWebPlugin.class);
         super.onCreate(savedInstanceState);
@@ -48,8 +46,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
-        // 可见性不再在这里维护：加了 FlutterHostActivity 之后「一个 Activity」的假设不成立，
-        // 统一搬到 PiDeckApp 的 ActivityLifecycleCallbacks（按 started 计数）
+        // 可见性不在这里维护：现在有 MainActivity 与 DesktopWebActivity 两个页面，
+        // 「一个 Activity」的假设不成立，统一由 PiDeckApp 的 ActivityLifecycleCallbacks
+        // 按 started 计数判定（见 PiDeckApp.isAppVisible）
     }
 
     @Override

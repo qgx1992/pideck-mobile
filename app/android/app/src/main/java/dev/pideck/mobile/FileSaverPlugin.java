@@ -14,7 +14,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * 只处理文本（桌面端 `/api/file-content` 只给文本，二进制拿不到字节），
  * JS 侧先把 UTF-8 文本转成 base64 再传进来，这里解码后落盘。
  *
- * 真正的落盘规则在 {@link SavedFiles} —— Flutter 侧走 `pideck/flutter_host` 通道的
+ * 真正的落盘规则在 {@link SavedFiles} —— 桌面网页版之外的入口共用同一份实现，
  * `saveFile` 用的是同一份实现，两边不会分叉。
  */
 @CapacitorPlugin(name = "FileSaver")

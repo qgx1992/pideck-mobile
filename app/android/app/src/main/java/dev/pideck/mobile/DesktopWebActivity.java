@@ -7,9 +7,13 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.webkit.JavascriptInterface;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -21,6 +25,8 @@ import android.widget.FrameLayout;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
 /**
  * 「桌面网页版」全屏页：把自己当成一个浏览器，直接打开 PiDeck 桌面端的 Web 端
@@ -119,6 +125,12 @@ public class DesktopWebActivity extends AppCompatActivity {
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
+            public void onPageFinished(WebView view, String url) {
+                // 系统栏跟着页面主题走：页面底色是浅的就要深色图标，反之亦然。
+                view.evaluateJavascript(THEME_PROBE, null);
+            }
+
+            @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 Log.i(TAG, "载入 " + url);
             }
@@ -154,8 +166,89 @@ public class DesktopWebActivity extends AppCompatActivity {
         });
 
         setContentView(webView);
+        webView.addJavascriptInterface(new ShellBridge(), "PiDeckShell");
         webView.loadUrl(url);
     }
+
+    /**
+     * 页面把「当前是深色还是浅色 + 底色」回传过来，系统栏图标与 WebView 底色跟着变。
+     *
+     * 为什么不能写死：桌面 Web 端主题跟桌面端设置（也可能是跟随系统），
+     * 而 `AppTheme.WebShell` 的静态样式是「深色一套」 —— 浅色主题下会变成白底白图标。
+     */
+    private final class ShellBridge {
+        @JavascriptInterface
+        public void setTheme(final boolean dark, final String background) {
+            new Handler(Looper.getMainLooper()).post(() -> applyBarTheme(dark, background));
+        }
+    }
+
+    private void applyBarTheme(boolean dark, String background) {
+        int background_int = parseColor(background, dark ? Color.parseColor("#101014") : Color.WHITE);
+        if (webView != null) {
+            // 页面自己铺满，但回弹 / 缩放时露出的是 WebView 底色，用同样的色才不跳
+            webView.setBackgroundColor(background_int);
+        }
+        Window window = getWindow();
+        WindowInsetsControllerCompat controller =
+                WindowCompat.getInsetsController(window, window.getDecorView());
+        controller.setAppearanceLightStatusBars(!dark);
+        controller.setAppearanceLightNavigationBars(!dark);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.setStatusBarContrastEnforced(false);
+            window.setNavigationBarContrastEnforced(false);
+        }
+    }
+
+    /** 接受 `#rrggbb` 与 `rgb()/rgba()`（页面取到的是 computed style）。 */
+    private static int parseColor(String value, int fallback) {
+        if (value == null) return fallback;
+        String text = value.trim();
+        if (text.isEmpty() || "transparent".equals(text) || text.startsWith("rgba(0, 0, 0, 0")) return fallback;
+        try {
+            if (text.startsWith("#")) return Color.parseColor(text);
+            int open = text.indexOf('(');
+            int close = text.indexOf(')');
+            if (open > 0 && close > open) {
+                String[] parts = text.substring(open + 1, close).split(",");
+                if (parts.length >= 3) {
+                    int r = (int) Double.parseDouble(parts[0].trim());
+                    int g = (int) Double.parseDouble(parts[1].trim());
+                    int b = (int) Double.parseDouble(parts[2].trim());
+                    double a = parts.length >= 4 ? Double.parseDouble(parts[3].trim()) : 1d;
+                    if (a <= 0.01) return fallback;
+                    return Color.argb((int) Math.round(a * 255), r, g, b);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return fallback;
+    }
+
+    /**
+     * 注入的探测脚本：读页面底色/主题，回报一次；之后监听主题切换（不靠定时器刷）。
+     * 页面不一定有 `data-theme`（桌面 Web 端有自己的主题来源），所以以计算后的背景色为准。
+     */
+    private static final String THEME_PROBE =
+            "(function(){"
+            + "if(window.__pideckShellWatch)return;"
+            + "window.__pideckShellWatch=true;"
+            + "function pick(){var el=document.body||document.documentElement;"
+            + "var bg=getComputedStyle(el).backgroundColor;"
+            + "if(!bg||bg==='transparent'||bg.indexOf('rgba(0, 0, 0, 0)')===0){bg=getComputedStyle(document.documentElement).backgroundColor;}"
+            + "return bg;}"
+            + "function report(){try{var bg=pick();var m=bg&&bg.match(/rgba?\\((\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)/);"
+            + "var dark=true;"
+            + "if(m){dark=(0.299*(+m[1])+0.587*(+m[2])+0.114*(+m[3]))<140;}"
+            + "else{var t=(document.documentElement.getAttribute('data-theme')||'');dark=t.indexOf('dark')>=0;}"
+            + "if(window.PiDeckShell&&window.PiDeckShell.setTheme)window.PiDeckShell.setTheme(dark,bg||'');"
+            + "}catch(e){}}"
+            + "report();"
+            + "try{new MutationObserver(report).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','class','style']});}catch(e){}"
+            + "try{new MutationObserver(report).observe(document.body,{attributes:true,attributeFilter:['class','style']});}catch(e){}"
+            + "try{window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',report);}catch(e){}"
+            + "document.addEventListener('visibilitychange',report);"
+            + "})();";
 
     /**
      * 图片附件（桌面 Web 端用 `<input type=file>`）：交给系统文件选择器。

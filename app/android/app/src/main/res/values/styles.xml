@@ -30,12 +30,12 @@
 
 
     <!--
-      Flutter 宿主页的专属主题：这里是**真 edge-to-edge**。
-      WebView 那边为了状态栏可控退出了强制 edge-to-edge（见 AppTheme.NoActionBar），
-      但 Flutter 页自己会画到状态栏/手势条底下，还要让两条栏透明才能真正"跟着主题变"，
-      否则会看到 AppTheme.NoActionBar 里那条固定深灰的状态栏色带（0.2.1 的实测截图）。
+      桌面网页版（DesktopWebActivity）的专属主题：这里是**真 edge-to-edge**。
+      Capacitor 那边的 AppTheme.NoActionBar 为了状态栏可控退出了强制 edge-to-edge，
+      但桌面网页版要画到状态栏/手势条底下，两条栏必须透明，图标明暗由运行时
+      `DesktopWebActivity.applyBarTheme()` 按页面主题切换（写死深色会在浅色主题下变成白底白图标）。
     -->
-    <style name="AppTheme.FlutterHost" parent="AppTheme.NoActionBar">
+    <style name="AppTheme.WebShell" parent="AppTheme.NoActionBar">
         <item name="android:windowOptOutEdgeToEdgeEnforcement">false</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

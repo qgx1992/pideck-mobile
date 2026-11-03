@@ -58,7 +58,7 @@ public class RunWatchService extends Service {
     /**
      * App 是否在前台。唯一真相源在 PiDeckApp（按 Activity started 计数），
      * 这里不再自己存一份：存两份就一定会不同步（踩过：JS 把 WebView 的
-     * visibilityState 当后台报给原生，把正确的判断覆盖掉，在 Flutter 页停留时照样弹通知）。
+     * visibilityState 当后台报给原生，把正确的判断覆盖掉，在别的页面停留时照样弹通知）。
      */
     private static boolean appVisible() {
         return PiDeckApp.isAppVisible();

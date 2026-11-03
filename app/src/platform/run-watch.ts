@@ -35,16 +35,11 @@ export function isRunWatchActive(): boolean {
 /**
  * 「App 真的退到后台了吗」——决定 JS 要不要自己弹通知。
  *
- * 混合栈下 `document.visibilityState === "hidden"` 不等于 App 在后台：
- * 跳进 Flutter 页时 WebView 会被 pause，那个值也会变成 hidden，而用户就在看屏幕。
- * 所以必须同时确认「WebView 没被 Flutter 页盖住」。
- * （回归：0.1.19 上在 Flutter 页停留时任务跑完照样弹通知。）
+ * 唯一信号是 `document.visibilityState`：WebView 是 App 里唯一的界面，
+ * 它变成 hidden 就意味着 App 不在前台。
  */
-export function isAppInBackground(input: {
-  visibilityHidden: boolean;
-  flutterPageOpen: boolean;
-}): boolean {
-  return input.visibilityHidden && !input.flutterPageOpen;
+export function isAppInBackground(input: { visibilityHidden: boolean }): boolean {
+  return input.visibilityHidden;
 }
 
 export interface RunWatchStart {

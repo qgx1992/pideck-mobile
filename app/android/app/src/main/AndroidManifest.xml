@@ -26,23 +26,10 @@
 
         </activity>
 
-        <!-- Flutter 页宿主（add-to-app）：单独一个 Activity，不导出，只能由
-             FlutterLauncherPlugin 或 adb 显式启动。
-             theme 用 NoActionBar：Flutter 自己画整个界面，系统 ActionBar 会多一条。 -->
-        <activity
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
-            android:name=".FlutterHostActivity"
-            android:label="@string/title_activity_main"
-            android:theme="@style/AppTheme.FlutterHost"
-            android:launchMode="singleTop"
-            android:excludeFromRecents="true"
-            android:exported="false"
-            android:windowSoftInputMode="adjustResize" />
-
         <activity
             android:name=".DesktopWebActivity"
             android:label="@string/title_activity_main"
-            android:theme="@style/AppTheme.FlutterHost"
+            android:theme="@style/AppTheme.WebShell"
             android:launchMode="singleTop"
             android:excludeFromRecents="true"
             android:exported="false"
