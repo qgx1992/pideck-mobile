@@ -19,8 +19,17 @@ describe("buildSafeAreaCss", () => {
 		assert.match(css, /padding-bottom: calc\(max\(env\(safe-area-inset-bottom, 0px\), 0\.5rem\) \+ var\(--pideck-safe-bottom, 0px\)\) !important/);
 	});
 
-	it("给画布铺主题底色，否则手势条下面露出窗口黑底", () => {
-		assert.match(buildSafeAreaCss({ top: 0, bottom: 0 }), /html \{ background-color: var\(--color-bg-app, #ffffff\); \}/);
+	it("传了 canvas 才铺画布底色（否则手势条下面露出窗口黑底）", () => {
+		const css = buildSafeAreaCss({ top: 0, bottom: 0 }, { canvas: "var(--color-bg-app, #0b0b0c)" });
+		assert.match(css, /html \{ background-color: var\(--color-bg-app, #0b0b0c\); \}/);
+	});
+
+	// 0.4.7 的坑：启动页也要注入这份样式，而它不定义 --color-bg-app。
+	// 以前无条件铺 html 底色（兜底 #ffffff）→ 扫码时画布是白的 → 相机预览被挡住。
+	it("不传 canvas 时 html 上不许有背景色（启动页要扫码，画布必须透明）", () => {
+		const css = buildSafeAreaCss({ top: 0, bottom: 0 });
+		assert.doesNotMatch(css, /html \{ background/);
+		assert.doesNotMatch(css, /#ffffff/);
 	});
 
 	it("差值为 0 时变量就是 0px（不重叠的设备不该被推走）", () => {

@@ -38,7 +38,8 @@ if (!device) {
 	installDownloadBridge();
 
 	// 系统栏：底部手势条的内边距（原生实测，补 env() 报 0 的设备）与状态栏图标配色
-	startSafeArea();
+	// 只有聊天页给手势条那一条铺画布色（它不扫码；启动页要透明，相机预览在 WebView 下面）
+	startSafeArea({ canvas: "var(--color-bg-app, #0b0b0c)" });
 	startSystemBars();
 
 	const container = navigator as unknown as { serviceWorker?: ServiceWorkerContainer };

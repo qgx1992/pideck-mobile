@@ -20,7 +20,10 @@
         --bad: #ef4444;
       }
       * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-      html, body { margin: 0; height: 100%; }
+      /* html 一层必须透明：相机预览在 WebView 下面，画布不透明就看不见画面。
+         页面底色由 body 自己铺（它铺满视口，所以不影响观感）。 */
+      html { margin: 0; height: 100%; background: transparent; }
+      body { margin: 0; height: 100%; }
       body {
         background: var(--bg);
         color: var(--text);
@@ -117,7 +120,8 @@
       .scan-actions button { background: rgba(24,24,28,0.86); border-color: rgba(255,255,255,0.24); }
       .scan-tip { color: #f2f2f4; font-size: 13px; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
       /* 扫码期间让页面整体透出下面的相机预览（插件只负责起相机，不碰 DOM） */
-      body.barcode-scanner-active { background: transparent; }
+      html.barcode-scanner-active,
+      body.barcode-scanner-active { background: transparent !important; }
       body.barcode-scanner-active > :not(#scan-overlay):not(#toast) { display: none !important; }
     </style>
   </head>

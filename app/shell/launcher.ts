@@ -6,7 +6,7 @@
  * 带着它的 baseUrl/令牌进 `web.html`。换设备就是回到这一页再选。
  */
 
-import { Capacitor, CapacitorHttp } from "@capacitor/core";
+import { Capacitor, CapacitorHttp, registerPlugin } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { installBackHandler } from "./back.ts";
 import {
@@ -22,6 +22,7 @@ import {
 } from "./device.ts";
 import { ensureNotificationPermission, rememberedNotificationDenial } from "./permissions.ts";
 import { applySystemBars } from "./system-bars.ts";
+
 import { startSafeArea } from "./safe-area.ts";
 
 // 启动页固定深色，系统栏也钉在深色：从浅色主题的聊天页退回来时图标不能还留在深色。
@@ -41,6 +42,12 @@ const scanCancel = $<HTMLButtonElement>("scan-cancel");
 const scanTorch = $<HTMLButtonElement>("scan-torch");
 const notifyNotice = $("notify-notice");
 const notifyBtn = $<HTMLButtonElement>("notify-btn");
+
+/** 自定义原生插件：通知设置入口 + 扫码期间把 WebView/窗口压透明。 */
+const NavigationBar = registerPlugin<{
+	openNotificationSettings(): Promise<void>;
+	setScannerTransparency(options: { active: boolean; color?: string }): Promise<void>;
+}>("NavigationBar");
 
 let devices = loadDevices();
 const probeStates = new Map<string, ProbeState>();
@@ -248,7 +255,7 @@ async function scanInline(
 	let torchOn = false;
 
 	scanOverlay.classList.add("show");
-	document.body.classList.add("barcode-scanner-active");
+	const leaveScannerMode = enterScannerMode();
 
 	try {
 		return await new Promise<string | null>((resolve) => {
@@ -302,9 +309,36 @@ async function scanInline(
 		await BarcodeScanner.stopScan().catch(() => undefined);
 		for (const handle of handles) await handle.remove().catch(() => undefined);
 		await BarcodeScanner.removeAllListeners().catch(() => undefined);
-		document.body.classList.remove("barcode-scanner-active");
+		leaveScannerMode();
 		scanOverlay.classList.remove("show");
 	}
+}
+
+/**
+ * 扫码期间把「WebView / 窗口 / 页面画布」三层都压透明。
+ *
+ * 相机预览铺在 WebView **下面**，这三层任何一层不透明都会看不到画面。
+ * 0.4.2 给安全区加样式时往 `html` 上铺了画布底色（`--color-bg-app` 在这页没有定义，
+ * 兜底成白色），扫码就变成了纯色 —— 现在只有聊天页铺画布色，这里再断言一次。
+ */
+function enterScannerMode(): () => void {
+	const root = document.documentElement;
+	const previous = { html: root.style.backgroundColor, body: document.body.style.backgroundColor };
+
+	root.classList.add("barcode-scanner-active");
+	document.body.classList.add("barcode-scanner-active");
+	root.style.backgroundColor = "transparent";
+	document.body.style.backgroundColor = "transparent";
+
+	void NavigationBar.setScannerTransparency({ active: true }).catch(() => undefined);
+
+	return () => {
+		root.classList.remove("barcode-scanner-active");
+		document.body.classList.remove("barcode-scanner-active");
+		root.style.backgroundColor = previous.html;
+		document.body.style.backgroundColor = previous.body;
+		void NavigationBar.setScannerTransparency({ active: false, color: "#0b0b0c" }).catch(() => undefined);
+	};
 }
 
 async function scanPairingCode(): Promise<string | null> {
@@ -361,11 +395,7 @@ notifyBtn.addEventListener("click", () => {
 			return;
 		}
 		// 已经拒过：Android 不会再弹框，只能把用户送到系统页
-		await import("@capacitor/core").then(({ registerPlugin }) =>
-			registerPlugin<{ openNotificationSettings(): Promise<void> }>("NavigationBar")
-				.openNotificationSettings()
-				.catch(() => undefined),
-		);
+		await NavigationBar.openNotificationSettings().catch(() => undefined);
 	})();
 });
 

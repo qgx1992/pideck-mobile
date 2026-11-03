@@ -144,6 +144,12 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
 - 扫码取景是「相机预览在 WebView 下面」：`BarcodeScanner.startScan()` 只负责起相机，
   页面必须自己把背景变透明（`body.barcode-scanner-active`），否则看到的是纯色块。
   `app/shell/launcher.html` 里的遮罩只能靠取景框自身的 `box-shadow`，整屏底色必须 transparent。
+- **启动页的页面画布必须保持透明**：相机预览（`BarcodeScanner.startScan`）铺在 WebView **下面**，
+  `html` / `body` / WebView / 窗口任何一层有底色，取景框里就是一块纯色。踩过两次：一次是
+  `.scan-overlay` 自己带底色，一次是 `safe-area-css.ts` 无条件给 `html` 铺画布色
+  （`--color-bg-app` 在启动页没定义 → 兜底白）。现在画布底色改成显式传参（只有聊天页传），
+  扫码期间 `enterScannerMode()` 再对四层各断言一次透明（原生侧是
+  `NavigationBar.setScannerTransparency`）。守门测试 `app/shell/scanner-transparency.test.ts`。
 - **别信 `env(safe-area-inset-*)`**：Android WebView 在 edge-to-edge 布局下会把它报成 0
   （页面明明被手势条压住），上游 `WebChatApp.tsx:1299` 的 `pb-[env(safe-area-inset-bottom)]`
   于是等于没写、输入框被小横条盖住。壳的解法是 `NavigationBar.getInsets()`（原生量 WebView

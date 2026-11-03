@@ -19,6 +19,7 @@ import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
+import com.getcapacitor.util.WebColor;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
@@ -144,6 +145,36 @@ public class NavigationBarPlugin extends Plugin {
                 call.reject("读取系统栏高度失败: " + error.getMessage(), error);
             }
         });
+    }
+
+    /**
+     * 扫码取景期间把 WebView 与窗口背景压成透明。
+     *
+     * 相机预览（@capacitor-mlkit/barcode-scanning 的 startScan）是铺在 WebView **下面**的
+     * GLSurfaceView / PreviewView，所以 WebView 与窗口任何一层不透明都会挡住它。
+     * MainActivity 在 onCreate 里已经设过一次透明，但主题切换、Activity 重建、
+     * Capacitor 重新应用 backgroundColor 都可能把它盖回去（表现为「取景框里一片纯色」）。
+     * 所以扫码开始/结束时各断言一次，而不是只依赖 onCreate。
+     *
+     * `active=false` 时恢复成 `color`（默认取页面的深色底），没有 color 就保持透明。
+     */
+    @PluginMethod
+    public void setScannerTransparency(PluginCall call) {
+        final boolean active = Boolean.TRUE.equals(call.getBoolean("active", true));
+        final String color = call.getString("color", null);
+        final int target = active ? Color.TRANSPARENT : (color != null ? WebColor.parseColor(color) : Color.TRANSPARENT);
+        getActivity().runOnUiThread(() -> {
+            WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+            if (webView != null) {
+                webView.setBackgroundColor(target);
+                webView.setVisibility(android.view.View.VISIBLE);
+            }
+            Window window = getActivity().getWindow();
+            if (window != null) {
+                window.getDecorView().setBackgroundColor(active ? Color.TRANSPARENT : target);
+            }
+        });
+        call.resolve();
     }
 
     /**

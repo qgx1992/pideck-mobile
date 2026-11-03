@@ -92,7 +92,10 @@ const inset = (side: "top" | "bottom"): string =>
  * `!important` 是必需的：Tailwind 的 utility 层比这层更靠后。
  * 覆盖层用 `--pideck-inset-*`（原生实测的原值），因为它们根本没写过 env()。
  */
-export function buildSafeAreaCss(extra: { top: number; bottom: number }): string {
+export function buildSafeAreaCss(
+	extra: { top: number; bottom: number },
+	options: { canvas?: string } = {},
+): string {
 	const vars = `:root { --pideck-safe-top: ${round(extra.top)}px; --pideck-safe-bottom: ${round(extra.bottom)}px; }`;
 	const rules = PATCHED_CLASSES.map(
 		({ token, side, base }) =>
@@ -100,7 +103,10 @@ export function buildSafeAreaCss(extra: { top: number; bottom: number }): string
 	);
 	// 手势条下面那一条是页面画布（WebView 背景是透明的），给它铺主题底色，
 	// 否则深色主题下会露出窗口背景（黑）而输入框上方是 #121212，能看出接缝。
-	const canvas = "html { background-color: var(--color-bg-app, #ffffff); }";
+	//
+	// 但**只有聊天页能铺**：启动页要扫码，相机预览在 WebView 下面，画布一旦不透明
+	// 取景框里就是纯色（0.4.2 加这条时没区分页面，扫码预览就是这个原因变白的）。
+	const canvas = options.canvas ? [`html { background-color: ${options.canvas}; }`] : [];
 	const overlays = OVERLAY_RULES.map(
 		({ token, sides }) =>
 			`[class*="${token}"] { ${sides.map((side) => `padding-${side}: ${inset(side)};`).join(" ")} }`,

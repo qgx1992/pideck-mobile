@@ -51,7 +51,17 @@ const STYLE_ID = "pideck-safe-area";
 
 /** 真机排查用：`__pideckDebug.insets()` 看到的就是这里报的值（dp）。 */
 export const readNativeInsets = (): Promise<Insets> => NavigationBar.getInsets();
-export function applySafeAreaInsets(insets: Insets, root: HTMLElement = document.documentElement): void {
+/**
+ * 写一次安全区样式。
+ *
+ * `canvas` 只有聊天页传（它不做扫码，需要给手势条那一条铺主题底色）；
+ * 启动页不传 —— 页面画布必须保持透明，否则相机预览看不见。
+ */
+export function applySafeAreaInsets(
+	insets: Insets,
+	canvas?: string,
+	root: HTMLElement = document.documentElement,
+): void {
 	const extra = {
 		top: Math.max(0, insets.top - measureEnvInset("top")),
 		bottom: Math.max(0, insets.bottom - measureEnvInset("bottom")),
@@ -65,19 +75,19 @@ export function applySafeAreaInsets(insets: Insets, root: HTMLElement = document
 		style.id = STYLE_ID;
 		document.head.appendChild(style);
 	}
-	style.textContent = buildSafeAreaCss(extra);
+	style.textContent = buildSafeAreaCss(extra, { canvas });
 }
 
 /**
  * 起安全区同步。返回一个 `refresh()`，键盘弹出/旋转后可以手动再量一次。
  */
-export function startSafeArea(): { refresh: () => void } {
+export function startSafeArea(options: { canvas?: string } = {}): { refresh: () => void } {
 	if (!Capacitor.isNativePlatform()) return { refresh: () => undefined };
 
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const run = (): void => {
 		NavigationBar.getInsets()
-			.then((insets) => applySafeAreaInsets(insets))
+			.then((insets) => applySafeAreaInsets(insets, options.canvas))
 			.catch(() => undefined);
 	};
 	// 布局落定 / 键盘收起后再量：resize 一连串事件里只有最后那次几何是准的
