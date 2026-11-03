@@ -38,7 +38,7 @@ public class RunWatchPlugin extends Plugin {
         }
         String deviceId = call.getString("deviceId", "");
         RunWatchService.start(getContext(), baseUrl, token, titles != null ? titles.toString() : "{}",
-            deviceId == null ? "" : deviceId);
+            deviceId == null ? "" : deviceId, call.getString("page", "chat"));
         call.resolve();
     }
 

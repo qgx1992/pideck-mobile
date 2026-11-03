@@ -91,9 +91,10 @@ if (!device) {
 	installLaunchWatcher({ mode: "push" });
 
 	// 看护：会话一开跑就拉前台服务（后台启动会被系统拒绝，所以必须在前台就开始）
-	const runWatch = startRunWatch(device);
+	const runWatch = startRunWatch(device, { page: "chat" });
 	document.addEventListener("visibilitychange", () => {
 		if (document.visibilityState === "visible") runWatch.poke();
 	});
-	window.addEventListener("pagehide", () => runWatch.stop());
+	// 别在 pagehide 上停服务：从聊天页退回启动页也是一次换页，停掉就会「回到启动页后
+	// 再也不弹通知」。服务跟着进程走，进程没了自然结束；空闲时 startRunWatch 自己会停。
 }

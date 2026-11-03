@@ -14,7 +14,13 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 import type { DeviceRecord } from "./device.ts";
 
 interface RunWatchApi {
-	start(options: { baseUrl: string; token: string; titles: Record<string, string>; deviceId: string }): Promise<void>;
+	start(options: {
+		baseUrl: string;
+		token: string;
+		titles: Record<string, string>;
+		deviceId: string;
+		page: ShellPage;
+	}): Promise<void>;
 	stop(): Promise<void>;
 }
 
@@ -69,13 +75,27 @@ async function fetchTitles(device: DeviceRecord): Promise<Record<string, string>
 	}
 }
 
+/**
+ * 前台服务是哪个页面拉起来的。
+ *
+ * 原生据此决定「App 在前台时还要不要弹通知」：聊天页静音（用户正盯着对话），
+ * 启动页照弹（那页没有任何会话视图，跑完了不提醒就真的错过）。
+ */
+export type ShellPage = "chat" | "launcher";
+
+export interface RunWatchOptions {
+	/** 缺省按聊天页算 */
+	page?: ShellPage;
+}
+
 export interface RunWatchHandle {
 	stop(): void;
 	/** 立即检查一次（回到前台时调用） */
 	poke(): void;
 }
 
-export function startRunWatch(device: DeviceRecord): RunWatchHandle {
+export function startRunWatch(device: DeviceRecord, options: RunWatchOptions = {}): RunWatchHandle {
+	const page: ShellPage = options.page ?? "chat";
 	if (!Capacitor.isNativePlatform() || !device.token) {
 		// 浏览器里没有前台服务，令牌缺失时原生侧也会拒绝启动
 		return { stop: () => undefined, poke: () => undefined };
@@ -91,7 +111,7 @@ export function startRunWatch(device: DeviceRecord): RunWatchHandle {
 		if (watching) return;
 		titles = await fetchTitles(device);
 		try {
-			await RunWatch.start({ baseUrl: device.baseUrl, token: device.token, titles, deviceId: device.id });
+			await RunWatch.start({ baseUrl: device.baseUrl, token: device.token, titles, deviceId: device.id, page });
 			watching = true;
 		} catch {
 			// 权限/系统拒绝（例如后台启动限制）：下一轮再试，不影响前台使用

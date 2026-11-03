@@ -152,6 +152,13 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
   Capacitor 的 `html5mode` 会把无扩展名路径回落到 `index.html`，所以「停在 `/s/<id>` 上被系统重建」
   加载的是启动页，它转写成待跳转记录再送进 `web.html`。守门测试
   `app/shell/notification-tap.test.ts`（8 条）盯着两头，删任一端都会红。
+- **通知的静音范围只算聊天页**：前台服务记一个 `page`（`chat` / `launcher`，由
+  `app/shell/run-watch.ts` 的 `startRunWatch(device, { page })` 透传），原生判定是
+  `!appVisible() || !"chat".equals(page)`。理由：停在聊天页时用户正盯着对话，弹通知是噪音；
+  而启动页没有任何会话视图，跑完了不提醒就真错过。别再退回「JS 报 `visibilityState`」那套
+  （WebView 的 visible 与 App 是否在前台不是一回事，混用过一次，结果是别的页面停留时照静音）。
+  另外别在 `pagehide` 上停服务：从聊天页退回启动页也是一次换页，停掉之后「在启动页等结果」
+  就彻底没有通知（0.4.9 修的就是这条）。服务跟着进程走，闲着时 `startRunWatch` 自己会停。
 - **启动页的页面画布必须保持透明**：相机预览（`BarcodeScanner.startScan`）铺在 WebView **下面**，
   `html` / `body` / WebView / 窗口任何一层有底色，取景框里就是一块纯色。踩过两次：一次是
   `.scan-overlay` 自己带底色，一次是 `safe-area-css.ts` 无条件给 `html` 铺画布色

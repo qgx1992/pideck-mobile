@@ -56,6 +56,8 @@ public class RunWatchService extends Service {
     public static final String EXTRA_TITLES = "titles";
     /** 这次看护盯的是哪台设备（通知点回来时要先切到它） */
     public static final String EXTRA_DEVICE_ID = "deviceId";
+    /** 发起看护的是哪个页面：chat（聊天页）/ launcher（启动页） */
+    public static final String EXTRA_PAGE = "page";
 
     /**
      * App 是否在前台。唯一真相源在 PiDeckApp（按 Activity started 计数），
@@ -66,11 +68,26 @@ public class RunWatchService extends Service {
         return PiDeckApp.isAppVisible();
     }
 
+    /**
+     * 该不该弹通知。
+     *
+     * 只有「App 在前台、且正停在聊天页」时才静音：那种时候用户正盯着对话，
+     * 弹出来纯属噪音，而且自己能看到结果。停在启动页（设备列表）时不一样 ——
+     * 那个页面没有任何会话视图，跑完了不提醒就真的错过了。
+     *
+     * 注意别退回「JS 报 visibilityState」那套：WebView 的 visible 与 App 是否
+     * 在前台不是一回事，混用过一次，结果是别的页面停留时照样静音。
+     */
+    private boolean shouldNotify() {
+        return !appVisible() || !PAGE_CHAT.equals(page);
+    }
+
     private static final String CHANNEL_ONGOING = "pideck-watch";
     private static final String CHANNEL_DONE = "pideck-task";
     private static final int ONGOING_NOTIFICATION_ID = 9001;
     /** 断线重连间隔 */
     private static final long RECONNECT_DELAY_MS = 3_000L;
+    private static final String PAGE_CHAT = "chat";
     /** 读超时：SSE 平时没数据，超过这个时间没有任何字节就认为连接已死 */
     private static final int READ_TIMEOUT_MS = 120_000;
 
@@ -79,19 +96,22 @@ public class RunWatchService extends Service {
     private String baseUrl = "";
     private String token = "";
     private String deviceId = "";
+    /** 发起看护的页面，缺省按聊天页算（旧客户端没有这个字段） */
+    private volatile String page = PAGE_CHAT;
     private JSONObject titles = new JSONObject();
     private final Map<String, String> lastStatus = new HashMap<>();
     /** 上一次见过的待答卡片（sessionId:requestId），用来判断「新提问」 */
     private final java.util.Set<String> knownRequests = new java.util.HashSet<>();
     private boolean seeded = false;
 
-    public static void start(Context context, String baseUrl, String token, String titlesJson, String deviceId) {
+    public static void start(Context context, String baseUrl, String token, String titlesJson, String deviceId, String page) {
         Intent intent = new Intent(context, RunWatchService.class);
         intent.setAction(ACTION_START);
         intent.putExtra(EXTRA_BASE_URL, baseUrl);
         intent.putExtra(EXTRA_TOKEN, token);
         intent.putExtra(EXTRA_TITLES, titlesJson);
         intent.putExtra(EXTRA_DEVICE_ID, deviceId == null ? "" : deviceId);
+        intent.putExtra(EXTRA_PAGE, page == null ? PAGE_CHAT : page);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -121,9 +141,11 @@ public class RunWatchService extends Service {
         String nextToken = intent != null ? intent.getStringExtra(EXTRA_TOKEN) : null;
         String nextTitles = intent != null ? intent.getStringExtra(EXTRA_TITLES) : null;
         String nextDeviceId = intent != null ? intent.getStringExtra(EXTRA_DEVICE_ID) : null;
+        String nextPage = intent != null ? intent.getStringExtra(EXTRA_PAGE) : null;
         if (nextBaseUrl != null) baseUrl = nextBaseUrl;
         if (nextToken != null) token = nextToken;
         if (nextDeviceId != null) deviceId = nextDeviceId;
+        if (nextPage != null && !nextPage.isEmpty()) page = nextPage;
         if (nextTitles != null) {
             try {
                 titles = new JSONObject(nextTitles);
@@ -282,7 +304,7 @@ public class RunWatchService extends Service {
                 String current = next.get(sessionId);
                 boolean finished = current == null || !"running".equals(current);
                 if (!finished) continue;
-                if (!appVisible()) notifyFinished(sessionId, current, sessionTitles.optString(sessionId, ""));
+                if (shouldNotify()) notifyFinished(sessionId, current, sessionTitles.optString(sessionId, ""));
             }
         }
         lastStatus.clear();
@@ -327,7 +349,7 @@ public class RunWatchService extends Service {
             }
             for (Map.Entry<String, Integer> entry : counts.entrySet()) {
                 String sessionId = entry.getKey();
-                if (!appVisible()) {
+                if (shouldNotify()) {
                     notifyAsk(sessionId, entry.getValue(), firstTitle.get(sessionId), sessionTitles.optString(sessionId, ""));
                 }
             }
