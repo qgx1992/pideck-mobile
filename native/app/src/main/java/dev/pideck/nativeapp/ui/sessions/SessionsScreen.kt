@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -46,6 +47,7 @@ import dev.pideck.nativeapp.data.Session
 fun SessionsScreen(
     onBack: () -> Unit,
     onOpenSession: (String) -> Unit,
+    onOpenSettings: () -> Unit,
     viewModel: SessionsViewModel = hiltViewModel(),
 ) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
@@ -76,6 +78,9 @@ fun SessionsScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "设置")
+                    }
                     IconButton(onClick = { viewModel.refresh() }, enabled = !viewModel.loading) {
                         Icon(Icons.Default.Refresh, contentDescription = "刷新")
                     }

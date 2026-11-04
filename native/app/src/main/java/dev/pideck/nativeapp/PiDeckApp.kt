@@ -5,6 +5,10 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.watch.Notifications
 import dev.pideck.nativeapp.watch.RunWatcher
 
@@ -14,6 +18,8 @@ class PiDeckApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Notifications.ensureChannels(this)
+        // 偏好读取是 IO，扔到独立 scope；镜像值在 Prefs 里，非 Compose 的地方直接读
+        Prefs.load(this, CoroutineScope(SupervisorJob() + Dispatchers.IO))
         // 前后台切换：切后台时尝试起看护服务（Android 12+ 可能拒绝，外面有 runCatching），
         // 回前台时把可见标记置回来，这样「跑完了」的通知只在真看不见 App 时弹。
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {

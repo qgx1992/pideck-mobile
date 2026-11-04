@@ -11,6 +11,7 @@ import androidx.core.app.ServiceCompat
 import dagger.hilt.android.AndroidEntryPoint
 import dev.pideck.nativeapp.data.Device
 import dev.pideck.nativeapp.data.DeviceRepository
+import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.PideckState
@@ -96,7 +97,7 @@ class RunWatchService : Service() {
                     if (running) active++
                     if (wasRunning[key] == true && !running) {
                         // 只在看不见 App 的时候打扰人；前台时用户自己就看到了。
-                        if (!RunWatcher.appVisible) {
+                        if (!RunWatcher.appVisible && Prefs.notifyDone) {
                             val title = titles[runtime.sessionId]
                                 ?: runCatching { titleOf(device, token, runtime.sessionId) }.getOrNull()
                             if (!title.isNullOrBlank()) titles[runtime.sessionId] = title

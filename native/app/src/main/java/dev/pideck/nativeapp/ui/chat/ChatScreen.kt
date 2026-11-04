@@ -30,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.ViewSidebar
 import androidx.compose.material3.CircularProgressIndicator
@@ -182,10 +183,14 @@ fun ChatScreen(
                     IconButton(
                         onClick = {
                             viewModel.loadWorkspace()
-                            showWorkspace = true
+                            // 同一个按钮开/收，不用去右上角找关闭键
+                            showWorkspace = !showWorkspace
                         },
                     ) {
-                        Icon(Icons.Filled.ViewSidebar, contentDescription = "工作区")
+                        Icon(
+                            if (showWorkspace) Icons.Filled.Close else Icons.Filled.ViewSidebar,
+                            contentDescription = if (showWorkspace) "收起工作区" else "工作区",
+                        )
                     }
                     if (viewModel.streaming) {
                         CircularProgressIndicator(

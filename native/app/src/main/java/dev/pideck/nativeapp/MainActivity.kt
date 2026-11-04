@@ -7,6 +7,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import dev.pideck.nativeapp.data.Prefs
+import dev.pideck.nativeapp.data.ThemeMode
 import dev.pideck.nativeapp.ui.AppNav
 import dev.pideck.nativeapp.ui.theme.PiDeckTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -25,7 +30,13 @@ class MainActivity : ComponentActivity() {
             notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         setContent {
-            PiDeckTheme {
+            val mode by Prefs.themeFlow.collectAsState()
+            val dark = when (mode) {
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+            }
+            PiDeckTheme(darkTheme = dark) {
                 AppNav()
             }
         }
