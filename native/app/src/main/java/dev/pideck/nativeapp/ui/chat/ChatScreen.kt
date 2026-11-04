@@ -212,6 +212,8 @@ fun ChatScreen(
     // 顶栏的模型 / 思考档位选择器
     var showModelSheet by remember { mutableStateOf(false) }
     var showThinkingSheet by remember { mutableStateOf(false) }
+    // 本会话的历史提问：点一条跳回那一段
+    var showHistory by remember { mutableStateOf(false) }
     // 图片附件：系统相册多选；粘贴走剪贴板
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
@@ -339,11 +341,11 @@ fun ChatScreen(
                     )
                 }
                 Spacer(Modifier.weight(1f))
-                // 历史会话：不用先划出抽屉也能翻（抽屉里有搜索与完整分组）
+                // 本会话的历史：列出问过的每一句，点一条滚回去
                 AppIconButton(
                     icon = Icons.Default.History,
-                    contentDescription = "历史会话",
-                    onClick = { scope.launch { drawerState.open() } },
+                    contentDescription = "本会话历史",
+                    onClick = { showHistory = true },
                     size = 34,
                 )
             }
@@ -598,6 +600,21 @@ fun ChatScreen(
                 scope.launch { snackbar.showSnackbar("已复制 ${text.length} 字") }
             },
             onDismiss = { freeCopyTarget = null },
+        )
+    }
+    if (showHistory) {
+        val turns = remember(viewModel.items) { buildHistoryTurns(viewModel.items, ::clock) }
+        HistorySheet(
+            turns = turns,
+            onDismiss = { showHistory = false },
+            onPick = { turn ->
+                showHistory = false
+                val index = rows.indexOfFirst { it.key == turn.key }
+                if (index >= 0) {
+                    atBottom = false
+                    scope.launch { listState.scrollToItem(index) }
+                }
+            },
         )
     }
     FilePreviewDialog(viewModel = viewModel)
