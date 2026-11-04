@@ -1,5 +1,9 @@
 package dev.pideck.nativeapp.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -267,16 +271,6 @@ fun ChatScreen(
                         },
                         modifier = Modifier.padding(end = 6.dp),
                     )
-                    // 刷新按钮去掉了：轮询有看护服务、历史在每轮结束时自己重拉，
-                    // 这个键只会让人以为不点就不会更新。留一个「正在跑」的指示就够。
-                    if (viewModel.streaming) {
-                        CircularProgressIndicator(
-                            modifier = Modifier
-                                .padding(end = 14.dp)
-                                .size(18.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             )
@@ -400,6 +394,39 @@ fun ChatScreen(
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                 ) {
                     Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "回到底部")
+                }
+            }
+
+            // 正在跑的时候，转圈贴在列表底部（顶栏留白给标题，别跟按钮抢位置）
+            AnimatedVisibility(
+                visible = viewModel.streaming,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 14.dp),
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(180)),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shadowElevation = 2.dp,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "生成中",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }

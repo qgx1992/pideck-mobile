@@ -27,7 +27,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -43,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pideck.nativeapp.data.Session
+import dev.pideck.nativeapp.ui.theme.PillButton
+import dev.pideck.nativeapp.ui.theme.PillStyle
 import dev.pideck.nativeapp.ui.sessions.RowActionsHost
 import dev.pideck.nativeapp.ui.sessions.rememberRowActionState
 import dev.pideck.nativeapp.ui.sessions.SessionsViewModel
@@ -87,7 +88,30 @@ fun SessionDrawer(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Spacer(Modifier.height(8.dp))
+        // 新建会话与切换设备同一行 —— 这两件事随手就要用到，放最上面
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            PillButton(
+                text = "新会话",
+                onClick = onOpenHome,
+                icon = Icons.Default.Add,
+                style = PillStyle.Filled,
+                modifier = Modifier.weight(1f),
+                fillWidth = true,
+            )
+            PillButton(
+                text = "切换设备",
+                onClick = onOpenDevices,
+                icon = Icons.Default.Devices,
+                style = PillStyle.Tonal,
+                modifier = Modifier.weight(1f),
+                fillWidth = true,
+            )
+        }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
 
         LazyColumn(
@@ -122,30 +146,29 @@ fun SessionDrawer(
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
-        Column(Modifier.padding(vertical = 6.dp, horizontal = 8.dp)) {
-            NavigationDrawerItem(
-                label = { Text("新会话") },
-                icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                selected = false,
-                onClick = onOpenHome,
-            )
-            NavigationDrawerItem(
-                label = { Text("全部会话") },
-                icon = { Icon(Icons.Default.KeyboardArrowRight, contentDescription = null) },
-                selected = false,
+        // 其余入口以按钮形式置底
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PillButton(
+                text = "全部会话",
                 onClick = onOpenSessions,
+                icon = Icons.Default.KeyboardArrowRight,
+                style = PillStyle.Ghost,
+                modifier = Modifier.weight(1f),
+                fillWidth = true,
             )
-            NavigationDrawerItem(
-                label = { Text("设置") },
-                icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                selected = false,
+            PillButton(
+                text = "设置",
                 onClick = onOpenSettings,
-            )
-            NavigationDrawerItem(
-                label = { Text("切换设备") },
-                icon = { Icon(Icons.Default.Devices, contentDescription = null) },
-                selected = false,
-                onClick = onOpenDevices,
+                icon = Icons.Default.Settings,
+                style = PillStyle.Ghost,
+                modifier = Modifier.weight(1f),
+                fillWidth = true,
             )
         }
     }
