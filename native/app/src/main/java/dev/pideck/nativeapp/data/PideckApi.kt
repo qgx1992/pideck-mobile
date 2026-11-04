@@ -57,7 +57,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         val response = client.newCall(request).await()
         response.use {
             if (it.code == 304) return StateFetch.NotModified
-            if (!it.isSuccessful) throw PideckException("state ${it.code}")
+            if (!it.isSuccessful) throw PideckException("state ${it.code}", code = it.code)
             val body = it.body?.string() ?: throw PideckException("state: 空响应")
             return StateFetch.Fresh(PideckJson.decodeFromString(PideckState.serializer(), body), it.header("etag"))
         }
@@ -77,7 +77,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         val path = "/api/sessions/${encode(sessionId)}/messages/page$query"
         val response = client.newCall(requestBuilder(device, token, path).build()).await()
         response.use {
-            if (!it.isSuccessful) throw PideckException("messages ${it.code}")
+            if (!it.isSuccessful) throw PideckException("messages ${it.code}", code = it.code)
             val body = it.body?.string() ?: throw PideckException("messages: 空响应")
             return PideckJson.decodeFromString(SessionMessagePage.serializer(), body)
         }
@@ -102,7 +102,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
     override suspend fun rawGet(device: Device, token: String?, path: String): String {
         val response = client.newCall(requestBuilder(device, token, path).build()).await()
         response.use {
-            if (!it.isSuccessful) throw PideckException("GET $path → ${it.code}")
+            if (!it.isSuccessful) throw PideckException("GET $path → ${it.code}", code = it.code)
             return it.body?.string().orEmpty()
         }
     }

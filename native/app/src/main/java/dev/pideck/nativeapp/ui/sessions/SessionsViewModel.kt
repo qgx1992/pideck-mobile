@@ -13,6 +13,7 @@ import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.StateFetch
+import dev.pideck.nativeapp.data.describeConnectionError
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -110,7 +111,7 @@ class SessionsViewModel @Inject constructor(
                 }
                 repository.touch(target.id)
             } catch (e: Exception) {
-                error = e.message ?: e::class.java.simpleName
+                error = describeConnectionError(e)
             } finally {
                 loading = false
             }

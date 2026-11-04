@@ -11,6 +11,7 @@ import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PairingLink
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.PideckException
+import dev.pideck.nativeapp.data.describeConnectionError
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -59,7 +60,7 @@ class DevicesViewModel @Inject constructor(
                 val saved = repository.upsert(draft, effectiveToken)
                 onAdded(saved)
             } catch (e: Exception) {
-                error = e.message ?: e::class.java.simpleName
+                error = describeConnectionError(e)
             } finally {
                 busy = false
             }
