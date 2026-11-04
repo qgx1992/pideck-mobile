@@ -84,3 +84,15 @@ cd native
 "C:/dsh-build/sdk/build-tools/35.0.0/aapt2.exe" dump badging app/build/outputs/apk/release/app-release.apk | head -2
 "C:/dsh-build/sdk/build-tools/35.0.0/apksigner.bat" verify --print-certs app/build/outputs/apk/release/app-release.apk
 ```
+
+## 桌面端接口的坑（踩过的）
+
+| 接口 | 参数 | 说明 |
+|---|---|---|
+| `GET /api/files` | `dir`（**不是 `path`**） | 写成 `path` 会被静默忽略、永远只列项目根目录；返回的 `relativePath` 是项目内相对路径，可直接回传 |
+| `GET /api/file-content` | `path` + `sessionId` | 项目外/敏感文件会先拒一次，带 `confirm=1` 才读 |
+| `GET /api/git/diff` | `group` ∈ merge/index/workingTree/untracked + `path` | 返回的是「改前全文 + 改后全文」，不是补丁，行级比对在客户端算 |
+| `POST /api/sessions/:id/update` | `model` / `thinkingLevel` / `title` | 唯一能改会话配置的 HTTP 路径；运行中的会话下一轮才生效 |
+| `POST /api/ui-response` | `sessionId` / `requestId` / `agentId` / `runtimeGeneration` / `response` | 批量提问的 `response.value` 是**字符串**里的 JSON |
+
+待办没有写入通道（只有 GET），子任务只有 `/api/sessions/:id/subagents`（只读）。
