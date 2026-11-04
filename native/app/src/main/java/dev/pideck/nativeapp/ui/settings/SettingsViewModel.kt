@@ -33,6 +33,10 @@ class SettingsViewModel @Inject constructor(
     var notifyDone by mutableStateOf(Prefs.notifyDone)
         private set
 
+    /** 重启后恢复上次的收起状态（false = 一律全部收起）。 */
+    var collapseRestore by mutableStateOf(Prefs.collapseRestore)
+        private set
+
     var device by mutableStateOf<Device?>(null)
         private set
 
@@ -48,8 +52,10 @@ class SettingsViewModel @Inject constructor(
     init {
         // Prefs 的镜像值可能还没读完（Application 里是异步灌的），先取一次再订
         viewModelScope.launch {
+            Prefs.awaitLoaded()
             theme = Prefs.themeFlow.first()
             notifyDone = Prefs.notifyFlow.first()
+            collapseRestore = Prefs.collapseRestore
         }
         viewModelScope.launch {
             val devices = repository.devices.first()
@@ -69,6 +75,11 @@ class SettingsViewModel @Inject constructor(
     fun toggleNotifyDone(enabled: Boolean) {
         notifyDone = enabled
         viewModelScope.launch { Prefs.setNotifyDone(context, enabled) }
+    }
+
+    fun chooseCollapseRestore(enabled: Boolean) {
+        collapseRestore = enabled
+        viewModelScope.launch { Prefs.setCollapseRestore(context, enabled) }
     }
 
     fun removeDevice(id: String) {

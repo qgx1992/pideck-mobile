@@ -108,6 +108,29 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(12.dp))
+            SectionTitle("会话列表")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = viewModel.collapseRestore,
+                    onClick = { viewModel.chooseCollapseRestore(true) },
+                    label = { Text("恢复上次状态") },
+                )
+                FilterChip(
+                    selected = !viewModel.collapseRestore,
+                    onClick = { viewModel.chooseCollapseRestore(false) },
+                    label = { Text("一律全部收起") },
+                )
+            }
+            Text(
+                "项目分组的收起/展开每次都写盘。选「恢复上次状态」就沿用退出时的样子；选「全部收起」则每次打开 App 从收起来开始。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(12.dp))
             SectionTitle("连接")
             InfoRow("地址", viewModel.device?.baseUrl ?: "还没配对设备")
             InfoRow("桌面端版本", viewModel.hostVersion ?: "未知（回会话列表刷新一次）")

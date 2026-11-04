@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +27,8 @@ object Prefs {
     private val KEY_NOTIFY_DONE = booleanPreferencesKey("notify_done")
     private val KEY_LAST_DEVICE = stringPreferencesKey("last_device")
     private val KEY_LAST_SESSION = stringPreferencesKey("last_session")
+    private val KEY_COLLAPSED = stringSetPreferencesKey("collapsed_groups")
+    private val KEY_COLLAPSE_RESTORE = booleanPreferencesKey("collapse_restore")
 
     /** 主题变化用 StateFlow 播出去，MainActivity 直接 collect。 */
     val themeFlow = MutableStateFlow(ThemeMode.SYSTEM)
@@ -48,7 +51,20 @@ object Prefs {
     var lastSessionId: String? = null
         private set
 
+    /** 上次退出时收起来的项目分组（projectId）。 */
+    @Volatile
+    var collapsedGroups: Set<String> = emptySet()
+        private set
+
+    /** 重启后：true = 恢复上次的收起状态；false = 一律全部收起。 */
+    @Volatile
+    var collapseRestore: Boolean = true
+        private set
+
     private var loaded = false
+
+    /** 首次从磁盘读完就置 true —— 折叠状态要等这个，否则读到的是默认值。 */
+    private val loadedFlow = MutableStateFlow(false)
 
     /** 在 Application.onCreate 里调一次；之后的改动都由 [setTheme]/[setNotifyDone] 维护。 */
     fun load(context: Context, scope: CoroutineScope) {
@@ -64,6 +80,9 @@ object Prefs {
                 notifyFlow.value = notify
                 lastDeviceId = data[KEY_LAST_DEVICE]
                 lastSessionId = data[KEY_LAST_SESSION]
+                collapsedGroups = data[KEY_COLLAPSED] ?: emptySet()
+                collapseRestore = data[KEY_COLLAPSE_RESTORE] ?: true
+                loadedFlow.value = true
             }
         }
     }
@@ -88,6 +107,21 @@ object Prefs {
         val device = data[KEY_LAST_DEVICE]
         val session = data[KEY_LAST_SESSION]
         return if (device != null && session != null) device to session else null
+    }
+
+    suspend fun awaitLoaded() {
+        loadedFlow.first { it }
+    }
+
+    /** 折叠状态每次变化都落盘（几百字节），下次启动按设置决定要不要用。 */
+    suspend fun setCollapsedGroups(context: Context, collapsed: Set<String>) {
+        collapsedGroups = collapsed
+        context.prefsStore.edit { it[KEY_COLLAPSED] = collapsed }
+    }
+
+    suspend fun setCollapseRestore(context: Context, enabled: Boolean) {
+        collapseRestore = enabled
+        context.prefsStore.edit { it[KEY_COLLAPSE_RESTORE] = enabled }
     }
 
     suspend fun setTheme(context: Context, mode: ThemeMode) {

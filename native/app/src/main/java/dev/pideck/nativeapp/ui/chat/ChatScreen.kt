@@ -1,5 +1,13 @@
 package dev.pideck.nativeapp.ui.chat
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.clickable
@@ -93,6 +101,7 @@ fun ChatScreen(
 ) {
     // 聊天页是新首页：左边不再是「返回设备列表」，而是能横向换会话的侧栏
     val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val clipboard = LocalClipboardManager.current
     val listState = rememberLazyListState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -159,6 +168,8 @@ fun ChatScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
 
     var showWorkspace by remember { mutableStateOf(false) }
+    // 长按消息 → 复制全文 / 复制代码块
+    var actionTarget by remember { mutableStateOf<TimelineItem?>(null) }
 
     LaunchedEffect(viewModel.error) {
         viewModel.error?.let {
@@ -314,8 +325,15 @@ fun ChatScreen(
                     }
                     items(rows, key = { it.key }) { item ->
                         when (item) {
-                            is TimelineItem.UserMessage -> UserBubble(item)
-                            is TimelineItem.AssistantMessage -> AssistantBlock(item)
+                            is TimelineItem.UserMessage -> UserBubble(
+                                item = item,
+                                onLongPress = { actionTarget = item },
+                            )
+
+                            is TimelineItem.AssistantMessage -> AssistantBlock(
+                                item = item,
+                                onLongPress = { actionTarget = item },
+                            )
                         }
                     }
                 }
@@ -339,6 +357,18 @@ fun ChatScreen(
     }
     }
 
+    actionTarget?.let { target ->
+        MessageActionsSheet(
+            item = target,
+            onDismiss = { actionTarget = null },
+            onCopy = { text ->
+                clipboard.setText(AnnotatedString(text))
+                actionTarget = null
+                scope.launch { snackbar.showSnackbar("已复制 ${text.length} 字") }
+            },
+        )
+    }
+
     if (showWorkspace) {
         WorkspaceSheet(viewModel = viewModel, onDismiss = { showWorkspace = false })
     }
@@ -346,8 +376,22 @@ fun ChatScreen(
 }
 
 @Composable
-private fun UserBubble(item: TimelineItem.UserMessage) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun UserBubble(
+    item: TimelineItem.UserMessage,
+    onLongPress: () -> Unit = {},
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+                onLongClick = onLongPress,
+            ),
+        horizontalArrangement = Arrangement.End,
+    ) {
         Surface(
             color = MaterialTheme.colorScheme.primaryContainer,
             shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp),
@@ -371,10 +415,23 @@ private fun UserBubble(item: TimelineItem.UserMessage) {
 }
 
 @Composable
-private fun AssistantBlock(item: TimelineItem.AssistantMessage) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun AssistantBlock(
+    item: TimelineItem.AssistantMessage,
+    onLongPress: () -> Unit = {},
+) {
     var thinkingOpen by remember(item.key, item.streaming) { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+                onLongClick = onLongPress,
+            ),
+    ) {
         item.thinking?.let { thinking ->
             ThinkingCard(
                 text = thinking,
@@ -585,3 +642,96 @@ private val clockFormat = SimpleDateFormat("HH:mm", Locale.US)
 
 private fun clock(millis: Long): String =
     if (millis <= 0) "" else clockFormat.format(Date(millis))
+
+/**
+ * 长按消息弹出的操作表。
+ *
+ * 只做「拿走内容」这一类动作（复制全文 / 复制代码块 / 复制思考过程），
+ * 不做编辑或删除 —— 消息的权威副本在桌面端，这边改不动也不该假装能改。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MessageActionsSheet(
+    item: TimelineItem,
+    onDismiss: () -> Unit,
+    onCopy: (String) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    val text = when (item) {
+        is TimelineItem.UserMessage -> item.text
+        is TimelineItem.AssistantMessage -> item.text
+    }
+    val codes = if (item is TimelineItem.AssistantMessage) {
+        parseMarkdown(item.text).filterIsInstance<MdBlock.Code>()
+    } else {
+        emptyList()
+    }
+    val thinking = (item as? TimelineItem.AssistantMessage)?.thinking
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 28.dp)) {
+            Text(
+                "这条消息",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+            )
+            SheetAction(
+                label = "复制全文",
+                detail = "${text.length} 字",
+                enabled = text.isNotBlank(),
+                onClick = { onCopy(text) },
+            )
+            if (codes.isNotEmpty()) {
+                SheetAction(
+                    label = "复制代码块",
+                    detail = "${codes.size} 段 · ${codes.sumOf { it.code.length }} 字",
+                    onClick = { onCopy(codes.joinToString("\n\n") { it.code }) },
+                )
+            }
+            if (!thinking.isNullOrBlank()) {
+                SheetAction(
+                    label = "复制思考过程",
+                    detail = "${thinking.length} 字",
+                    onClick = { onCopy(thinking) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetAction(
+    label: String,
+    detail: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.ContentCopy,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+            else MaterialTheme.colorScheme.outline,
+        )
+        Spacer(Modifier.width(14.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (enabled) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.outline,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            detail,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    }
+}

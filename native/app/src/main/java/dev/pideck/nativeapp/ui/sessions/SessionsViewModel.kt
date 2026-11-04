@@ -69,6 +69,9 @@ class SessionsViewModel @Inject constructor(
     fun toggleGroup(projectId: String) = GroupCollapse.toggle(projectId)
 
     /** 顶栏那个一键开关：有任何一个展开就全收起来，否则全展开。 */
+    /** 长按项目标题：只留它展开。 */
+    fun soloGroup(projectId: String) = GroupCollapse.solo(groups.map { it.projectId }, projectId)
+
     fun toggleAllGroups() = GroupCollapse.toggleAll(groups.map { it.projectId })
 
     val allCollapsed: Boolean
@@ -125,6 +128,22 @@ class SessionsViewModel @Inject constructor(
             return
         }
         refresh()
+    }
+
+    /** 侧栏/列表长按重命名。改完强制刷新一次（否则 ETag 会返回 304，标题看着没变）。 */
+    fun rename(sessionId: String, newTitle: String) {
+        val target = device ?: return
+        val title = newTitle.trim()
+        if (title.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                api.renameSession(target, token, sessionId, title)
+                etag = null
+                refresh()
+            } catch (e: Exception) {
+                error = describeConnectionError(e)
+            }
+        }
     }
 
     fun refresh() {

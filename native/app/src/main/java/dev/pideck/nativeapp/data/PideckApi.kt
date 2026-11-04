@@ -23,6 +23,7 @@ import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import java.io.IOException
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -55,6 +56,9 @@ interface PideckApi {
 
     /** `POST /api/sessions/:id/runtime/stop`：停掉正在跑的 runtime。 */
     suspend fun stopRuntime(device: Device, token: String?, sessionId: String, agentId: String, runtimeGeneration: Long)
+
+    /** 改会话标题（侧栏长按 → 重命名）。运行中的会话也允许改，桌面端显示的是同一份记录。 */
+    suspend fun renameSession(device: Device, token: String?, sessionId: String, title: String)
 
     suspend fun rawGet(device: Device, token: String?, path: String): String
 
@@ -216,6 +220,22 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             }.getOrNull()
             parsed?.takeIf { it.isNotBlank() } ?: throw PideckException("新建会话没有返回 id")
         }
+
+    override suspend fun renameSession(
+        device: Device,
+        token: String?,
+        sessionId: String,
+        title: String,
+    ) {
+        withContext(Dispatchers.IO) {
+            postJson(
+            device,
+            token,
+                "/api/sessions/${URLEncoder.encode(sessionId, "UTF-8")}/update",
+                buildJsonObject { put("title", title) },
+            )
+        }
+    }
 
     override suspend fun stopRuntime(
         device: Device,

@@ -1,7 +1,9 @@
 package dev.pideck.nativeapp.ui.sessions
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +38,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -47,7 +53,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.pideck.nativeapp.data.Session
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SessionsScreen(
     onBack: () -> Unit,
@@ -56,6 +62,8 @@ fun SessionsScreen(
     viewModel: SessionsViewModel = hiltViewModel(),
 ) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
+    // 长按会话 → 重命名；长按项目标题 → 只看这一个
+    var renaming by remember { mutableStateOf<Session?>(null) }
 
     Scaffold(
         topBar = {
@@ -134,6 +142,7 @@ fun SessionsScreen(
                                 count = group.sessions.size,
                                 collapsed = collapsed,
                                 onToggle = { viewModel.toggleGroup(group.projectId) },
+                                onSolo = { viewModel.soloGroup(group.projectId) },
                             )
                         }
                         if (!collapsed) items(group.sessions, key = { it.id }) { session ->
@@ -141,6 +150,7 @@ fun SessionsScreen(
                                 session = session,
                                 running = viewModel.isRunning(session.id),
                                 onClick = { onOpenSession(session.id) },
+                                onLongClick = { renaming = session },
                             )
                             HorizontalDivider(
                                 color = MaterialTheme.colorScheme.outlineVariant,
@@ -164,19 +174,32 @@ fun SessionsScreen(
             }
         }
     }
+
+    renaming?.let { target ->
+        RenameSessionDialog(
+            current = target.title,
+            onDismiss = { renaming = null },
+            onConfirm = { title ->
+                viewModel.rename(target.id, title)
+                renaming = null
+            },
+        )
+    }
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun ProjectHeader(
     name: String,
     count: Int,
     collapsed: Boolean,
     onToggle: () -> Unit,
+    onSolo: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
+            .combinedClickable(onClick = onToggle, onLongClick = onSolo)
             .padding(start = 12.dp, end = 20.dp, top = 16.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -204,11 +227,18 @@ private fun ProjectHeader(
 }
 
 @Composable
-private fun SessionRow(session: Session, running: Boolean, onClick: () -> Unit) {
-    Surface(onClick = onClick, color = Color.Transparent) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun SessionRow(
+    session: Session,
+    running: Boolean,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
+    Surface(color = Color.Transparent) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick ?: onClick)
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

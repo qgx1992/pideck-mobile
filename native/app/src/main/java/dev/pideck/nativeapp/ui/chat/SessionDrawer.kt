@@ -1,7 +1,9 @@
 package dev.pideck.nativeapp.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +30,9 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pideck.nativeapp.data.Session
+import dev.pideck.nativeapp.ui.sessions.RenameSessionDialog
 import dev.pideck.nativeapp.ui.sessions.SessionsViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,6 +54,7 @@ import java.util.Locale
  * 数据直接复用 [SessionsViewModel]（同一个 deviceId，ViewModel 由聊天页这个回退栈条目
  * 作用域持有），折叠状态也跟会话列表页共用 —— 在哪边收起，另一边也是收起的。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SessionDrawer(
     deviceId: String,
@@ -60,6 +67,8 @@ fun SessionDrawer(
 ) {
     val groups = viewModel.groups
     val state = viewModel.state
+    // 长按会话 → 重命名；长按项目标题 → 只留它展开
+    var renaming by remember { mutableStateOf<Session?>(null) }
 
     ModalDrawerSheet {
         Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 20.dp)) {
@@ -90,6 +99,7 @@ fun SessionDrawer(
                         count = group.sessions.size,
                         collapsed = collapsed,
                         onToggle = { viewModel.toggleGroup(group.projectId) },
+                        onSolo = { viewModel.soloGroup(group.projectId) },
                     )
                 }
                 if (!collapsed) {
@@ -101,6 +111,7 @@ fun SessionDrawer(
                             onClick = {
                                 if (session.id != currentSessionId) onPickSession(session.id)
                             },
+                            onLongClick = { renaming = session },
                         )
                     }
                 }
@@ -129,19 +140,32 @@ fun SessionDrawer(
             )
         }
     }
+
+    renaming?.let { target ->
+        RenameSessionDialog(
+            current = target.title,
+            onDismiss = { renaming = null },
+            onConfirm = { title ->
+                viewModel.rename(target.id, title)
+                renaming = null
+            },
+        )
+    }
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun DrawerGroupHeader(
     name: String,
     count: Int,
     collapsed: Boolean,
     onToggle: () -> Unit,
+    onSolo: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
+            .combinedClickable(onClick = onToggle, onLongClick = onSolo)
             .padding(start = 12.dp, end = 20.dp, top = 14.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -169,18 +193,21 @@ private fun DrawerGroupHeader(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun DrawerSessionRow(
     session: Session,
     running: Boolean,
     current: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
     val background =
         if (current) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
-    Surface(onClick = onClick, color = background) {
+    Surface(color = background) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
                 .padding(start = 34.dp, end = 20.dp, top = 9.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
