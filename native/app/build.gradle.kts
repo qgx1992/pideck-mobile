@@ -16,8 +16,8 @@ android {
         applicationId = "top.caoayu.pideck.native"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.1.6-native"
+        versionCode = 8
+        versionName = "0.1.7-native"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -41,6 +41,7 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
