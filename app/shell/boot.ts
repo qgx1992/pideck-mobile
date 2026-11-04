@@ -21,6 +21,7 @@ import { installExternalLinks } from "./external-links.ts";
 import { getSseTransport, isNativeSseAvailable } from "./native-sse.ts";
 import { installFetchBridge } from "./fetch-bridge.ts";
 import { installMotion } from "./motion.ts";
+import { installTurnStats } from "./turn-stats.ts";
 import { installEventSource } from "./event-source.ts";
 import { startRunWatch } from "./run-watch.ts";
 import { readNativeInsets, startSafeArea } from "./safe-area.ts";
@@ -50,6 +51,8 @@ if (!device) {
 	startSystemBars();
 	// 动效层：抽屉/弹层/新消息的时长与曲线（见 motion.ts 顶部，可一处调）
 	installMotion();
+	// 回合统计行：Web 端没有桌面端那条「耗时 / tok/s」带子，自己按消息 meta 算一条
+	installTurnStats();
 
 	const container = navigator as unknown as { serviceWorker?: ServiceWorkerContainer };
 	if (container.serviceWorker) {

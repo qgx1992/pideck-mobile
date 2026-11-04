@@ -215,6 +215,21 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
 - 约束：手机上是长列表 + 贴底追滚，**新消息入场别用大位移**（10px 就会跟追滚叠加成弹一下）；
   keyframes 只动 `opacity` / `transform`，别碰会触发重排的属性。
 
+## 回合统计行：`app/shell/turn-stats.ts`（0.4.12 起）
+
+上游 Web 端**没有**桌面端那条统计带子（`components/session/ComposerStatsLine.tsx` 只挂在桌面 `ComposerArea`），
+`/api/state` 的 `runtimes` 也只有 `status`。手机上的「耗时 / tok / tok/s」由壳自己算：
+
+- 数据：`GET /api/sessions/:id/messages/page?pageSize=1`，取最后一条 assistant 的
+  `meta = { usage: { outputTokens, inputTokens, cacheReadTokens, cost }, durationMs, startedAt, endedAt }`
+  —— 与桌面端结算同一条回复用的是同一份原始数。
+- 时机：上游 composer 在 `streaming` 时渲染停止按钮（`data-testid="web-composer-stop[-compact]"`），
+  这一跳消失就是本轮结束；**不要**去轮询 `/api/state`（56KB）来判定。
+- 口径：`meta` 里没有首字时刻，所以只报**端到端** `outputTokens ÷ durationMs`（桌面 `endToEndTps` 同口径），
+  不冒充桌面那个扣掉首字等待的流式 tps。文案里写「端到端」。
+- 渲染：作为 `form.composer` 的最后一个子节点注入（不碰 `vendor/`），样式与桌面一样是 11px 三级文字色。
+- 验证：`npm run smoke` 现在会挑一个会话把地址栏指到 `/s/<id>`，并断言这一行出现了真实数字。
+
 ## 改动完成后必须跑的验证
 
 ```bash

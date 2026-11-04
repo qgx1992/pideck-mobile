@@ -50,8 +50,26 @@ if (!entry) {
 	process.exit(1);
 }
 
+// 选一个真有消息的会话，直接把地址栏指到 /s/<id>：既验证上游「从 URL 恢复会话」，
+// 也让回合统计行有数据可算（无会话时它本来就该隐藏）。
+async function pickSession() {
+	try {
+		// 会话清单只有 /api/state 带（/api/sessions 是 POST 新建）
+		// 这里必须用全局 fetch：nativeFetch 在后面才定义（TDZ）
+		const res = await globalThis.fetch(`${baseUrl}/api/state`, { headers: { authorization: `Bearer ${token}` } });
+		if (!res.ok) return "";
+		const body = await res.json();
+		const list = Array.isArray(body) ? body : (body.sessions ?? []);
+		const sorted = [...list].filter((item) => item && typeof item.id === "string").sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+		return sorted[0]?.id ?? "";
+	} catch {
+		return "";
+	}
+}
+const smokeSession = arg("session") ?? (await pickSession());
+
 const dom = new JSDOM(html.replace(/<script[^>]*><\/script>/g, ""), {
-	url: "http://localhost/",
+	url: smokeSession ? `http://localhost/s/${smokeSession}` : "http://localhost/",
 	pretendToBeVisual: true,
 });
 const { window } = dom;
@@ -240,6 +258,9 @@ class SmokeEventSource extends window.EventTarget {
 window.EventSource = SmokeEventSource;
 g.EventSource = SmokeEventSource;
 
+// 先跑壳的引导（真机上 vite 把它注入 head 最前面）：令牌、fetch/EventSource 桥、动效层、
+// 回合统计行都在这里装。必须在入口模块之前。
+await import(pathToFileURL(path.join(DIST, "boot.js")).href);
 await import(pathToFileURL(path.join(DIST, entry)).href);
 
 async function waitFor(check, timeoutMs = 15_000) {
@@ -273,6 +294,22 @@ const sessions = await waitFor(() => (doc.body.textContent ?? "").includes("会�
 console.log(`✓ 已渲染输入框（textarea=${doc.querySelectorAll("textarea").length}），按钮 ${doc.querySelectorAll("button").length} 个`);
 console.log(`✓ 侧栏/会话：${sessions ? "有内容" : "空（这台机器可能还没有会话）"}`);
 console.log(`✓ CSS 产物：${readdirSync(path.join(DIST, "assets")).filter((name) => name.endsWith(".css")).join(", ") || "无"}`);
+
+// 回合统计行（turn-stats.ts）：有会话就该在输入卡下面显示「耗时 · tok · tok/s」
+if (smokeSession) {
+	const shown = await waitFor(() => {
+		const node = doc.getElementById("pideck-turn-stats");
+		return Boolean(node && !node.hidden && (node.textContent ?? "").includes("tok"));
+	}, 12_000);
+	if (!shown) {
+		const node = doc.getElementById("pideck-turn-stats");
+		console.error(`✗ 会话 ${smokeSession} 的回合统计行没出来（节点=${node ? "在但空" : "根本没挂载"}）`);
+		process.exit(1);
+	}
+	console.log(`✓ 回合统计行：${doc.getElementById("pideck-turn-stats").textContent}`);
+} else {
+	console.log("· 跳过回合统计行（没有会话可选）");
+}
 
 // 断言通过就收工：SSE 订阅和重连定时器会把事件循环一直挂着
 process.exit(0);
