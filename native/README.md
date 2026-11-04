@@ -85,6 +85,11 @@ cd native
 "C:/dsh-build/sdk/build-tools/35.0.0/apksigner.bat" verify --print-certs app/build/outputs/apk/release/app-release.apk
 ```
 
+## 下载页只写当前版本
+
+`apk/index.html` 只保留当前版本这一版说明（以及大小 / versionCode / sha256），
+**不要**把往期版本一条条贴上去 —— 历史改动看 git 提交。发布时替换当前那段，不追加。
+
 ## 桌面端接口的坑（踩过的）
 
 | 接口 | 参数 | 说明 |

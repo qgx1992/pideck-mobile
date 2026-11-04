@@ -32,11 +32,11 @@ class ChatRowsTest {
     private fun tool(name: String) = ToolView(id = name, name = name, state = "done")
 
     @Test
-    fun `连续的工具调用合成一个组`() {
+    fun `连续的过程条目合成一个组`() {
         val rows = buildChatRows(
             items = listOf(
                 user("u1", "改一下"),
-                step("a1", tools = listOf(tool("read"))),
+                step("a1", thinking = "先看看", tools = listOf(tool("read"))),
                 step("a2", tools = listOf(tool("edit"))),
                 step("a3", text = "改好了"),
             ),
@@ -48,27 +48,21 @@ class ChatRowsTest {
         val group = rows[1] as ChatRow.Process
         assertEquals(listOf("a1", "a2"), group.steps.map { it.key })
         assertEquals(2, group.toolCount)
+        assertEquals(1, group.thinkingCount)
         assertTrue(rows[2] is ChatRow.Single)
     }
 
     @Test
-    fun `思考不进折叠组，单独一张卡`() {
+    fun `思考并进组且组内保留全文`() {
         val rows = buildChatRows(
-            items = listOf(
-                step("a1", thinking = "先看看再动手", tools = listOf(tool("read"))),
-                step("a2", tools = listOf(tool("edit"))),
-            ),
+            items = listOf(step("a1", thinking = "先看看再动手", tools = listOf(tool("read")))),
             live = null,
         )
 
-        // 思考单独成行 → 组里只剩两个工具步骤，且组内不再带 thinking
-        assertEquals(2, rows.size)
-        val thinkingRow = (rows[0] as ChatRow.Single).item as TimelineItem.AssistantMessage
-        assertEquals("先看看再动手", thinkingRow.thinking)
-        assertTrue(thinkingRow.tools.isEmpty())
-        val group = rows[1] as ChatRow.Process
-        assertEquals(2, group.steps.size)
-        assertEquals(0, group.thinkingCount)
+        val group = rows.single() as ChatRow.Process
+        assertEquals(1, group.thinkingCount)
+        assertEquals("先看看再动手", group.steps.single().thinking)
+        assertTrue(group.summary.contains("思考"))
     }
 
     @Test

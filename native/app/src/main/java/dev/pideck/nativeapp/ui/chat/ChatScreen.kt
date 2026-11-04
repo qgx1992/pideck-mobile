@@ -788,7 +788,8 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
                 ) {
                     row.steps.forEach { step ->
                         step.thinking?.let { thinking ->
-                            var thinkingOpen by remember(step.key) { mutableStateOf(false) }
+                            // 组里默认展开：并进组只是为了把「过程」收成一行，内容不该被藏起来
+                            var thinkingOpen by remember(step.key) { mutableStateOf(true) }
                             ThinkingCard(
                                 text = thinking,
                                 open = thinkingOpen,

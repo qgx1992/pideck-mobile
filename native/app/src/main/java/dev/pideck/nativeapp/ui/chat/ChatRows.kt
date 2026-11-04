@@ -76,21 +76,9 @@ fun buildChatRows(
 
     for (item in all) {
         if (item is TimelineItem.AssistantMessage && item.text.isBlank() && !isOnlyError(item)) {
-            // 思考**不进折叠组**：它是要读的内容，不是「过程噪音」。
-            // 单独成行、按原来的样式显示（一张思考卡），只有工具调用才并进过程组。
-            val thinking = item.thinking?.takeIf { it.isNotBlank() }
-            if (thinking != null) {
-                flush()
-                rows += ChatRow.Single(
-                    item.copy(thinking = thinking, tools = emptyList(), errorText = null),
-                )
-            }
-            if (item.tools.isNotEmpty() || item.errorText != null) {
-                pending += item.copy(thinking = null)
-            }
-            if (thinking == null && item.tools.isEmpty() && item.errorText == null) {
-                pending += item
-            }
+            // 思考与工具调用都算「过程」，一起折进组里；组内思考是展开显示的（见 ProcessGroupBlock），
+            // 所以并进组不等于把内容藏起来。
+            pending += item
             continue
         }
         flush()
