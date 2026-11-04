@@ -8,6 +8,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 private val Context.prefsStore by preferencesDataStore("pideck_prefs")
@@ -23,6 +24,8 @@ object Prefs {
 
     private val KEY_THEME = stringPreferencesKey("theme")          // system | light | dark
     private val KEY_NOTIFY_DONE = booleanPreferencesKey("notify_done")
+    private val KEY_LAST_DEVICE = stringPreferencesKey("last_device")
+    private val KEY_LAST_SESSION = stringPreferencesKey("last_session")
 
     /** 主题变化用 StateFlow 播出去，MainActivity 直接 collect。 */
     val themeFlow = MutableStateFlow(ThemeMode.SYSTEM)
@@ -34,6 +37,15 @@ object Prefs {
 
     @Volatile
     var notifyDone: Boolean = true
+        private set
+
+    /** 上次停在哪个会话 —— 冷启动直接进聊天页要用。 */
+    @Volatile
+    var lastDeviceId: String? = null
+        private set
+
+    @Volatile
+    var lastSessionId: String? = null
         private set
 
     private var loaded = false
@@ -50,8 +62,32 @@ object Prefs {
                 notifyDone = notify
                 themeFlow.value = mode
                 notifyFlow.value = notify
+                lastDeviceId = data[KEY_LAST_DEVICE]
+                lastSessionId = data[KEY_LAST_SESSION]
             }
         }
+    }
+
+    /**
+     * 记下「现在停在哪个会话」。每进一次会话就写一次 —— 只有几百字节，
+     * 换来的是冷启动能直接回到上次看的地方。
+     */
+    suspend fun rememberSession(context: Context, deviceId: String, sessionId: String) {
+        if (lastDeviceId == deviceId && lastSessionId == sessionId) return
+        lastDeviceId = deviceId
+        lastSessionId = sessionId
+        context.prefsStore.edit {
+            it[KEY_LAST_DEVICE] = deviceId
+            it[KEY_LAST_SESSION] = sessionId
+        }
+    }
+
+    /** 冷启动时直接问磁盘（Application 里的异步 load 可能还没跑完）。 */
+    suspend fun lastSession(context: Context): Pair<String, String>? {
+        val data = context.prefsStore.data.first()
+        val device = data[KEY_LAST_DEVICE]
+        val session = data[KEY_LAST_SESSION]
+        return if (device != null && session != null) device to session else null
     }
 
     suspend fun setTheme(context: Context, mode: ThemeMode) {

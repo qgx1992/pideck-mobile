@@ -26,7 +26,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
@@ -79,12 +83,20 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
-    onBack: () -> Unit,
+    deviceId: String,
+    onOpenSession: (String) -> Unit,
+    onOpenSessions: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenDevices: () -> Unit,
     viewModel: ChatViewModel = hiltViewModel(),
 ) {
+    // 聊天页是新首页：左边不再是「返回设备列表」，而是能横向换会话的侧栏
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    // 侧栏开着时返回键先收侧栏，而不是直接退出去
+    BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
     var draft by remember { mutableStateOf("") }
 
     val rows = remember(viewModel.items, viewModel.live) {
@@ -142,6 +154,29 @@ fun ChatScreen(
         }
     }
 
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = drawerState.isOpen,
+        drawerContent = {
+            SessionDrawer(
+                deviceId = deviceId,
+                currentSessionId = viewModel.sessionId,
+                onPickSession = onOpenSession,
+                onOpenSessions = {
+                    scope.launch { drawerState.close() }
+                    onOpenSessions()
+                },
+                onOpenSettings = {
+                    scope.launch { drawerState.close() }
+                    onOpenSettings()
+                },
+                onOpenDevices = {
+                    scope.launch { drawerState.close() }
+                    onOpenDevices()
+                },
+            )
+        },
+    ) {
     Scaffold(
         modifier = Modifier.statusBarsPadding(),
         snackbarHost = { SnackbarHost(snackbar) },
@@ -165,8 +200,8 @@ fun ChatScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(Icons.Default.Menu, contentDescription = "会话列表")
                     }
                 },
                 actions = {
@@ -288,6 +323,7 @@ fun ChatScreen(
                 }
             }
         }
+    }
     }
 
     if (showWorkspace) {

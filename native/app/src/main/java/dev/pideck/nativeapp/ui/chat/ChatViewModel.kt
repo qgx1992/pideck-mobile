@@ -13,6 +13,7 @@ import dev.pideck.nativeapp.data.Device
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.PideckJson
+import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.ReplyMerger
 import dev.pideck.nativeapp.data.ReplySnapshot
 import dev.pideck.nativeapp.data.StateCache
@@ -54,7 +55,8 @@ class ChatViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val deviceId: String = savedStateHandle["deviceId"] ?: error("缺少 deviceId")
-    private val sessionId: String = savedStateHandle["sessionId"] ?: error("缺少 sessionId")
+    /** 侧栏要高亮当前会话，所以对外可见。 */
+    val sessionId: String = savedStateHandle["sessionId"] ?: error("缺少 sessionId")
 
     private var device: Device? = null
     private var token: String? = null
@@ -109,6 +111,8 @@ class ChatViewModel @Inject constructor(
                 device = found
                 token = repository.tokenOf(found.id)
             }
+            // 记下这一落脚点：下次冷启动直接回到这里，不用再从设备列表点进来
+            runCatching { Prefs.rememberSession(context, deviceId, sessionId) }
             title = StateCache.session(deviceId, sessionId)?.title?.ifBlank { null } ?: "会话"
             refreshHistory()
             startWatching()

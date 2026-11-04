@@ -1,6 +1,7 @@
 package dev.pideck.nativeapp.ui
 
 import androidx.compose.runtime.Composable
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -25,9 +26,11 @@ object Routes {
 }
 
 @Composable
-fun AppNav() {
+fun AppNav(startViewModel: StartViewModel = hiltViewModel()) {
+    // 冷启动要读一次磁盘才知道停在哪个会话 —— 读完之前不渲染导航图，免得先闪一下设备页
+    val startRoute = startViewModel.startRoute ?: return
     val navController = rememberNavController()
-    NavHost(navController = navController, startDestination = Routes.DEVICES) {
+    NavHost(navController = navController, startDestination = startRoute) {
         composable(Routes.DEVICES) {
             DevicesScreen(
                 onOpenDevice = { device -> navController.navigate(Routes.sessions(device.id)) },
@@ -55,8 +58,26 @@ fun AppNav() {
                 navArgument("deviceId") { type = NavType.StringType },
                 navArgument("sessionId") { type = NavType.StringType },
             ),
-        ) {
-            ChatScreen(onBack = { navController.popBackStack() })
+        ) { entry ->
+            val deviceId = entry.arguments?.getString("deviceId").orEmpty()
+            ChatScreen(
+                deviceId = deviceId,
+                onOpenSession = { sessionId ->
+                    // 换会话=替换当前聊天条目，返回键不会在会话之间来回跳
+                    navController.navigate(Routes.chat(deviceId, sessionId)) {
+                        popUpTo(Routes.CHAT) { inclusive = true }
+                    }
+                },
+                onOpenSessions = {
+                    navController.navigate(Routes.sessions(deviceId))
+                },
+                onOpenSettings = { navController.navigate(Routes.settings(deviceId)) },
+                onOpenDevices = {
+                    navController.navigate(Routes.DEVICES) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+            )
         }
         composable(
             route = Routes.SETTINGS,
@@ -65,8 +86,13 @@ fun AppNav() {
             SettingsScreen(
                 onBack = { navController.popBackStack() },
                 onManageDevices = {
-                    // 设备页是栈底，直接弹回去比再压一层干净
-                    navController.popBackStack(Routes.DEVICES, inclusive = false)
+                    // 现在的首页可能是聊天页，设备页不一定在栈里 —— 弹不回去就新建一层
+                    val popped = navController.popBackStack(Routes.DEVICES, inclusive = false)
+                    if (!popped) {
+                        navController.navigate(Routes.DEVICES) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    }
                 },
             )
         }
