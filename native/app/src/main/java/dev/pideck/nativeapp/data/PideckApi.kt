@@ -88,6 +88,20 @@ interface PideckApi {
     /** 点开文件时读正文（桌面端会按大小截断，这里再兜一次底）。 */
     suspend fun fileText(device: Device, token: String?, projectId: String, path: String): String
 
+    /**
+     * 单个文件的 git diff 文本。
+     *
+     * [group] 必须是 `merge` / `index` / `workingTree` / `untracked` 之一（桌面端按这四组分类，
+     * 传别的值直接 400），[path] 是**仓库内相对路径**。
+     */
+    suspend fun fileDiff(
+        device: Device,
+        token: String?,
+        projectId: String,
+        group: String,
+        path: String,
+    ): LineDiff.FileDiffPayload?
+
     /** 可选模型清单（`GET /api/models`，带缓存，force 才重新扫）。 */
     suspend fun models(device: Device, token: String?, force: Boolean = false): List<AvailableModel>
 
@@ -204,6 +218,26 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             ),
         ),
     )
+
+    override suspend fun fileDiff(
+        device: Device,
+        token: String?,
+        projectId: String,
+        group: String,
+        path: String,
+    ): LineDiff.FileDiffPayload? {
+        val query = buildString {
+            append("/api/git/diff?projectId=").append(java.net.URLEncoder.encode(projectId, "UTF-8"))
+            append("&group=").append(java.net.URLEncoder.encode(group, "UTF-8"))
+            append("&path=").append(java.net.URLEncoder.encode(path, "UTF-8"))
+        }
+        val text = rawGet(device, token, query)
+        return runCatching {
+            val root = PideckJson.parseToJsonElement(text) as kotlinx.serialization.json.JsonObject
+            val diff = root["diff"] ?: return@runCatching null
+            LineDiff.parsePayload(diff)
+        }.getOrNull()
+    }
 
     override suspend fun fileText(
         device: Device,

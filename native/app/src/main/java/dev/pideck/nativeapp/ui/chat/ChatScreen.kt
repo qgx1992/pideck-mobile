@@ -551,6 +551,7 @@ fun ChatScreen(
         )
     }
     FilePreviewDialog(viewModel = viewModel)
+    DiffDialog(viewModel = viewModel)
 }
 
 @Composable

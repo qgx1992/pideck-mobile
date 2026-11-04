@@ -11,9 +11,11 @@ import android.net.Uri
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.pideck.nativeapp.data.Device
+import dev.pideck.nativeapp.data.ChangedFile
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.ImagePrep
+import dev.pideck.nativeapp.data.LineDiff
 import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.data.ChatPayloads
 import dev.pideck.nativeapp.data.PideckJson
@@ -328,6 +330,50 @@ class ChatViewModel @Inject constructor(
     fun closePreview() {
         previewPath = null
         previewText = ""
+    }
+
+    // ---- 改动 diff（点「改动」里的文件看具体改了哪几行） ----
+
+    var diffPath by mutableStateOf<String?>(null)
+        private set
+
+    var diffText by mutableStateOf("")
+        private set
+
+    var diffBusy by mutableStateOf(false)
+        private set
+
+    var diffGroup by mutableStateOf("workingTree")
+        private set
+
+    fun openDiff(file: ChangedFile) {
+        val device = device ?: return
+        val projectId = projectIdOf() ?: return
+        diffPath = file.path
+        diffGroup = file.group
+        diffText = ""
+        diffBusy = true
+        viewModelScope.launch {
+            try {
+                val payload = api.fileDiff(device, token, projectId, file.group, file.path)
+                diffText = if (payload == null) {
+                    ""
+                } else {
+                    LineDiff.render(payload.original, payload.modified)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                diffText = dev.pideck.nativeapp.data.describeConnectionError(e)
+            } finally {
+                diffBusy = false
+            }
+        }
+    }
+
+    fun closeDiff() {
+        diffPath = null
+        diffText = ""
     }
 
     private fun projectIdOf(): String? =

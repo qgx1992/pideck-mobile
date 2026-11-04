@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.pideck.nativeapp.data.TodoEntry
+import dev.pideck.nativeapp.data.ChangedFile
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
 import dev.pideck.nativeapp.ui.theme.RoundIconButton
@@ -116,7 +117,7 @@ fun WorkspacePanel(
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             when (tab) {
                 0 -> TodoTab(viewModel.workspaceTodo)
-                1 -> ChangesTab(viewModel.workspaceChanges)
+                1 -> ChangesTab(viewModel.workspaceChanges, onOpenDiff = viewModel::openDiff)
                 else -> FilesTab(viewModel)
             }
         }
@@ -192,7 +193,7 @@ private fun TodoRow(entry: TodoEntry) {
 }
 
 @Composable
-private fun ChangesTab(changes: WorkspaceChanges?) {
+private fun ChangesTab(changes: WorkspaceChanges?, onOpenDiff: (ChangedFile) -> Unit) {
     if (changes == null) {
         EmptyHint("拿不到仓库状态")
         return
@@ -217,7 +218,10 @@ private fun ChangesTab(changes: WorkspaceChanges?) {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(changes.files, key = { it.group + it.path }) { file ->
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenDiff(file) }
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -357,6 +361,70 @@ fun FilePreviewDialog(viewModel: ChatViewModel) {
         },
         confirmButton = {
             TextButton(onClick = { viewModel.closePreview() }) { Text("关闭") }
+        },
+    )
+}
+
+/**
+ * 改动详情：直接复用聊天里那套 diff 渲染（`+` 绿条 / `-` 红条 / `@@` 蓝头），
+ * 这样「代码长什么样」在两个地方是一致的观感。
+ */
+@Composable
+fun DiffDialog(viewModel: ChatViewModel) {
+    val path = viewModel.diffPath ?: return
+    AlertDialog(
+        onDismissRequest = { viewModel.closeDiff() },
+        title = {
+            Column {
+                Text(
+                    path.substringAfterLast('/'),
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    path,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        text = {
+            Box(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
+            ) {
+                when {
+                    viewModel.diffBusy -> CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp).align(Alignment.Center),
+                        strokeWidth = 2.dp,
+                    )
+
+                    viewModel.diffText.isBlank() -> Text(
+                        "这个文件没有可显示的 diff（可能是二进制文件，或者改动为空）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    else -> Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                    ) {
+                        val text = viewModel.diffText
+                        val trimmed = remember(text) {
+                            if (text.length > 200_000) {
+                                text.take(200_000) + "  …（后面的内容太长，已截断）"
+                            } else {
+                                text
+                            }
+                        }
+                        CodeBlock(lang = "diff", code = trimmed)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { viewModel.closeDiff() }) { Text("关闭") }
         },
     )
 }
