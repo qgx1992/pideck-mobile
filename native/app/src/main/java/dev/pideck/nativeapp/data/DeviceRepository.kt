@@ -80,6 +80,13 @@ class DeviceRepository(private val context: Context) {
         tokens.edit().remove(deviceId).apply()
     }
 
+    /** 改名：只动清单里的名字；空名字/只空白的直接忽略，别把显示名弄成空行。 */
+    suspend fun rename(deviceId: String, name: String) = withContext(Dispatchers.IO) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return@withContext
+        writeDevices(readDevices().map { if (it.id == deviceId) it.copy(name = trimmed) else it })
+    }
+
     suspend fun touch(deviceId: String) = withContext(Dispatchers.IO) {
         val next = readDevices().map {
             if (it.id == deviceId) it.copy(lastUsedAt = System.currentTimeMillis()) else it

@@ -44,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.ui.theme.PillButton
 import dev.pideck.nativeapp.ui.theme.PillStyle
+import dev.pideck.nativeapp.ui.theme.RoundIconButton
 import dev.pideck.nativeapp.ui.sessions.RowActionsHost
 import dev.pideck.nativeapp.ui.sessions.rememberRowActionState
 import dev.pideck.nativeapp.ui.sessions.SessionsViewModel
@@ -75,17 +76,32 @@ fun SessionDrawer(
     val actions = rememberRowActionState()
 
     ModalDrawerSheet {
-        Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 20.dp)) {
-            Text(
-                viewModel.deviceName?.ifBlank { null } ?: "PiDeck",
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                "${state?.sessions?.size ?: 0} 个会话",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 12.dp, top = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    viewModel.deviceName?.ifBlank { null } ?: "PiDeck",
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "${state?.sessions?.size ?: 0} 个会话",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // 设置放右上角：它不常用，但每次都翻到底很烦
+            RoundIconButton(
+                icon = Icons.Default.Settings,
+                contentDescription = "设置",
+                onClick = onOpenSettings,
+                size = 34,
+                container = MaterialTheme.colorScheme.surfaceVariant,
             )
         }
         // 新建会话与切换设备同一行 —— 这两件事随手就要用到，放最上面
@@ -145,32 +161,6 @@ fun SessionDrawer(
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
-        // 其余入口以按钮形式置底
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PillButton(
-                text = "全部会话",
-                onClick = onOpenSessions,
-                icon = Icons.Default.KeyboardArrowRight,
-                style = PillStyle.Ghost,
-                modifier = Modifier.weight(1f),
-                fillWidth = true,
-            )
-            PillButton(
-                text = "设置",
-                onClick = onOpenSettings,
-                icon = Icons.Default.Settings,
-                style = PillStyle.Ghost,
-                modifier = Modifier.weight(1f),
-                fillWidth = true,
-            )
-        }
     }
 
     RowActionsHost(

@@ -1,6 +1,8 @@
 package dev.pideck.nativeapp.ui.devices
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +17,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -40,7 +44,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -61,6 +68,8 @@ fun DevicesScreen(
     var showAdd by remember { mutableStateOf(false) }
     var showScan by remember { mutableStateOf(false) }
     var scanned by remember { mutableStateOf("") }
+    // 长按设备行 → 改名
+    var renaming by remember { mutableStateOf<Device?>(null) }
 
     if (showScan) {
         ScanScreen(
@@ -112,15 +121,35 @@ fun DevicesScreen(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                item(key = "hint") {
+                    Text(
+                        "长按设备可以改名",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp),
+                    )
+                }
                 items(devices, key = { it.id }) { device ->
                     DeviceRow(
                         device = device,
                         onClick = { onOpenDevice(device) },
+                        onRename = { renaming = device },
                         onRemove = { viewModel.remove(device.id) },
                     )
                 }
             }
         }
+    }
+
+    renaming?.let { device ->
+        RenameDeviceDialog(
+            device = device,
+            onDismiss = { renaming = null },
+            onConfirm = { name ->
+                viewModel.rename(device.id, name)
+                renaming = null
+            },
+        )
     }
 
     if (showAdd) {
@@ -176,13 +205,21 @@ private fun EmptyDevices(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun DeviceRow(device: Device, onClick: () -> Unit, onRemove: () -> Unit) {
+private fun DeviceRow(
+    device: Device,
+    onClick: () -> Unit,
+    onRename: () -> Unit,
+    onRemove: () -> Unit,
+) {
     Surface(
-        onClick = onClick,
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            // 长按改名：设备名默认是主机名/IP，多台电脑时根本分不清
+            .combinedClickable(onClick = onClick, onLongClick = onRename),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
@@ -281,5 +318,49 @@ private fun AddDeviceDialog(
         dismissButton = {
             TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") }
         },
+    )
+}
+
+@Composable
+private fun RenameDeviceDialog(
+    device: Device,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    // 进来就全选：多数时候是整条替换，不是插字
+    var value by remember(device.id) {
+        mutableStateOf(TextFieldValue(device.name, selection = TextRange(0, device.name.length)))
+    }
+    val submit = { if (value.text.isNotBlank()) onConfirm(value.text.trim()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("给设备起个名字") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = { Text("名称") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    device.baseUrl,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = submit, enabled = value.text.isNotBlank()) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }

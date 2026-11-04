@@ -74,6 +74,10 @@ class DevicesViewModel @Inject constructor(
         }
     }
 
+    fun rename(deviceId: String, name: String) {
+        viewModelScope.launch { repository.rename(deviceId, name) }
+    }
+
     fun remove(deviceId: String) {
         viewModelScope.launch { repository.remove(deviceId) }
     }
