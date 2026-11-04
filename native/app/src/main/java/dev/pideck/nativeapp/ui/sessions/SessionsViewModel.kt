@@ -12,6 +12,7 @@ import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.Session
+import dev.pideck.nativeapp.data.StateCache
 import dev.pideck.nativeapp.data.StateFetch
 import dev.pideck.nativeapp.data.describeConnectionError
 import kotlinx.coroutines.flow.first
@@ -106,6 +107,7 @@ class SessionsViewModel @Inject constructor(
                     is StateFetch.Fresh -> {
                         state = fetched.state
                         etag = fetched.etag
+                        StateCache.put(deviceId, fetched.state)
                     }
                     StateFetch.NotModified -> Unit
                 }

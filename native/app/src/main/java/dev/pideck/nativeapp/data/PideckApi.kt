@@ -7,6 +7,10 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -44,6 +48,12 @@ interface PideckApi {
 
     /** `/api/chat`：发一条用户消息，响应本身也是一条 SSE 流。 */
     fun chat(device: Device, token: String?, body: JsonObject): Flow<SseFrame>
+
+    /** `POST /api/sessions`：按项目新建草稿会话，返回新会话 id。 */
+    suspend fun createSession(device: Device, token: String?, projectId: String): String
+
+    /** `POST /api/sessions/:id/runtime/stop`：停掉正在跑的 runtime。 */
+    suspend fun stopRuntime(device: Device, token: String?, sessionId: String, agentId: String, runtimeGeneration: Long)
 
     suspend fun rawGet(device: Device, token: String?, path: String): String
 }
@@ -119,6 +129,50 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
                 response.body?.string().orEmpty()
             }
         }
+
+    override suspend fun createSession(device: Device, token: String?, projectId: String): String =
+        withContext(Dispatchers.IO) {
+            val body = buildJsonObject { put("projectId", projectId) }
+            val text = postJson(device, token, "/api/sessions", body)
+            val parsed = runCatching {
+                PideckJson.parseToJsonElement(text).jsonObject["session"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+            }.getOrNull()
+            parsed?.takeIf { it.isNotBlank() } ?: throw PideckException("新建会话没有返回 id")
+        }
+
+    override suspend fun stopRuntime(
+        device: Device,
+        token: String?,
+        sessionId: String,
+        agentId: String,
+        runtimeGeneration: Long,
+    ) = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put(
+                "target",
+                buildJsonObject {
+                    put("sessionId", sessionId)
+                    put("agentId", agentId)
+                    put("runtimeGeneration", runtimeGeneration)
+                },
+            )
+        }
+        postJson(device, token, "/api/sessions/${encode(sessionId)}/runtime/stop", body)
+        Unit
+    }
+
+    private suspend fun postJson(device: Device, token: String?, path: String, body: JsonObject): String {
+        val request = requestBuilder(device, token, path)
+            .post(body.toString().toRequestBody(jsonMedia))
+            .build()
+        return client.newCall(request).await().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw PideckException("POST $path → ${response.code}", code = response.code)
+            }
+            text
+        }
+    }
 
     private fun requestBuilder(device: Device, token: String?, path: String): Request.Builder =
         Request.Builder()

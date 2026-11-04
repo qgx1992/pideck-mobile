@@ -43,6 +43,7 @@ import dev.pideck.nativeapp.data.Session
 @Composable
 fun SessionsScreen(
     onBack: () -> Unit,
+    onOpenSession: (String) -> Unit,
     viewModel: SessionsViewModel = hiltViewModel(),
 ) {
     Scaffold(
@@ -113,7 +114,7 @@ fun SessionsScreen(
                             SessionRow(
                                 session = session,
                                 running = viewModel.isRunning(session.id),
-                                onClick = { /* 聊天页在第二梯队 */ },
+                                onClick = { onOpenSession(session.id) },
                             )
                             HorizontalDivider(
                                 color = MaterialTheme.colorScheme.outlineVariant,
