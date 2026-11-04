@@ -5,13 +5,13 @@ name: Android Release
 #   - push tag v*        → 构建并把 APK 传到该 tag 的 Release（没有就创建）
 #   - workflow_dispatch  → 只构建并产出 artifact，不碰 Release（用来验证流水线）
 #
+# 构建的是 native/（Kotlin/Compose 原生客户端，0.5.0 起接管 top.caoayu.pideck），
+# 不再是 app/ 那个 WebView 壳（0.4.x 已停止发布）。
+#
 # 需要的 repository secrets（都是只写，不进日志）：
 #   ANDROID_KEYSTORE_BASE64     pideck-release.keystore 的 base64
 #   ANDROID_KEYSTORE_PROPERTIES keystore.properties 的完整内容
-#
-# 本地设置方法（不会回显）：
-#   base64 -w0 app/android/pideck-release.keystore | gh secret set ANDROID_KEYSTORE_BASE64
-#   gh secret set ANDROID_KEYSTORE_PROPERTIES < app/android/keystore.properties
+#   （native/app/build.gradle.kts 从 ../app/android/ 读这两个文件，所以仍写回 app/android/）
 
 on:
   push:
@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "版本号（形如 0.1.0，仅用于命名与 versionName）"
+        description: "版本号（留空则用 native/app/build.gradle.kts 里的 versionName）"
         required: false
         default: ""
 
@@ -43,27 +43,21 @@ jobs:
         id: version
         run: |
           set -euo pipefail
+          DECLARED="$(grep -E 'versionName\s*=' native/app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION="$(node -p "require('./app/package.json').version")"
+            VERSION="$DECLARED"
           fi
-          # 0.1.0 → 100；1.2.3 → 10203；保证单调递增
-          IFS='.' read -r MAJOR MINOR PATCH <<< "${VERSION}"
-          CODE=$(( MAJOR * 10000 + MINOR * 100 + ${PATCH:-0} ))
+          if [ "$VERSION" != "$DECLARED" ]; then
+            echo "::warning::tag/输入版本 ${VERSION} 与 gradle 里的 ${DECLARED} 不一致，以 ${VERSION} 命名产物"
+          fi
+          CODE="$(grep -E 'versionCode\s*=' native/app/build.gradle.kts | head -1 | grep -oE '[0-9]+' | head -1)"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "code=${CODE}" >> "$GITHUB_OUTPUT"
-          echo "构建版本 ${VERSION}（versionCode=${CODE}）"
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            app/package-lock.json
+          echo "构建版本 ${VERSION}（versionCode=${CODE}，取自 gradle）"
 
       - uses: actions/setup-java@v4
         with:
@@ -81,30 +75,11 @@ jobs:
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           SDKMANAGER="$(find "$SDK/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort -V | tail -1)"
           if [ -n "$SDKMANAGER" ]; then
-            yes 2>/dev/null | "$SDKMANAGER" --sdk_root="$SDK"               "platforms;android-35" "build-tools;35.0.0" > /dev/null 2>&1 || true
+            yes 2>/dev/null | "$SDKMANAGER" --sdk_root="$SDK" \
+              "platforms;android-35" "build-tools;35.0.0" > /dev/null 2>&1 || true
           fi
           ls "$SDK/platforms" || true
           ls "$SDK/build-tools" || true
-
-      - name: 安装依赖
-        run: |
-          npm ci
-          npm ci --prefix app
-
-      - name: 类型检查与测试
-        run: |
-          npm run typecheck
-          npm test
-          npm run typecheck --prefix app
-          npm test --prefix app
-
-      - name: 构建 Web 产物并同步原生工程
-        run: |
-          npm run build --prefix app
-          cd app && npx cap sync android
-
-      - name: 确保 gradlew 可执行
-        run: chmod +x app/android/gradlew
 
       - name: 还原签名文件
         env:
@@ -120,29 +95,33 @@ jobs:
           printf '%s\n' "${KEYSTORE_PROPERTIES}" > app/android/keystore.properties
           chmod 600 app/android/pideck-release.keystore app/android/keystore.properties
 
+      - name: 单元测试
+        working-directory: native
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
+
       - name: 构建签名 APK
-        working-directory: app/android
-        run: |
-          ./gradlew assembleRelease --no-daemon --console=plain \
-            -PpideckVersionName=${{ steps.version.outputs.version }} \
-            -PpideckVersionCode=${{ steps.version.outputs.code }}
+        working-directory: native
+        run: ./gradlew :app:assembleRelease --no-daemon --console=plain
 
       - name: 校验签名与标识
         id: verify
         run: |
           set -euo pipefail
-          APK="app/android/app/build/outputs/apk/release/app-release.apk"
+          APK="native/app/build/outputs/apk/release/app-release.apk"
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
           APKSIGNER="$(find "$SDK/build-tools" -name apksigner -type f | sort -V | tail -1)"
           AAPT="$(find "$SDK/build-tools" -name aapt2 -type f | sort -V | tail -1)"
 
           "$APKSIGNER" verify --print-certs "$APK" | tee /tmp/certs.txt
-          grep -q "pideck" /tmp/certs.txt || { echo "::error::签名证书不对"; exit 1; }
+          grep -qi "pideck" /tmp/certs.txt || { echo "::error::签名证书不对"; exit 1; }
 
           BADGING="$("$AAPT" dump badging "$APK" | head -3)"
           echo "$BADGING"
           echo "$BADGING" | grep -q "package: name='top.caoayu.pideck'" || {
             echo "::error::applicationId 不是 top.caoayu.pideck"; exit 1;
+          }
+          echo "$BADGING" | grep -q "versionCode='${{ steps.version.outputs.code }}'" || {
+            echo "::error::versionCode 与 gradle 不一致"; exit 1;
           }
 
           SHA="$(sha256sum "$APK" | cut -d' ' -f1)"

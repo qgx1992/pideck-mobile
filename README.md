@@ -5,9 +5,22 @@
 > **桌面端**：<https://pideck.caoayu.top/> · 源码 <https://github.com/ayuayue/PiDeck>
 > 这个仓库只是手机客户端，Agent 行为、模型调用、会话读写都由 pi 原生负责。
 
-仓库里有两个产物：`src/` 是框架无关的协议核心，`app/` 是可直接打 APK 的 Capacitor 客户端。全部只依赖 `fetch` + `AbortController`，无运行时依赖。
+**发出去的 App 是 `native/`**：Kotlin + Jetpack Compose 原生客户端（当前 **0.5.4**，`versionCode 504`，
+包名 `top.caoayu.pideck`，与桌面端 Web 服务直连，不经 WebView）。它从 0.5.0 起接管原来的包名，
+手机会只留一个 PiDeck 图标。
 
-已对照 **PiDeck 0.9.7（Windows）** 的实机行为核验，`docs/web-api.md` 是整理出的接口契约。
+仓库里其余部分是历史与参考：`app/`（Capacitor + 桌面端 vendored 界面，最后发布 0.4.12）已停止发布，
+`src/` 是框架无关的协议核心与探针 CLI。
+
+已对照 **PiDeck 0.9.9（Windows）** 的实机行为核验，`docs/web-api.md` 是整理出的接口契约。
+
+## 当前产物（0.5.4）
+
+| 目录 | 是什么 | 怎么跑 |
+|---|---|---|
+| `native/` | **原生客户端（唯一在发的）**：Kotlin 2.0 / Compose / Hilt，7 个界面（配对、会话列表、聊天、首页、启动、设置、扫码），88 条单测 | `cd native && ./gradlew :app:testDebugUnitTest` / `:app:assembleRelease` |
+| `src/` | 协议核心 + 探针 CLI | `npm test` / `npm run probe -- health --pair "<链接>"` |
+| `app/` | 历史：Capacitor 壳 + 桌面端 vendored 界面（0.4.12 为最后一版） | 仅供参考，不再出包 |
 
 ---
 
@@ -16,7 +29,7 @@
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
 | `src/` | 协议与状态核心 + 探针 CLI（**69 条测试**，独立于客户端） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 手机客户端（**vendor 桌面端 Web 客户端** + Capacitor 7 壳，**16 条测试**） | `cd app && npm run dev` / `npm run apk:release` |
+| `app/` | 历史客户端（vendor 桌面端 Web 客户端 + Capacitor 7 壳，**16 条测试**）—— 0.4.12 后不再发布 | `cd app && npm run dev` |
 
 0.4.0 起 `app/` **不再引用** `src/`：界面与协议都用桌面端自己的那一份（vendor 进来的
 `src/renderer/src/web/` + `src/shared/`），`src/` 只作为独立探针 / 契约参考保留。
