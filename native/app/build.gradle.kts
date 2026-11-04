@@ -16,8 +16,8 @@ android {
         applicationId = "top.caoayu.pideck.native"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "0.1.9-native"
+        versionCode = 11
+        versionName = "0.1.10-native"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -34,7 +34,10 @@ android {
     }
 
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 
