@@ -18,8 +18,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -221,30 +223,64 @@ fun inlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
     }
 }
 
+/**
+ * 解析结果的 LRU 缓存。
+ *
+ * 为什么需要：`remember` 只在同一个组合实例内有效，长会话往上滚两屏再滚回来，所有消息都会
+ * 重新解析一遍；几万字的消息里这明显能感觉到卡顿。缓存按「整段 markdown」做键，命中率很高
+ * （历史消息不会变）。
+ */
+internal object MarkdownCache {
+    private const val CAPACITY = 32
+
+    private val entries = object : LinkedHashMap<String, List<MdBlock>>(CAPACITY, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MdBlock>>?): Boolean =
+            size > CAPACITY
+    }
+
+    fun parse(markdown: String): List<MdBlock> = synchronized(entries) {
+        entries[markdown] ?: parseMarkdown(markdown).also { entries[markdown] = it }
+    }
+}
+
+/** 行内样式的解析结果跟着文本走，避免每帧重算一次 AnnotatedString。 */
+@Composable
+private fun InlineText(
+    text: String,
+    style: TextStyle,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    val annotated = remember(text) { inlineMarkdown(text) }
+    Text(text = annotated, style = style, color = color, modifier = modifier)
+}
+
 @Composable
 fun MarkdownText(
     markdown: String,
     modifier: Modifier = Modifier,
     streaming: Boolean = false,
 ) {
-    val blocks = remember(markdown) { parseMarkdown(markdown) }
+    // 流式那一份每帧都在变，进缓存只会把缓存挤空；收尾后的长消息则反复出现在滚动里，值得留住。
+    val blocks = remember(markdown, streaming) {
+        if (streaming) parseMarkdown(markdown) else MarkdownCache.parse(markdown)
+    }
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
             when (block) {
-                is MdBlock.Paragraph -> Text(
-                    text = inlineMarkdown(block.text),
+                is MdBlock.Paragraph -> InlineText(
+                    text = block.text,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
 
-                is MdBlock.Heading -> Text(
-                    text = inlineMarkdown(block.text),
+                is MdBlock.Heading -> InlineText(
+                    text = block.text,
                     style = when (block.level) {
                         1 -> MaterialTheme.typography.titleLarge
                         2 -> MaterialTheme.typography.titleMedium
                         else -> MaterialTheme.typography.titleSmall
-                    },
-                    fontWeight = FontWeight.SemiBold,
+                    }.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.onSurface,
                 )
 
@@ -259,8 +295,8 @@ fun MarkdownText(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(end = 6.dp),
                             )
-                            Text(
-                                text = inlineMarkdown(item),
+                            InlineText(
+                                text = item,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
@@ -277,8 +313,8 @@ fun MarkdownText(
                             .width(3.dp)
                             .heightIn(min = 18.dp),
                     ) {}
-                    Text(
-                        text = inlineMarkdown(block.text),
+                    InlineText(
+                        text = block.text,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

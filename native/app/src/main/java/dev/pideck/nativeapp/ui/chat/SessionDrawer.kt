@@ -22,6 +22,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.runtime.saveable.rememberSaveable
+import dev.pideck.nativeapp.ui.common.SearchField
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -70,7 +73,8 @@ fun SessionDrawer(
     onOpenDevices: () -> Unit,
     viewModel: SessionsViewModel = hiltViewModel(),
 ) {
-    val groups = viewModel.groups
+    val groups = viewModel.visibleGroups
+    var showSearch by rememberSaveable { mutableStateOf(false) }
     val state = viewModel.state
     // 长按菜单（会话 / 工作区），逻辑与列表页共用
     val actions = rememberRowActionState()
@@ -95,6 +99,17 @@ fun SessionDrawer(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            RoundIconButton(
+                icon = Icons.Default.Search,
+                contentDescription = "搜索会话",
+                onClick = {
+                    showSearch = !showSearch
+                    if (!showSearch) viewModel.search("")
+                },
+                size = 34,
+                container = MaterialTheme.colorScheme.surfaceVariant,
+            )
+            Spacer(Modifier.width(6.dp))
             // 设置放右上角：它不常用，但每次都翻到底很烦
             RoundIconButton(
                 icon = Icons.Default.Settings,
@@ -126,6 +141,16 @@ fun SessionDrawer(
                 style = PillStyle.Tonal,
                 modifier = Modifier.weight(1f),
                 fillWidth = true,
+            )
+        }
+        if (showSearch) {
+            SearchField(
+                value = viewModel.query,
+                onValueChange = viewModel::search,
+                onDismiss = {
+                    viewModel.search("")
+                    showSearch = false
+                },
             )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)

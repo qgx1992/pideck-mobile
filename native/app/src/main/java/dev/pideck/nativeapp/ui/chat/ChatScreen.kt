@@ -626,7 +626,17 @@ private fun AssistantBlock(
         }
 
         if (item.text.isNotBlank()) {
-            MarkdownText(markdown = item.text, streaming = item.streaming)
+            // 几万字的一条回复一次性铺开会同时建出上百个 Text，滚动直接掉帧；
+            // 收尾后先展示前 6000 字，要看全文点一下再展开。
+            val long = !item.streaming && item.text.length > LONG_TEXT_LIMIT
+            var expanded by remember(item.key) { mutableStateOf(false) }
+            val shown = if (long && !expanded) item.text.take(LONG_TEXT_LIMIT) else item.text
+            MarkdownText(markdown = shown, streaming = item.streaming)
+            if (long && !expanded) {
+                TextButton(onClick = { expanded = true }) {
+                    Text("展开全文（共 ${item.text.length} 字）")
+                }
+            }
         }
 
         item.errorText?.let { message ->
@@ -903,6 +913,8 @@ private fun AttachmentThumb(image: PendingImage, onRemove: () -> Unit) {
 }
 
 private val clockFormat = SimpleDateFormat("HH:mm", Locale.US)
+
+private const val LONG_TEXT_LIMIT = 6000
 
 private fun clock(millis: Long): String =
     if (millis <= 0) "" else clockFormat.format(Date(millis))

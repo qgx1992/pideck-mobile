@@ -75,6 +75,27 @@ class SessionsViewModel @Inject constructor(
     val allCollapsed: Boolean
         get() = GroupCollapse.allCollapsed(groups.map { it.projectId })
 
+    /** 搜索框里的词；空串表示没在搜。 */
+    var query by mutableStateOf("")
+        private set
+
+    val searching: Boolean get() = query.isNotBlank()
+
+    fun search(text: String) {
+        query = text
+    }
+
+    /**
+     * 真正渲染用的分组 —— 搜索时只留标题命中的会话，命中不了的项目整组不显示。
+     *
+     * 决定：搜索在本地做（`state` 里已经有全部会话），不打接口。桌面端的 `/api/state`
+     * 一次就有 200 多条会话，边打字边请求反而更慢，还会闪。
+     */
+    val visibleGroups: List<SessionGroup>
+        get() = filterGroups(groups, query)
+
+    val matchCount: Int get() = visibleGroups.sumOf { it.sessions.size }
+
     /** 项目按「置顶 → 最近打开」排，会话按最近活动排；只保留有会话的项目。 */
     val groups: List<SessionGroup>
         get() {
@@ -220,5 +241,20 @@ class SessionsViewModel @Inject constructor(
                 loading = false
             }
         }
+    }
+}
+
+
+/**
+ * 按标题过滤会话分组 —— 纯函数，方便单测。
+ *
+ * 大小写不敏感；命中不了的项目整组消失（不然搜出来一堆空标题很难看）。
+ */
+internal fun filterGroups(groups: List<SessionGroup>, rawQuery: String): List<SessionGroup> {
+    val needle = rawQuery.trim()
+    if (needle.isEmpty()) return groups
+    return groups.mapNotNull { group ->
+        val hits = group.sessions.filter { it.title.contains(needle, ignoreCase = true) }
+        if (hits.isEmpty()) null else group.copy(sessions = hits)
     }
 }

@@ -8,6 +8,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import dev.pideck.nativeapp.ui.common.SearchField
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,6 +73,11 @@ fun SessionsScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
     // 长按菜单（会话 / 工作区），逻辑与侧栏共用
     val actions = rememberRowActionState()
+    var showSearch by rememberSaveable { mutableStateOf(false) }
+    val searchFocus = remember { FocusRequester() }
+    if (showSearch) {
+        LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
+    }
 
     Scaffold(
         topBar = {
@@ -97,6 +108,15 @@ fun SessionsScreen(
                     )
                 },
                 actions = {
+                    RoundIconButton(
+                        icon = Icons.Default.Search,
+                        contentDescription = "搜索会话",
+                        onClick = {
+                            showSearch = !showSearch
+                            if (!showSearch) viewModel.search("")
+                        },
+                    )
+                    Spacer(Modifier.width(8.dp))
                     RoundIconButton(
                         icon = if (viewModel.allCollapsed) Icons.Default.UnfoldMore else Icons.Default.UnfoldLess,
                         contentDescription = if (viewModel.allCollapsed) "全部展开" else "全部收起",
@@ -143,11 +163,31 @@ fun SessionsScreen(
                     )
                 }
 
-                else -> LazyColumn(
+                else -> Column(Modifier.fillMaxSize()) {
+                    if (showSearch) {
+                        SearchField(
+                            value = viewModel.query,
+                            onValueChange = viewModel::search,
+                            onDismiss = {
+                                viewModel.search("")
+                                showSearch = false
+                            },
+                            modifier = Modifier.focusRequester(searchFocus),
+                        )
+                    }
+                    if (viewModel.searching) {
+                        Text(
+                            text = if (viewModel.matchCount == 0) "没有匹配的会话" else "匹配 ${viewModel.matchCount} 个会话",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 16.dp, bottom = 4.dp),
+                        )
+                    }
+                    LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 24.dp),
                 ) {
-                    viewModel.groups.forEach { group ->
+                    viewModel.visibleGroups.forEach { group ->
                         val collapsed = group.projectId in viewModel.collapsedGroups
                         item(key = "project-${group.projectId}") {
                             ProjectHeader(
@@ -171,6 +211,7 @@ fun SessionsScreen(
                                 modifier = Modifier.padding(start = 20.dp),
                             )
                         }
+                    }
                     }
                 }
             }
