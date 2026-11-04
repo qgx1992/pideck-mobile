@@ -20,6 +20,7 @@ import dev.pideck.nativeapp.data.toTimelineItem
 import dev.pideck.nativeapp.data.toTimelineItems
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -53,6 +54,16 @@ class ChatViewModel @Inject constructor(
     private var before: Long? = null
     private var sendJob: Job? = null
     private var merger = ReplyMerger()
+
+    /**
+     * 「别处发起」的回复订阅。
+     *
+     * `/api/chat` 的 SSE 是 POST 的一次性响应，只覆盖本端发送。桌面端（或另一台设备）
+     * 发起的回复走 `GET /api/sessions/:id/stream`（服务端支持同会话多订阅者，并在订阅时
+     * 回放本轮已产出的帧）。两条流互斥：本端发送期间忽略订阅帧，避免同一轮渲染两遍。
+     */
+    private var watchJob: Job? = null
+    private var watchMerger = ReplyMerger()
 
     var title by mutableStateOf("会话")
         private set
@@ -92,11 +103,62 @@ class ChatViewModel @Inject constructor(
             }
             title = StateCache.session(deviceId, sessionId)?.title?.ifBlank { null } ?: "会话"
             refreshHistory()
+            startWatching()
         }
     }
 
     fun dismissError() {
         error = null
+    }
+
+    /** 是否有正在往外冒的回复（本端发送 or 别处发起的订阅）。UI 用它决定停止按钮与光标。 */
+    val streaming: Boolean
+        get() = sending || live?.finished == false
+
+    /** 常驻订阅会话流；断线退避重连，一轮结束后不退订（对齐服务端 keepAlive）。 */
+    private fun startWatching() {
+        val target = device ?: return
+        if (watchJob != null) return
+        watchJob = viewModelScope.launch {
+            var backoff = 0L
+            while (true) {
+                try {
+                    api.sessionStream(target, token, sessionId).collect { frame ->
+                        if (sending) return@collect
+                        val snapshot = applyWatchFrame(frame.data) ?: return@collect
+                        live = snapshot
+                        if (snapshot.finished) {
+                            live = null
+                            // 收尾帧比落盘早一点点，等一下再以磁盘为准对齐。
+                            delay(400)
+                            refreshHistory()
+                        }
+                    }
+                    backoff = 0L
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    // 断线：吞掉错误，下面退避重连。连不上时 keepAlive 会一直断，
+                    // 退避从 1.5s 起、翻倍到 15s 封顶，避免后台烧电。
+                }
+                delay(if (backoff == 0L) 1500L else backoff)
+                backoff = if (backoff == 0L) 3000L else (backoff * 2).coerceAtMost(15_000L)
+            }
+        }
+    }
+
+    /** 订阅帧 → 快照。`start` 表示新一轮（服务端会重放帧），合并器从零重建。 */
+    private fun applyWatchFrame(data: String): ReplySnapshot? {
+        if (data.trim() == "[DONE]") return watchMerger.finish()
+        val parsed = runCatching {
+            PideckJson.parseToJsonElement(data) as? JsonObject
+        }.getOrNull() ?: return null
+        val type = parsed["type"]?.toString()?.trim('"')
+        if (type == "start") {
+            watchMerger.reset()
+            live = null
+        }
+        return watchMerger.applyFrame(parsed)
     }
 
     /** 拉最新一页并替换列表（进入页面 / 发送收尾 / 下拉刷新都走这里）。 */

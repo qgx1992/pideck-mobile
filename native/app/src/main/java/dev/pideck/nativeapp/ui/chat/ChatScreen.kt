@@ -87,7 +87,7 @@ fun ChatScreen(
     val rows = remember(viewModel.items, viewModel.live) {
         buildList {
             addAll(viewModel.items)
-            viewModel.live?.let { snapshot -> add(snapshot.toTimelineItem(streaming = viewModel.sending)) }
+            viewModel.live?.let { snapshot -> add(snapshot.toTimelineItem(streaming = viewModel.streaming)) }
         }
     }
 
@@ -163,7 +163,7 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    if (viewModel.sending) {
+                    if (viewModel.streaming) {
                         CircularProgressIndicator(
                             modifier = Modifier
                                 .padding(end = 16.dp)
@@ -185,7 +185,7 @@ fun ChatScreen(
             Composer(
                 value = draft,
                 onValueChange = { draft = it },
-                sending = viewModel.sending,
+                sending = viewModel.streaming,
                 onSend = {
                     val text = draft
                     draft = ""
