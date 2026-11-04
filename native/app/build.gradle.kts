@@ -16,8 +16,8 @@ android {
         applicationId = "top.caoayu.pideck.native"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.1.13-native"
+        versionCode = 15
+        versionName = "0.1.14-native"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
