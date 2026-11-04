@@ -24,11 +24,15 @@ android {
 
     defaultConfig {
         // 开发期与 WebView 壳共存（top.caoayu.pideck / .debug 都不冲突）
-        applicationId = "top.caoayu.pideck.native"
+        // 正式包顶替原 WebView 壳的身份（同一张 pideck-mobile 证书，所以可以直接覆盖升级）。
+        // debug 包带 .native 后缀，与已装在手机上的调试版同一个 id，继续覆盖升级。
+        applicationId = "top.caoayu.pideck"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "0.1.25-native"
+        // 原生版接管 PiDeck 之后从 0.5.0 重新起线（versionCode = major*100+minor*10+patch）；
+        // 必须高于壳最后的 412，否则 Android 拒绝覆盖安装。
+        versionCode = 500
+        versionName = "0.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -44,6 +48,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 调试包留在 top.caoayu.pideck.native 上（与手机里已装的调试版同一个 id，继续覆盖升级），
+            // 正式包才用 top.caoayu.pideck 顶替旧壳，两者互不干扰。
+            applicationIdSuffix = ".native"
+        }
         release {
             isMinifyEnabled = false
             if (hasReleaseKeystore) {

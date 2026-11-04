@@ -48,6 +48,17 @@ cd native
 
 注意：`native` 不能作为 Kotlin 包名的一段语义关键字风险，所以源码包名是 `dev.pideck.nativeapp`。
 
+## 包名（0.5.0 起）
+
+| 构建类型 | applicationId | 说明 |
+|---|---|---|
+| release | `top.caoayu.pideck` | 顶替原 WebView 壳的身份，手机上只有一个 PiDeck；可直接覆盖 0.4.x（同证书 + versionCode 更高） |
+| debug | `top.caoayu.pideck.native` | `.native` 后缀，与手机里的调试版同 id，可覆盖调试版；也能与正式包共存 |
+
+源码 namespace 仍是 `dev.pideck.nativeapp`（`applicationId` 与它无关，改名只动 `app/build.gradle.kts`）。
+版本号从 0.5.0 起按 `major*100 + minor*10 + patch`（0.5.0 → 500），必须始终高于壳最后发过的版本号，
+否则 Android 会以「版本回退」拒绝覆盖安装。
+
 ## 出包
 
 ```bash
