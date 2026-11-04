@@ -15,6 +15,13 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +30,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -38,6 +46,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.Close
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Memory
@@ -63,6 +73,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -92,6 +103,8 @@ import dev.pideck.nativeapp.data.SessionModel
 import dev.pideck.nativeapp.data.thinkingLabel
 import dev.pideck.nativeapp.data.toTimelineItem
 import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.data.ImagePrep
+import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.ui.theme.SelectChip
 import java.text.SimpleDateFormat
 import kotlinx.coroutines.launch
@@ -181,6 +194,12 @@ fun ChatScreen(
     // 顶栏的模型 / 思考档位选择器
     var showModelSheet by remember { mutableStateOf(false) }
     var showThinkingSheet by remember { mutableStateOf(false) }
+    // 图片附件：系统相册多选；粘贴走剪贴板
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents(),
+    ) { uris -> viewModel.addImages(uris) }
+    var showAttachSheet by remember { mutableStateOf(false) }
+
     // 长按消息 → 复制全文 / 复制代码块 / 自由复制
     var actionTarget by remember { mutableStateOf<TimelineItem?>(null) }
     var freeCopyTarget by remember { mutableStateOf<TimelineItem?>(null) }
@@ -312,6 +331,11 @@ fun ChatScreen(
                 value = draft,
                 onValueChange = { draft = it },
                 sending = viewModel.streaming,
+                images = viewModel.images,
+                imageError = viewModel.imageError,
+                onAttach = { showAttachSheet = true },
+                onRemoveImage = { viewModel.removeImage(it) },
+                onDismissImageError = { viewModel.dismissImageError() },
                 onSend = {
                     val text = draft
                     draft = ""
@@ -438,6 +462,28 @@ fun ChatScreen(
         onDismiss = { showWorkspace = false },
         viewModel = viewModel,
     )
+    }
+
+    if (showAttachSheet) {
+        ModalBottomSheet(onDismissRequest = { showAttachSheet = false }) {
+            SheetAction(
+                label = "从相册选择",
+                detail = "最多 ${ImagePrep.MAX_COUNT} 张",
+                onClick = {
+                    showAttachSheet = false
+                    imagePicker.launch("image/*")
+                },
+            )
+            SheetAction(
+                label = "粘贴图片",
+                detail = "剪贴板里的截图",
+                onClick = {
+                    showAttachSheet = false
+                    viewModel.pasteImage()
+                },
+            )
+            Spacer(Modifier.height(12.dp))
+        }
     }
 
     actionTarget?.let { target ->
@@ -731,41 +777,127 @@ private fun Composer(
     value: String,
     onValueChange: (String) -> Unit,
     sending: Boolean,
+    images: List<PendingImage>,
+    imageError: String?,
+    onAttach: () -> Unit,
+    onRemoveImage: (String) -> Unit,
+    onDismissImageError: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom,
         ) {
-            OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("发消息给这个会话…") },
-                maxLines = 6,
-                shape = RoundedCornerShape(18.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-            )
-            Spacer(Modifier.width(8.dp))
-            if (sending) {
-                FilledIconButton(onClick = onStop) {
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .background(MaterialTheme.colorScheme.onPrimary, RoundedCornerShape(2.dp)),
-                    )
-                }
-            } else {
-                FilledIconButton(onClick = onSend, enabled = value.isNotBlank()) {
-                    Icon(Icons.Filled.Send, contentDescription = "发送")
+            if (images.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(images, key = { it.id }) { image ->
+                        AttachmentThumb(image = image, onRemove = { onRemoveImage(image.id) })
+                    }
                 }
             }
+            if (imageError != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        imageError,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onDismissImageError) { Text("知道了") }
+                }
+            }
+            Row(verticalAlignment = Alignment.Bottom) {
+                RoundIconButton(
+                    icon = Icons.Default.AddPhotoAlternate,
+                    contentDescription = "添加图片",
+                    onClick = onAttach,
+                    size = 40,
+                    container = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("发消息给这个会话…") },
+                    maxLines = 6,
+                    shape = RoundedCornerShape(18.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                )
+                Spacer(Modifier.width(8.dp))
+                if (sending) {
+                    FilledIconButton(onClick = onStop) {
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .background(MaterialTheme.colorScheme.onPrimary, RoundedCornerShape(2.dp)),
+                        )
+                    }
+                } else {
+                    FilledIconButton(
+                        onClick = onSend,
+                        enabled = value.isNotBlank() || images.isNotEmpty(),
+                    ) {
+                        Icon(Icons.Filled.Send, contentDescription = "发送")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentThumb(image: PendingImage, onRemove: () -> Unit) {
+    Box(modifier = Modifier.size(64.dp)) {
+        val bitmap = image.bitmap
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = image.label,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(12.dp)),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+            )
+        }
+        Surface(
+            onClick = onRemove,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            shadowElevation = 2.dp,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(20.dp),
+        ) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "移除图片",
+                modifier = Modifier.padding(3.dp),
+                tint = MaterialTheme.colorScheme.onSurface,
+            )
         }
     }
 }

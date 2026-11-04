@@ -7,11 +7,15 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Context
+import android.net.Uri
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.pideck.nativeapp.data.Device
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
+import dev.pideck.nativeapp.data.ImagePrep
+import dev.pideck.nativeapp.data.PendingImage
+import dev.pideck.nativeapp.data.ChatPayloads
 import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.ReplyMerger
@@ -438,35 +442,85 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    // ---- 图片附件 ----
+    // 只活到「发出去」为止：服务端的 /api/chat 只从消息 parts 里取图，历史接口不回传图片，
+    // 所以重拉历史之后这张图就只剩文字了（协议面的既有限制，不是这里的取舍）。
+
+    var images by mutableStateOf<List<PendingImage>>(emptyList())
+        private set
+
+    var imageError by mutableStateOf<String?>(null)
+        private set
+
+    fun addImages(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        imageError = null
+        var added = images
+        for (uri in uris) {
+            if (added.size >= ImagePrep.MAX_COUNT) {
+                imageError = "一条消息最多带 ${ImagePrep.MAX_COUNT} 张图"
+                break
+            }
+            val prepared = ImagePrep.fromUri(context, uri)
+            if (prepared == null) {
+                imageError = "这张图片读不出来（或者压完还是太大）"
+                continue
+            }
+            added = added + prepared
+        }
+        images = added
+    }
+
+    fun pasteImage() {
+        imageError = null
+        if (images.size >= ImagePrep.MAX_COUNT) {
+            imageError = "一条消息最多带 ${ImagePrep.MAX_COUNT} 张图"
+            return
+        }
+        val prepared = ImagePrep.fromClipboard(context)
+        if (prepared == null) {
+            imageError = "剪贴板里没有图片"
+            return
+        }
+        images = images + prepared
+    }
+
+    fun removeImage(id: String) {
+        images = images.filterNot { it.id == id }
+    }
+
+    fun dismissImageError() {
+        imageError = null
+    }
+
     fun send(text: String) {
         val target = device ?: return
         val body = text.trim()
-        if (body.isEmpty() || sending) return
+        val attached = images
+        if ((body.isEmpty() && attached.isEmpty()) || sending) return
         sending = true
         error = null
+        images = emptyList()
         // 前台起服务是稳的（后台启动会被系统拒），run 一结束服务自己退出。
         RunWatcher.start(context)
         merger = ReplyMerger()
         live = null
         // 用户消息先上屏：等磁盘落盘再显示会有半秒的「没反应」。
         val localKey = "local-${System.currentTimeMillis()}"
-        items = items + TimelineItem.UserMessage(key = localKey, text = body, timestamp = System.currentTimeMillis())
+        // 本地气泡里补一句图片数：历史接口不回传图片，不然重拉之后这条消息看着像空的
+        val localText = when {
+            body.isNotEmpty() && attached.isEmpty() -> body
+            body.isNotEmpty() -> body + "\n（" + attached.size + " 张图片）"
+            else -> "（" + attached.size + " 张图片）"
+        }
+        items = items + TimelineItem.UserMessage(key = localKey, text = localText, timestamp = System.currentTimeMillis())
 
         sendJob = viewModelScope.launch {
-            val payload = buildJsonObject {
-                put("id", sessionId)
-                put(
-                    "messages",
-                    buildJsonArray {
-                        add(
-                            buildJsonObject {
-                                put("role", "user")
-                                put("content", body)
-                            },
-                        )
-                    },
-                )
-            }
+            val payload = ChatPayloads.chatBody(
+                sessionId = sessionId,
+                text = body,
+                imageDataUrls = attached.map { it.dataUrl },
+            )
             try {
                 api.chat(target, token, payload).collect { frame ->
                     val snapshot = when {
