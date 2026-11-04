@@ -58,6 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.Lifecycle
@@ -131,9 +132,21 @@ fun ChatScreen(
 
     // 只在「末尾那条变了」的时候跟随 —— 往上翻历史会往前面插条目，末尾没变就不会把人拽回底部。
     val lastKey = rows.lastOrNull()?.key
-    val liveLength = viewModel.live?.text?.length ?: 0
-    LaunchedEffect(lastKey, liveLength) {
-        if (atBottom) stickToBottom()
+    // 跟随的判据不能只看正文长度：流式过程中先长的是思考块、工具入参/结果，
+    // 正文还没开始动的时候高度已经在涨了，那时不跟就会「贴底也不跟」。
+    val liveSignature = viewModel.live?.let { live ->
+        live.text.length + live.reasoning.length +
+            live.tools.sumOf {
+                (it.input?.toString()?.length ?: 0) + (it.output?.toString()?.length ?: 0) +
+                    (it.errorText?.length ?: 0)
+            }
+    } ?: 0
+    LaunchedEffect(lastKey, liveSignature) {
+        if (atBottom) {
+            // 等这一帧布局量完再钉，否则钉的还是加高之前的底部
+            withFrameNanos { }
+            stickToBottom()
+        }
     }
     // 键盘弹起 / 收起会压缩或放大视口。等这一轮布局量完再钉，否则钉的是「旧的底部」，
     // 键盘一冒出来内容就又跑到下面去了（这就是上一版键盘弹起不贴底的原因）。
