@@ -21,6 +21,7 @@ import dev.pideck.nativeapp.data.ChatPayloads
 import dev.pideck.nativeapp.data.PendingUiRequest
 import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.Prefs
+import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.ReplyMerger
 import dev.pideck.nativeapp.data.ReplySnapshot
 import dev.pideck.nativeapp.data.StateCache
@@ -133,6 +134,17 @@ class ChatViewModel @Inject constructor(
             title = cached?.title?.ifBlank { null } ?: "会话"
             sessionModel = cached?.model.toSessionModel()
             thinkingLevel = cached?.thinkingLevel
+            // 从冷启动 / 历史跳进来时缓存里没有这条会话：模型与思考档位就都显示不出来。
+            // 拉一次 /api/state 把记录补上（只在缺记录时才发这一趟）。
+            if (cached == null && found != null) {
+                runCatching { api.state(found, token, null) }
+                    .onSuccess { result ->
+                        if (result is StateFetch.Fresh) {
+                            StateCache.put(deviceId, result.state)
+                            adoptSession(result.state.sessions.firstOrNull { it.id == sessionId })
+                        }
+                    }
+            }
             refreshHistory()
             startWatching()
             startStatePolling()
@@ -142,6 +154,14 @@ class ChatViewModel @Inject constructor(
 
     fun dismissError() {
         error = null
+    }
+
+    /** 用会话记录补齐标题 / 模型 / 思考档位（只在拿得到真值时覆盖，别把用户刚选的冲掉）。 */
+    private fun adoptSession(record: Session?) {
+        if (record == null) return
+        record.model.toSessionModel()?.let { sessionModel = it }
+        record.thinkingLevel?.takeIf { it.isNotBlank() }?.let { thinkingLevel = it }
+        record.title?.takeIf { it.isNotBlank() }?.let { if (title == "会话") title = it }
     }
 
     /** 是否有正在往外冒的回复（本端发送 or 别处发起的订阅）。UI 用它决定停止按钮与光标。 */
@@ -203,6 +223,9 @@ class ChatViewModel @Inject constructor(
                                     .firstOrNull { it.sessionId == sessionId }
                                 if (next?.requestId != pendingAsk?.requestId) askError = null
                                 pendingAsk = next
+                                adoptSession(
+                                    result.state.sessions.firstOrNull { it.id == sessionId },
+                                )
                             }
                         }
                 }
@@ -239,14 +262,35 @@ class ChatViewModel @Inject constructor(
         private set
 
     /** 当前模型支持的思考档位（模型清单还没拉到就是空 —— 选择器据此只列能用的）。 */
+    /**
+     * 可选的思考档位。
+     *
+     * 桌面端的口径是三层兜底（`sessionPickerOptions.ts:resolveThinkingPickerLevels`）：
+     * 模型表里的 `thinkingLevels` → 运行时 capability 快照 → 完整档位表。这里照抄最后那层，
+     * 否则「会话记录的 modelId 跟 /api/models 里的 id 对不上」时（比如 `group/auto-x` vs `auto/x`）
+     * 列表就空了，顶栏那颗思考按钮整颗消失 —— 用户看到的就是「要点一下才出来」。
+     */
     val thinkingLevels: List<String>
         get() {
-            val current = sessionModel ?: return emptyList()
-            return availableModels
-                .firstOrNull { it.provider == current.provider && it.id == current.modelId }
-                ?.thinkingLevels
-                .orEmpty()
+            val entry = modelEntry()
+            return entry?.thinkingLevels?.takeIf { it.isNotEmpty() } ?: STANDARD_THINKING_LEVELS
         }
+
+    /** 当前模型在 /api/models 里的条目：先精确对，再按 id 尾部宽松对。 */
+    private fun modelEntry(): AvailableModel? {
+        val current = sessionModel ?: return null
+        availableModels.firstOrNull {
+            it.provider == current.provider && it.id == current.modelId
+        }?.let { return it }
+        val wanted = normalizeModelId(current.modelId)
+        if (wanted.length < 6) return null
+        return availableModels.firstOrNull {
+            it.provider == current.provider && normalizeModelId(it.id).endsWith(wanted)
+        }
+    }
+
+    private fun normalizeModelId(raw: String): String =
+        raw.substringAfterLast('/').lowercase().filter { it.isLetterOrDigit() }
 
     fun dismissPrefError() {
         prefError = null
@@ -692,3 +736,7 @@ class ChatViewModel @Inject constructor(
         }
     }
 }
+
+/** pi 的标准档位表（桌面端在拿不到模型能力时也用这一份）。 */
+private val STANDARD_THINKING_LEVELS =
+    listOf("off", "minimal", "low", "medium", "high", "xhigh", "max")

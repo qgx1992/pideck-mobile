@@ -50,7 +50,7 @@ object Notifications {
     /** 前台服务的常驻通知（不可划掉，IMPORTANCE_LOW 不出声）。 */
     fun active(context: Context, count: Int): android.app.Notification =
         NotificationCompat.Builder(context, CHANNEL_ACTIVE)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (count > 1) "$count 个会话在等回复" else "正在等回复")
             .setContentText("跑完了会通知你")
             .setOngoing(true)
@@ -63,7 +63,7 @@ object Notifications {
     fun finished(context: Context, sessionId: String, title: String, failed: Boolean) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val builder = NotificationCompat.Builder(context, CHANNEL_DONE)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (failed) "回复中断了" else "回复完成")
             .setContentText(title.ifBlank { "会话" })
             .setStyle(NotificationCompat.BigTextStyle().bigText(title.ifBlank { "会话" }))
