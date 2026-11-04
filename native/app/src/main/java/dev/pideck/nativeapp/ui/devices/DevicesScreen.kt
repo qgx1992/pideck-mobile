@@ -19,7 +19,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -45,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pideck.nativeapp.data.Device
+import dev.pideck.nativeapp.ui.pairing.ScanScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,12 +57,30 @@ fun DevicesScreen(
 ) {
     val devices by viewModel.devices.collectAsStateWithLifecycle()
     var showAdd by remember { mutableStateOf(false) }
+    var showScan by remember { mutableStateOf(false) }
+    var scanned by remember { mutableStateOf("") }
+
+    if (showScan) {
+        ScanScreen(
+            onBack = { showScan = false },
+            onScanned = { text ->
+                // 扫到的原始串与手动粘贴走同一条解析路径（PairingLink 在 ViewModel 里）
+                showScan = false
+                scanned = text
+                showAdd = true
+            },
+        )
+        return
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("设备") },
                 actions = {
+                    IconButton(onClick = { showScan = true }) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = "扫码配对")
+                    }
                     IconButton(onClick = { showAdd = true }) {
                         Icon(Icons.Default.Add, contentDescription = "添加设备")
                     }
@@ -73,6 +94,7 @@ fun DevicesScreen(
                     .fillMaxSize()
                     .padding(padding),
                 onAdd = { showAdd = true },
+                onScan = { showScan = true },
             )
         } else {
             LazyColumn(
@@ -97,13 +119,16 @@ fun DevicesScreen(
         AddDeviceDialog(
             busy = viewModel.busy,
             error = viewModel.error,
+            initialLink = scanned,
             onDismiss = {
                 showAdd = false
+                scanned = ""
                 viewModel.clearError()
             },
             onConfirm = { link, token ->
                 viewModel.add(link, token) { device ->
                     showAdd = false
+                    scanned = ""
                     onOpenDevice(device)
                 }
             },
@@ -112,7 +137,11 @@ fun DevicesScreen(
 }
 
 @Composable
-private fun EmptyDevices(modifier: Modifier = Modifier, onAdd: () -> Unit) {
+private fun EmptyDevices(
+    modifier: Modifier = Modifier,
+    onAdd: () -> Unit,
+    onScan: () -> Unit,
+) {
     Column(
         modifier = modifier.padding(32.dp),
         verticalArrangement = Arrangement.Center,
@@ -128,12 +157,14 @@ private fun EmptyDevices(modifier: Modifier = Modifier, onAdd: () -> Unit) {
         Text("还没有配对设备", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
         Text(
-            "在桌面端 PiDeck 的「设置 → 连接面板」里复制地址（带令牌），粘到下面即可。",
+            "在桌面端 PiDeck 的「设置 → 连接面板」里扫二维码，或者复制地址（带令牌）粘进来。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(20.dp))
-        FilledTonalButton(onClick = onAdd) { Text("添加设备") }
+        Button(onClick = onScan) { Text("扫码配对") }
+        Spacer(Modifier.height(8.dp))
+        FilledTonalButton(onClick = onAdd) { Text("手动输入地址") }
     }
 }
 
@@ -185,8 +216,9 @@ private fun AddDeviceDialog(
     error: String?,
     onDismiss: () -> Unit,
     onConfirm: (link: String, token: String) -> Unit,
+    initialLink: String = "",
 ) {
-    var link by remember { mutableStateOf("") }
+    var link by remember(initialLink) { mutableStateOf(initialLink) }
     var token by remember { mutableStateOf("") }
 
     AlertDialog(
