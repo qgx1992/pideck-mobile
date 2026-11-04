@@ -4,12 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -76,7 +73,7 @@ import kotlinx.coroutines.launch
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     onBack: () -> Unit,
@@ -112,8 +109,9 @@ fun ChatScreen(
     // 贴底时把列表钉在最底部：scrollOffset 给一个大值，LazyList 会自己夹到最大滚动量，
     // 长消息也能看到末尾（只用 scrollToItem(index) 只会把这条的顶部对齐）。
     suspend fun stickToBottom() {
-        if (rows.isEmpty()) return
-        listState.scrollToItem(rows.lastIndex, scrollOffset = Int.MAX_VALUE / 4)
+        val count = listState.layoutInfo.totalItemsCount
+        if (count <= 0) return
+        listState.scrollToItem(count - 1, scrollOffset = Int.MAX_VALUE / 4)
     }
 
     // 只在「末尾那条变了」的时候跟随 —— 往上翻历史会往前面插条目，末尾没变就不会把人拽回底部。
@@ -122,10 +120,12 @@ fun ChatScreen(
     LaunchedEffect(lastKey, liveLength) {
         if (atBottom) stickToBottom()
     }
-    // 键盘弹起会压缩视口，贴底时跟着再钉一次。
-    val imeVisible = WindowInsets.isImeVisible
-    LaunchedEffect(imeVisible) {
-        if (atBottom) stickToBottom()
+    // 键盘弹起 / 收起会压缩或放大视口。等这一轮布局量完再钉，否则钉的是「旧的底部」，
+    // 键盘一冒出来内容就又跑到下面去了（这就是上一版键盘弹起不贴底的原因）。
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.layoutInfo.viewportSize.height }.collect {
+            if (atBottom) stickToBottom()
+        }
     }
 
     LaunchedEffect(viewModel.error) {
