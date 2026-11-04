@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -29,15 +30,12 @@ import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -52,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import dev.pideck.nativeapp.data.TodoEntry
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
+import dev.pideck.nativeapp.ui.theme.RoundIconButton
 
 /**
  * 工作区抽屉：待办 / 改动 / 文件。
@@ -59,21 +58,26 @@ import dev.pideck.nativeapp.data.WorkspaceTodo
  * 三页都是只读视图 —— 手机上不打算做编辑器，看得到「agent 现在在干什么、动了哪些文件、
  * 这个仓库里有什么」就够了；真要改还是回桌面端。
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+/**
+ * 工作区面板：待办 / 改动 / 文件，从右侧滑出。
+ *
+ * 三页都是只读视图 —— 手机上不打算做编辑器，看得到「agent 现在在干什么、动了哪些文件、
+ * 这个仓库里有什么」就够了；真要改还是回桌面端。
+ */
 @Composable
-fun WorkspaceSheet(
-    viewModel: ChatViewModel,
+fun WorkspacePanel(
+    visible: Boolean,
     onDismiss: () -> Unit,
+    viewModel: ChatViewModel,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("待办", "改动", "文件")
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    RightSidePanel(visible = visible, onDismiss = onDismiss) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp),
+                .padding(start = 18.dp, end = 10.dp, top = 12.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("工作区", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
@@ -81,11 +85,26 @@ fun WorkspaceSheet(
                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))
             }
-            IconButton(onClick = { viewModel.refreshWorkspace() }) {
-                Icon(Icons.Default.Refresh, contentDescription = "刷新")
-            }
+            RoundIconButton(
+                icon = Icons.Default.Refresh,
+                contentDescription = "刷新",
+                onClick = { viewModel.refreshWorkspace() },
+                size = 34,
+                container = MaterialTheme.colorScheme.surfaceVariant,
+            )
+            Spacer(Modifier.width(6.dp))
+            RoundIconButton(
+                icon = Icons.Default.Close,
+                contentDescription = "收起",
+                onClick = onDismiss,
+                size = 34,
+                container = MaterialTheme.colorScheme.surfaceVariant,
+            )
         }
-        TabRow(selectedTabIndex = tab) {
+        TabRow(
+            selectedTabIndex = tab,
+            containerColor = Color.Transparent,
+        ) {
             tabs.forEachIndexed { index, label ->
                 Tab(
                     selected = tab == index,
@@ -94,7 +113,7 @@ fun WorkspaceSheet(
                 )
             }
         }
-        Box(modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 560.dp)) {
+        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             when (tab) {
                 0 -> TodoTab(viewModel.workspaceTodo)
                 1 -> ChangesTab(viewModel.workspaceChanges)
@@ -106,10 +125,9 @@ fun WorkspaceSheet(
                 message,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
             )
         }
-        Spacer(Modifier.height(24.dp))
     }
 }
 

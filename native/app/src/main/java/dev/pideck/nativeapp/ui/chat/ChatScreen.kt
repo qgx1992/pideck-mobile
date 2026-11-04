@@ -177,8 +177,9 @@ fun ChatScreen(
     // 顶栏的模型 / 思考档位选择器
     var showModelSheet by remember { mutableStateOf(false) }
     var showThinkingSheet by remember { mutableStateOf(false) }
-    // 长按消息 → 复制全文 / 复制代码块
+    // 长按消息 → 复制全文 / 复制代码块 / 自由复制
     var actionTarget by remember { mutableStateOf<TimelineItem?>(null) }
+    var freeCopyTarget by remember { mutableStateOf<TimelineItem?>(null) }
 
     LaunchedEffect(viewModel.error) {
         viewModel.error?.let {
@@ -187,6 +188,8 @@ fun ChatScreen(
         }
     }
 
+    // 右侧工作区面板要盖住顶栏与输入条，所以放在最外层 Box 里（内容区放不下它）
+    Box(modifier = Modifier.fillMaxSize()) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = drawerState.isOpen,
@@ -264,19 +267,14 @@ fun ChatScreen(
                         },
                         modifier = Modifier.padding(end = 6.dp),
                     )
+                    // 刷新按钮去掉了：轮询有看护服务、历史在每轮结束时自己重拉，
+                    // 这个键只会让人以为不点就不会更新。留一个「正在跑」的指示就够。
                     if (viewModel.streaming) {
                         CircularProgressIndicator(
                             modifier = Modifier
                                 .padding(end = 14.dp)
                                 .size(18.dp),
                             strokeWidth = 2.dp,
-                        )
-                    } else {
-                        RoundIconButton(
-                            icon = Icons.Filled.Refresh,
-                            contentDescription = "刷新",
-                            onClick = { viewModel.refreshHistory() },
-                            modifier = Modifier.padding(end = 10.dp),
                         )
                     }
                 },
@@ -408,10 +406,21 @@ fun ChatScreen(
     }
     }
 
+    WorkspacePanel(
+        visible = showWorkspace,
+        onDismiss = { showWorkspace = false },
+        viewModel = viewModel,
+    )
+    }
+
     actionTarget?.let { target ->
         MessageActionsSheet(
             item = target,
             onDismiss = { actionTarget = null },
+            onFreeCopy = {
+                actionTarget = null
+                freeCopyTarget = target
+            },
             onCopy = { text ->
                 clipboard.setText(AnnotatedString(text))
                 actionTarget = null
@@ -420,9 +429,7 @@ fun ChatScreen(
         )
     }
 
-    if (showWorkspace) {
-        WorkspaceSheet(viewModel = viewModel, onDismiss = { showWorkspace = false })
-    }
+
     if (showModelSheet) {
         ModelSheet(
             models = viewModel.availableModels,
@@ -455,6 +462,20 @@ fun ChatScreen(
         val message = viewModel.prefError ?: return@LaunchedEffect
         snackbar.showSnackbar(message)
         viewModel.dismissPrefError()
+    }
+    freeCopyTarget?.let { target ->
+        FreeCopyDialog(
+            text = when (target) {
+                is TimelineItem.UserMessage -> target.text
+                is TimelineItem.AssistantMessage -> target.text
+            },
+            onCopyAll = { text ->
+                clipboard.setText(AnnotatedString(text))
+                freeCopyTarget = null
+                scope.launch { snackbar.showSnackbar("已复制 ${text.length} 字") }
+            },
+            onDismiss = { freeCopyTarget = null },
+        )
     }
     FilePreviewDialog(viewModel = viewModel)
 }
@@ -739,6 +760,7 @@ private fun MessageActionsSheet(
     item: TimelineItem,
     onDismiss: () -> Unit,
     onCopy: (String) -> Unit,
+    onFreeCopy: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
     val text = when (item) {
@@ -764,6 +786,12 @@ private fun MessageActionsSheet(
                 detail = "${text.length} 字",
                 enabled = text.isNotBlank(),
                 onClick = { onCopy(text) },
+            )
+            SheetAction(
+                label = "自由复制",
+                detail = "选中一段再复制",
+                enabled = text.isNotBlank(),
+                onClick = onFreeCopy,
             )
             if (codes.isNotEmpty()) {
                 SheetAction(
