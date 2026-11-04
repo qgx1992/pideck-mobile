@@ -248,33 +248,7 @@ fun MarkdownText(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
 
-                is MdBlock.Code -> Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column {
-                        if (!block.lang.isNullOrBlank()) {
-                            Text(
-                                text = block.lang!!,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(start = 12.dp, top = 8.dp, end = 12.dp),
-                            )
-                        }
-                        Text(
-                            text = block.code,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                                lineHeight = 18.sp,
-                            ),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier
-                                .horizontalScroll(rememberScrollState())
-                                .padding(12.dp),
-                        )
-                    }
-                }
+                is MdBlock.Code -> CodeBlock(lang = block.lang, code = block.code)
 
                 is MdBlock.ListBlock -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     block.items.forEachIndexed { position, item ->
