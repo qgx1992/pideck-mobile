@@ -24,7 +24,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +46,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pideck.nativeapp.data.Device
+import dev.pideck.nativeapp.ui.theme.PillButton
+import dev.pideck.nativeapp.ui.theme.PillStyle
+import dev.pideck.nativeapp.ui.theme.RoundIconButton
 import dev.pideck.nativeapp.ui.pairing.ScanScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,12 +80,18 @@ fun DevicesScreen(
             TopAppBar(
                 title = { Text("设备") },
                 actions = {
-                    IconButton(onClick = { showScan = true }) {
-                        Icon(Icons.Default.QrCodeScanner, contentDescription = "扫码配对")
-                    }
-                    IconButton(onClick = { showAdd = true }) {
-                        Icon(Icons.Default.Add, contentDescription = "添加设备")
-                    }
+                    RoundIconButton(
+                        icon = Icons.Default.QrCodeScanner,
+                        contentDescription = "扫码配对",
+                        onClick = { showScan = true },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    RoundIconButton(
+                        icon = Icons.Default.Add,
+                        contentDescription = "添加设备",
+                        onClick = { showAdd = true },
+                        modifier = Modifier.padding(end = 6.dp),
+                    )
                 },
             )
         },
@@ -162,9 +170,9 @@ private fun EmptyDevices(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(20.dp))
-        Button(onClick = onScan) { Text("扫码配对") }
-        Spacer(Modifier.height(8.dp))
-        FilledTonalButton(onClick = onAdd) { Text("手动输入地址") }
+        PillButton(text = "扫码配对", onClick = onScan, icon = Icons.Default.QrCodeScanner, fillWidth = true)
+        Spacer(Modifier.height(10.dp))
+        PillButton(text = "手动输入地址", onClick = onAdd, style = PillStyle.Tonal, fillWidth = true)
     }
 }
 
@@ -203,9 +211,13 @@ private fun DeviceRow(device: Device, onClick: () -> Unit, onRemove: () -> Unit)
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            IconButton(onClick = onRemove) {
-                Icon(Icons.Default.DeleteOutline, contentDescription = "删除设备")
-            }
+            RoundIconButton(
+                icon = Icons.Default.DeleteOutline,
+                contentDescription = "删除设备",
+                onClick = onRemove,
+                size = 34,
+                container = MaterialTheme.colorScheme.surfaceVariant,
+            )
         }
     }
 }

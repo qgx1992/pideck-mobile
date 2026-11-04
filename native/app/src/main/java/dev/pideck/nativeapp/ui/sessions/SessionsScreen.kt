@@ -52,6 +52,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.pideck.nativeapp.data.Session
+import dev.pideck.nativeapp.ui.theme.PillButton
+import dev.pideck.nativeapp.ui.theme.PillStyle
+import dev.pideck.nativeapp.ui.theme.RoundIconButton
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -86,23 +89,33 @@ fun SessionsScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
+                    RoundIconButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "返回",
+                        onClick = onBack,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.toggleAllGroups() }) {
-                        Icon(
-                            if (viewModel.allCollapsed) Icons.Default.UnfoldMore else Icons.Default.UnfoldLess,
-                            contentDescription = if (viewModel.allCollapsed) "全部展开" else "全部收起",
-                        )
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置")
-                    }
-                    IconButton(onClick = { viewModel.refresh() }, enabled = !viewModel.loading) {
-                        Icon(Icons.Default.Refresh, contentDescription = "刷新")
-                    }
+                    RoundIconButton(
+                        icon = if (viewModel.allCollapsed) Icons.Default.UnfoldMore else Icons.Default.UnfoldLess,
+                        contentDescription = if (viewModel.allCollapsed) "全部展开" else "全部收起",
+                        onClick = { viewModel.toggleAllGroups() },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    RoundIconButton(
+                        icon = Icons.Default.Settings,
+                        contentDescription = "设置",
+                        onClick = onOpenSettings,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    RoundIconButton(
+                        icon = Icons.Default.Refresh,
+                        contentDescription = "刷新",
+                        onClick = { viewModel.refresh() },
+                        enabled = !viewModel.loading,
+                        modifier = Modifier.padding(end = 6.dp),
+                    )
                 },
             )
         },
@@ -283,7 +296,7 @@ private fun ErrorBlock(message: String, onRetry: () -> Unit) {
             color = MaterialTheme.colorScheme.error,
         )
         Spacer(Modifier.height(18.dp))
-        androidx.compose.material3.OutlinedButton(onClick = onRetry) { Text("重试") }
+        PillButton(text = "重新加载", onClick = onRetry, style = PillStyle.Ghost)
     }
 }
 

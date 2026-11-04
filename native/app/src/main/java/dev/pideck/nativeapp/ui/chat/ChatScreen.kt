@@ -36,6 +36,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
@@ -83,7 +84,11 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.data.TimelineItem
 import dev.pideck.nativeapp.data.ToolView
+import dev.pideck.nativeapp.data.SessionModel
+import dev.pideck.nativeapp.data.thinkingLabel
 import dev.pideck.nativeapp.data.toTimelineItem
+import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.ui.theme.SelectChip
 import java.text.SimpleDateFormat
 import kotlinx.coroutines.launch
 import java.util.Date
@@ -169,6 +174,9 @@ fun ChatScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
 
     var showWorkspace by remember { mutableStateOf(false) }
+    // 顶栏的模型 / 思考档位选择器
+    var showModelSheet by remember { mutableStateOf(false) }
+    var showThinkingSheet by remember { mutableStateOf(false) }
     // 长按消息 → 复制全文 / 复制代码块
     var actionTarget by remember { mutableStateOf<TimelineItem?>(null) }
 
@@ -210,6 +218,7 @@ fun ChatScreen(
         modifier = Modifier.statusBarsPadding(),
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
+            Column(Modifier.background(MaterialTheme.colorScheme.surface)) {
             TopAppBar(
                 title = {
                     Column {
@@ -229,9 +238,12 @@ fun ChatScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                        Icon(Icons.Default.Menu, contentDescription = "会话列表")
-                    }
+                    RoundIconButton(
+                        icon = Icons.Default.Menu,
+                        contentDescription = "会话列表",
+                        onClick = { scope.launch { drawerState.open() } },
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
                 },
                 actions = {
                     val todo = viewModel.workspaceTodo
@@ -240,34 +252,68 @@ fun ChatScreen(
                             "${todo.done}/${todo.todos.size}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(end = 4.dp),
+                            modifier = Modifier.padding(end = 6.dp),
                         )
                     }
-                    IconButton(
+                    RoundIconButton(
+                        icon = Icons.Filled.ViewSidebar,
+                        contentDescription = "工作区",
                         onClick = {
                             viewModel.loadWorkspace()
                             showWorkspace = true
                         },
-                    ) {
-                        Icon(Icons.Filled.ViewSidebar, contentDescription = "工作区")
-                    }
+                        modifier = Modifier.padding(end = 6.dp),
+                    )
                     if (viewModel.streaming) {
                         CircularProgressIndicator(
                             modifier = Modifier
-                                .padding(end = 16.dp)
+                                .padding(end = 14.dp)
                                 .size(18.dp),
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        IconButton(onClick = { viewModel.refreshHistory() }) {
-                            Icon(Icons.Filled.Refresh, contentDescription = "刷新")
-                        }
+                        RoundIconButton(
+                            icon = Icons.Filled.Refresh,
+                            contentDescription = "刷新",
+                            onClick = { viewModel.refreshHistory() },
+                            modifier = Modifier.padding(end = 10.dp),
+                        )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             )
+
+            // 模型 / 思考档位：桌面端在输入条里选，手机上顶栏下方排一排胶囊更省空间
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 12.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SelectChip(
+                    text = viewModel.sessionModel?.shortLabel ?: "选择模型",
+                    onClick = {
+                        showModelSheet = true
+                        viewModel.loadModels()
+                    },
+                    icon = Icons.Default.Memory,
+                    trailing = Icons.Filled.KeyboardArrowDown,
+                    accent = viewModel.sessionModel == null,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                val levels = viewModel.thinkingLevels
+                if (levels.isNotEmpty()) {
+                    val level = viewModel.thinkingLevel?.takeIf { it in levels } ?: levels.first()
+                    SelectChip(
+                        text = "思考 ${thinkingLabel(level)}",
+                        onClick = { showThinkingSheet = true },
+                        trailing = Icons.Filled.KeyboardArrowDown,
+                        accent = level in setOf("high", "xhigh", "max"),
+                    )
+                }
+            }
+            }
         },
         bottomBar = {
             Composer(
@@ -376,6 +422,39 @@ fun ChatScreen(
 
     if (showWorkspace) {
         WorkspaceSheet(viewModel = viewModel, onDismiss = { showWorkspace = false })
+    }
+    if (showModelSheet) {
+        ModelSheet(
+            models = viewModel.availableModels,
+            current = viewModel.sessionModel,
+            busy = viewModel.modelsBusy,
+            onRefresh = { viewModel.loadModels(force = true) },
+            onPick = { model ->
+                showModelSheet = false
+                viewModel.applyModel(
+                    SessionModel(provider = model.provider, modelId = model.id, modelName = model.name),
+                )
+            },
+            onDismiss = { showModelSheet = false },
+        )
+    }
+    if (showThinkingSheet) {
+        ThinkingSheet(
+            levels = viewModel.thinkingLevels,
+            current = viewModel.thinkingLevel,
+            modelLabel = viewModel.sessionModel?.shortLabel,
+            onPick = { level ->
+                showThinkingSheet = false
+                viewModel.applyThinking(level)
+            },
+            onDismiss = { showThinkingSheet = false },
+        )
+    }
+    // 改偏好失败（主机拒了 / 离线）用 snackbar 说一声，不占版面
+    LaunchedEffect(viewModel.prefError) {
+        val message = viewModel.prefError ?: return@LaunchedEffect
+        snackbar.showSnackbar(message)
+        viewModel.dismissPrefError()
     }
     FilePreviewDialog(viewModel = viewModel)
 }

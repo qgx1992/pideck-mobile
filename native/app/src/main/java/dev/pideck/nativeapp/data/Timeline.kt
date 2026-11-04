@@ -84,8 +84,13 @@ fun List<ChatMessage>.toTimelineItems(): List<TimelineItem> = mapNotNull { messa
 
         // assistant 以及未知角色都按回复渲染：宁可多显示，别让内容凭空消失。
         else -> {
-            val text = message.text
-            val thinking = message.thinking?.takeIf { it.isNotBlank() }
+            // 有的后端把思考直接拼在正文里（`<thinking>…</thinking>`），usage.thinking 同时也有值，
+            // 不拆就会在思考块下面再看到一整段带标签的重复内容。
+            val (text, inlineThinking) = splitThinking(message.text)
+            val thinking = listOfNotNull(
+                message.thinking?.trim()?.takeIf { it.isNotBlank() },
+                inlineThinking,
+            ).distinct().joinToString("\n\n").ifBlank { null }
             if (text.isBlank() && thinking == null) null
             else TimelineItem.AssistantMessage(
                 key = "msg-${message.id}",
@@ -98,11 +103,15 @@ fun List<ChatMessage>.toTimelineItems(): List<TimelineItem> = mapNotNull { messa
 }
 
 /** 流式快照 → 时间线条目（放在列表末尾）。 */
-fun ReplySnapshot.toTimelineItem(streaming: Boolean): TimelineItem.AssistantMessage =
-    TimelineItem.AssistantMessage(
+fun ReplySnapshot.toTimelineItem(streaming: Boolean): TimelineItem.AssistantMessage {
+    val (body, inlineThinking) = splitThinking(text)
+    return TimelineItem.AssistantMessage(
         key = "live-$messageId",
-        text = text,
-        thinking = reasoning.ifBlank { null },
+        text = body,
+        thinking = listOfNotNull(
+            reasoning.trim().takeIf { it.isNotBlank() },
+            inlineThinking,
+        ).distinct().joinToString("\n\n").ifBlank { null },
         tools = tools.map { tool ->
             ToolView(
                 id = tool.toolCallId,
@@ -116,6 +125,45 @@ fun ReplySnapshot.toTimelineItem(streaming: Boolean): TimelineItem.AssistantMess
         streaming = streaming && !finished,
         errorText = errorText,
     )
+}
+
+private const val THINK_OPEN = "<thinking>"
+private const val THINK_CLOSE = "</thinking>"
+
+/**
+ * 把正文里的 `<thinking>…</thinking>` 段拆出来。
+ *
+ * 未闭合的（流式输出中途）也收：拿到一半的思考也比让它糊在正文里强。
+ * 返回的正文会去掉标签与多余空行；没有标签时原样返回，不做任何裁剪。
+ */
+internal fun splitThinking(raw: String): Pair<String, String?> {
+    if (!raw.contains(THINK_OPEN) && !raw.contains(THINK_CLOSE)) return raw to null
+    val body = StringBuilder()
+    val segments = mutableListOf<String>()
+    var cursor = 0
+    while (cursor < raw.length) {
+        val start = raw.indexOf(THINK_OPEN, cursor)
+        if (start < 0) {
+            val rest = raw.substring(cursor)
+            if (rest.contains(THINK_CLOSE)) body.append(rest.replace(THINK_CLOSE, "")) else body.append(rest)
+            break
+        }
+        body.append(raw.substring(cursor, start))
+        val end = raw.indexOf(THINK_CLOSE, start + THINK_OPEN.length)
+        if (end < 0) {
+            segments += raw.substring(start + THINK_OPEN.length)
+            break
+        }
+        segments += raw.substring(start + THINK_OPEN.length, end)
+        cursor = end + THINK_CLOSE.length
+    }
+    val cleanBody = body.toString().replace(Regex("\n{3,}"), "\n\n").trim()
+    val cleanThinking = segments
+        .map { it.replace(Regex("\n{3,}"), "\n\n").trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString("\n\n")
+    return cleanBody to cleanThinking.ifBlank { null }
+}
 
 /** 入参/结果压成一行可读文本：对象走紧凑 JSON，字符串去掉外层引号。 */
 private fun JsonElement.prettyArgs(): String {

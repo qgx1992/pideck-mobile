@@ -85,9 +85,19 @@ interface PideckApi {
 
     /** 工作区「文件」：某一层的目录列表，[path] 为空表示项目根。 */
     suspend fun files(device: Device, token: String?, projectId: String, path: String): List<FileNode>
-
     /** 点开文件时读正文（桌面端会按大小截断，这里再兜一次底）。 */
     suspend fun fileText(device: Device, token: String?, projectId: String, path: String): String
+
+    /** 可选模型清单（`GET /api/models`，带缓存，force 才重新扫）。 */
+    suspend fun models(device: Device, token: String?, force: Boolean = false): List<AvailableModel>
+
+    /**
+     * 改会话偏好（模型 / 思考档位 / 标题）。
+     *
+     * 运行中的会话由主机在下次激活时 applyPreferences；草稿会话直接写记录。
+     * 两条路径都是这一个端点，所以调用方改完只需重读 `/api/state` 对账。
+     */
+    suspend fun updateSession(device: Device, token: String?, sessionId: String, patch: JsonObject)
 }
 
 class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
@@ -317,6 +327,30 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         }
         postJson(device, token, "/api/sessions/${encode(sessionId)}/runtime/stop", body)
         Unit
+    }
+
+    override suspend fun models(device: Device, token: String?, force: Boolean): List<AvailableModel> =
+        withContext(Dispatchers.IO) {
+            val raw = rawGet(device, token, if (force) "/api/models?force=1" else "/api/models")
+            val root = PideckJson.parseToJsonElement(raw) as? JsonObject
+            val list = root?.get("models") as? JsonArray ?: return@withContext emptyList()
+            list.toList().toAvailableModels()
+        }
+
+    override suspend fun updateSession(
+        device: Device,
+        token: String?,
+        sessionId: String,
+        patch: JsonObject,
+    ) {
+        withContext(Dispatchers.IO) {
+            postJson(
+                device,
+                token,
+                "/api/sessions/${URLEncoder.encode(sessionId, "UTF-8")}/update",
+                patch,
+            )
+        }
     }
 
     private suspend fun postJson(device: Device, token: String?, path: String, body: JsonObject): String {

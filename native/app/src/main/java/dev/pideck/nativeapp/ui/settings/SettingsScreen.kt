@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -34,6 +35,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.BuildConfig
+import dev.pideck.nativeapp.ui.theme.PillButton
+import dev.pideck.nativeapp.ui.theme.PillStyle
+import dev.pideck.nativeapp.ui.theme.RoundIconButton
 import dev.pideck.nativeapp.data.ThemeMode
 
 /**
@@ -55,9 +59,12 @@ fun SettingsScreen(
             TopAppBar(
                 title = { Text("设置") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
+                    RoundIconButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "返回",
+                        onClick = onBack,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
                 },
             )
         },
@@ -137,7 +144,13 @@ fun SettingsScreen(
             InfoRow("已配对设备", "${viewModel.deviceCount} 台")
             InfoRow("会话数", "${viewModel.sessionCount}")
             Spacer(Modifier.height(6.dp))
-            OutlinedButton(onClick = onManageDevices) { Text("管理设备 / 添加新设备") }
+            PillButton(
+                text = "管理设备 / 添加新设备",
+                onClick = onManageDevices,
+                style = PillStyle.Tonal,
+                icon = Icons.Default.Dns,
+                fillWidth = true,
+            )
 
             Spacer(Modifier.height(12.dp))
             SectionTitle("关于")

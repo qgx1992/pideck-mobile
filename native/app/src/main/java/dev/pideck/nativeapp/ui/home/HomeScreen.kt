@@ -50,6 +50,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.data.Session
+import dev.pideck.nativeapp.ui.theme.PillButton
+import dev.pideck.nativeapp.ui.theme.PillStyle
+import dev.pideck.nativeapp.ui.theme.RoundIconButton
 import dev.pideck.nativeapp.ui.sessions.relativeTime
 
 /**
@@ -86,12 +89,18 @@ fun HomeScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onOpenSessions) {
-                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = "会话列表")
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置")
-                    }
+                    RoundIconButton(
+                        icon = Icons.AutoMirrored.Filled.List,
+                        contentDescription = "会话列表",
+                        onClick = onOpenSessions,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    RoundIconButton(
+                        icon = Icons.Default.Settings,
+                        contentDescription = "设置",
+                        onClick = onOpenSettings,
+                        modifier = Modifier.padding(end = 6.dp),
+                    )
                 },
             )
         },
@@ -184,7 +193,7 @@ fun HomeScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onErrorContainer,
                             )
-                            TextButton(onClick = { viewModel.load() }) { Text("重试") }
+                            PillButton(text = "重新加载", onClick = { viewModel.load() }, style = PillStyle.Ghost)
                         }
                     }
                 }

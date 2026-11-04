@@ -17,6 +17,10 @@ import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.ReplyMerger
 import dev.pideck.nativeapp.data.ReplySnapshot
 import dev.pideck.nativeapp.data.StateCache
+import dev.pideck.nativeapp.data.StateFetch
+import dev.pideck.nativeapp.data.AvailableModel
+import dev.pideck.nativeapp.data.SessionModel
+import dev.pideck.nativeapp.data.toSessionModel
 import dev.pideck.nativeapp.data.FileNode
 import dev.pideck.nativeapp.data.TimelineItem
 import dev.pideck.nativeapp.data.WorkspaceChanges
@@ -116,7 +120,10 @@ class ChatViewModel @Inject constructor(
             }
             // 记下这一落脚点：下次冷启动直接回到这里，不用再从设备列表点进来
             runCatching { Prefs.rememberSession(context, deviceId, sessionId) }
-            title = StateCache.session(deviceId, sessionId)?.title?.ifBlank { null } ?: "会话"
+            val cached = StateCache.session(deviceId, sessionId)
+            title = cached?.title?.ifBlank { null } ?: "会话"
+            sessionModel = cached?.model.toSessionModel()
+            thinkingLevel = cached?.thinkingLevel
             refreshHistory()
             startWatching()
             pendingDraft?.let { prompt -> send(prompt) }
@@ -130,6 +137,88 @@ class ChatViewModel @Inject constructor(
     /** 是否有正在往外冒的回复（本端发送 or 别处发起的订阅）。UI 用它决定停止按钮与光标。 */
     val streaming: Boolean
         get() = sending || live?.finished == false
+
+    // ---- 模型 / 思考档位 ----
+    // 两个都只是会话记录上的偏好字段（`POST /api/sessions/:id/update`），改完由主机在
+    // 下一次激活时 applyPreferences；所以这里不做本地猜测，改完重读 /api/state 对账。
+
+    var sessionModel by mutableStateOf<SessionModel?>(null)
+        private set
+
+    var thinkingLevel by mutableStateOf<String?>(null)
+        private set
+
+    var availableModels by mutableStateOf<List<AvailableModel>>(emptyList())
+        private set
+
+    var modelsBusy by mutableStateOf(false)
+        private set
+
+    var prefError by mutableStateOf<String?>(null)
+        private set
+
+    /** 当前模型支持的思考档位（模型清单还没拉到就是空 —— 选择器据此只列能用的）。 */
+    val thinkingLevels: List<String>
+        get() {
+            val current = sessionModel ?: return emptyList()
+            return availableModels
+                .firstOrNull { it.provider == current.provider && it.id == current.modelId }
+                ?.thinkingLevels
+                .orEmpty()
+        }
+
+    fun dismissPrefError() {
+        prefError = null
+    }
+
+    fun loadModels(force: Boolean = false) {
+        val target = device ?: return
+        if (modelsBusy) return
+        viewModelScope.launch {
+            modelsBusy = true
+            try {
+                availableModels = api.models(target, token, force)
+            } catch (e: Exception) {
+                prefError = describeConnectionError(e)
+            } finally {
+                modelsBusy = false
+            }
+        }
+    }
+
+    fun applyModel(model: SessionModel) {
+        patchSession(
+            buildJsonObject {
+                put(
+                    "model",
+                    buildJsonObject {
+                        put("provider", model.provider)
+                        put("modelId", model.modelId)
+                        put("modelName", model.modelName)
+                    },
+                )
+            },
+        ) { sessionModel = model }
+    }
+
+    fun applyThinking(level: String) {
+        patchSession(buildJsonObject { put("thinkingLevel", level) }) { thinkingLevel = level }
+    }
+
+    /** 改偏好后把记录重拉一遍：列表页与侧栏读的是同一份缓存，不能只改聊天页的内存。 */
+    private fun patchSession(patch: JsonObject, onApplied: () -> Unit) {
+        val target = device ?: return
+        viewModelScope.launch {
+            try {
+                api.updateSession(target, token, sessionId, patch)
+                onApplied()
+                val fresh = runCatching { api.state(target, token, null) }.getOrNull()
+                if (fresh is StateFetch.Fresh) StateCache.put(deviceId, fresh.state)
+            } catch (e: Exception) {
+                prefError = describeConnectionError(e)
+            }
+        }
+    }
 
     // ---- 工作区（抽屉里的三页） ----
     // 三份数据都是「点开抽屉才拉」，别处跑完一轮回到前台时顺带刷一下。
