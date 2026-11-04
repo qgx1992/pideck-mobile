@@ -1,11 +1,15 @@
 package dev.pideck.nativeapp.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,6 +42,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -50,7 +55,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -65,10 +72,11 @@ import dev.pideck.nativeapp.data.TimelineItem
 import dev.pideck.nativeapp.data.ToolView
 import dev.pideck.nativeapp.data.toTimelineItem
 import java.text.SimpleDateFormat
+import kotlinx.coroutines.launch
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
     onBack: () -> Unit,
@@ -76,6 +84,7 @@ fun ChatScreen(
 ) {
     val listState = rememberLazyListState()
     val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     var draft by remember { mutableStateOf("") }
 
     val rows = remember(viewModel.items, viewModel.live) {
@@ -85,18 +94,38 @@ fun ChatScreen(
         }
     }
 
-    // 「粘底」：只有当前已经贴到列表底部（或还没滚动过）时才自动跟随，否则用户往回翻会被拽回来。
-    val stickToBottom by remember {
-        androidx.compose.runtime.derivedStateOf {
-            val last = listState.layoutInfo.totalItemsCount - 1
-            if (last <= 0) true
-            else listState.firstVisibleItemIndex >= last - 1
-        }
+    // 贴底判定 = 「用户没往上翻」。
+    // 之前用 firstVisibleItemIndex >= count-2 判断，一追加新消息这个式子立刻变 false，
+    // 于是流式回复永远不跟随（这就是「不会自动滚动」的根因）。
+    // 现在只在两个时刻改标记：用户开始拖列表 → false；列表再也滚不动（真到底了）→ true。
+    // 追加内容不算「用户滚动」，所以不会把标记打掉。
+    var atBottom by remember { mutableStateOf(true) }
+    val dragging by listState.interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(dragging) {
+        if (dragging) atBottom = false
     }
-    LaunchedEffect(rows.size, rows.lastOrNull().toString().length) {
-        if (rows.isNotEmpty() && stickToBottom) {
-            listState.animateScrollToItem(rows.lastIndex)
-        }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.canScrollForward }
+            .collect { canForward -> if (!canForward) atBottom = true }
+    }
+
+    // 贴底时把列表钉在最底部：scrollOffset 给一个大值，LazyList 会自己夹到最大滚动量，
+    // 长消息也能看到末尾（只用 scrollToItem(index) 只会把这条的顶部对齐）。
+    suspend fun stickToBottom() {
+        if (rows.isEmpty()) return
+        listState.scrollToItem(rows.lastIndex, scrollOffset = Int.MAX_VALUE / 4)
+    }
+
+    // 只在「末尾那条变了」的时候跟随 —— 往上翻历史会往前面插条目，末尾没变就不会把人拽回底部。
+    val lastKey = rows.lastOrNull()?.key
+    val liveLength = viewModel.live?.text?.length ?: 0
+    LaunchedEffect(lastKey, liveLength) {
+        if (atBottom) stickToBottom()
+    }
+    // 键盘弹起会压缩视口，贴底时跟着再钉一次。
+    val imeVisible = WindowInsets.isImeVisible
+    LaunchedEffect(imeVisible) {
+        if (atBottom) stickToBottom()
     }
 
     LaunchedEffect(viewModel.error) {
@@ -160,6 +189,7 @@ fun ChatScreen(
                 onSend = {
                     val text = draft
                     draft = ""
+                    atBottom = true
                     viewModel.send(text)
                 },
                 onStop = { viewModel.stop() },
@@ -216,6 +246,21 @@ fun ChatScreen(
                             is TimelineItem.AssistantMessage -> AssistantBlock(item)
                         }
                     }
+                }
+            }
+
+            if (!atBottom && rows.isNotEmpty()) {
+                SmallFloatingActionButton(
+                    onClick = {
+                        atBottom = true
+                        scope.launch { stickToBottom() }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(16.dp),
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ) {
+                    Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "回到底部")
                 }
             }
         }
