@@ -13,6 +13,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.clickable
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -95,6 +97,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -108,6 +111,7 @@ import dev.pideck.nativeapp.data.SessionModel
 import dev.pideck.nativeapp.data.thinkingLabel
 import dev.pideck.nativeapp.data.toTimelineItem
 import dev.pideck.nativeapp.ui.theme.AppIconButton
+import dev.pideck.nativeapp.ui.theme.ControlShape
 import dev.pideck.nativeapp.data.ImagePrep
 import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.ui.theme.SelectChip
@@ -1027,41 +1031,80 @@ private fun Composer(
                     TextButton(onClick = onDismissImageError) { Text("知道了") }
                 }
             }
-            Row(verticalAlignment = Alignment.Bottom) {
-                AppIconButton(
-                    icon = Icons.Default.AddPhotoAlternate,
-                    contentDescription = "添加图片",
-                    onClick = onAttach,
-                    size = 40,
-                    container = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("发消息给这个会话…") },
-                    maxLines = 6,
-                    shape = RoundedCornerShape(12.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                )
-                Spacer(Modifier.width(8.dp))
-                if (sending) {
-                    FilledIconButton(onClick = onStop, shape = RoundedCornerShape(12.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .size(12.dp)
-                                .background(MaterialTheme.colorScheme.onPrimary, RoundedCornerShape(2.dp)),
-                        )
-                    }
-                } else {
-                    FilledIconButton(
-                        onClick = onSend,
-                        enabled = value.isNotBlank() || images.isNotEmpty(),
-                        shape = RoundedCornerShape(12.dp),
+            // 整条输入区就是一张卡片：正文在上，动作在下。
+            // 以前是「圆形按钮 + 输入框 + 圆形按钮」并排，两个浮在框外的圆点看着很别扭。
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
+                ) {
+                    BasicTextField(
+                        value = value,
+                        onValueChange = onValueChange,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 26.dp, max = 160.dp),
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(
+                            color = MaterialTheme.colorScheme.onSurface,
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        maxLines = 6,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                        decorationBox = { inner ->
+                            Box {
+                                if (value.isEmpty()) {
+                                    Text(
+                                        text = "发消息给这个会话…",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                inner()
+                            }
+                        },
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Filled.Send, contentDescription = "发送")
+                        AppIconButton(
+                            icon = Icons.Default.AddPhotoAlternate,
+                            contentDescription = "添加图片",
+                            onClick = onAttach,
+                            size = 32,
+                            container = Color.Transparent,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        if (sending) {
+                            FilledIconButton(
+                                onClick = onStop,
+                                shape = ControlShape,
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(11.dp)
+                                        .background(
+                                            MaterialTheme.colorScheme.onPrimary,
+                                            RoundedCornerShape(2.dp),
+                                        ),
+                                )
+                            }
+                        } else {
+                            FilledIconButton(
+                                onClick = onSend,
+                                enabled = value.isNotBlank() || images.isNotEmpty(),
+                                shape = ControlShape,
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(Icons.Default.Send, contentDescription = "发送")
+                            }
+                        }
                     }
                 }
             }

@@ -29,8 +29,8 @@ import androidx.compose.ui.unit.dp
  * 与卡片、输入框的直角体系也不搭。所有按钮 / 图标按钮 / 选择项都从下面这几个入口出发，
  * 要调整风格只改这里的 [ControlShape] / [ControlShapeSmall]。
  */
-private val ControlShape = RoundedCornerShape(12.dp)
-private val ControlShapeSmall = RoundedCornerShape(10.dp)
+internal val ControlShape = RoundedCornerShape(12.dp)
+internal val ControlShapeSmall = RoundedCornerShape(10.dp)
 
 enum class AppButtonStyle { Filled, Tonal, Ghost }
 
