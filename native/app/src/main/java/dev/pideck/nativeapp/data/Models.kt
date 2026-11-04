@@ -118,7 +118,53 @@ data class PendingUiRequest(
     val method: String = "",
     val title: String = "",
     val options: List<String> = emptyList(),
+    val runtimeGeneration: Long = 0,
+    val placeholder: String? = null,
+    val prefill: String? = null,
+    val allowOther: Boolean? = null,
+    val batchQuestions: List<AskQuestion> = emptyList(),
+    val batchReview: Boolean = false,
 )
+
+/** `ask_question` 批量信封里的一道题（选项可能是字符串也可能是对象）。 */
+@Serializable
+data class AskQuestion(
+    val id: String = "",
+    val type: String = "input",
+    val question: String = "",
+    val options: List<JsonElement> = emptyList(),
+    val allowOther: Boolean? = null,
+    val placeholder: String? = null,
+    val prefill: String? = null,
+)
+
+/** 子代理条目（`/api/sessions/:id/subagents`），字段对齐桌面端 `PiSubagentEntry`。 */
+@Serializable
+data class SubagentEntry(
+    val id: String = "",
+    val type: String = "",
+    val description: String = "",
+    val status: String = "",
+    val result: String? = null,
+    val error: String? = null,
+    val startedAt: Long? = null,
+    val completedAt: Long? = null,
+    val toolUses: Int? = null,
+    val tokens: Int? = null,
+) {
+    val isRunning: Boolean get() = status == "running" || status == "queued"
+    val statusLabel: String
+        get() = when (status) {
+            "queued" -> "排队中"
+            "running" -> "执行中"
+            "completed" -> "已完成"
+            "steered" -> "已转向"
+            "aborted" -> "已中止"
+            "stopped" -> "已停止"
+            "error" -> "失败"
+            else -> status
+        }
+}
 
 @Serializable
 data class SessionMessagePage(

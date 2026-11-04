@@ -18,14 +18,17 @@ import dev.pideck.nativeapp.data.ImagePrep
 import dev.pideck.nativeapp.data.LineDiff
 import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.data.ChatPayloads
+import dev.pideck.nativeapp.data.PendingUiRequest
 import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.ReplyMerger
 import dev.pideck.nativeapp.data.ReplySnapshot
 import dev.pideck.nativeapp.data.StateCache
 import dev.pideck.nativeapp.data.StateFetch
+import dev.pideck.nativeapp.data.AskUi
 import dev.pideck.nativeapp.data.AvailableModel
 import dev.pideck.nativeapp.data.SessionModel
+import dev.pideck.nativeapp.data.SubagentEntry
 import dev.pideck.nativeapp.data.toSessionModel
 import dev.pideck.nativeapp.data.FileNode
 import dev.pideck.nativeapp.data.TimelineItem
@@ -132,6 +135,7 @@ class ChatViewModel @Inject constructor(
             thinkingLevel = cached?.thinkingLevel
             refreshHistory()
             startWatching()
+            startStatePolling()
             pendingDraft?.let { prompt -> send(prompt) }
         }
     }
@@ -161,6 +165,77 @@ class ChatViewModel @Inject constructor(
         private set
 
     var prefError by mutableStateOf<String?>(null)
+        private set
+
+    // ---- AI 提问卡（ask_question / confirm / input） ----
+    // 状态来源是 /api/state 的 pendingUiRequests；答案回 POST /api/ui-response。
+    // 不靠 SSE 推：会话流只带回复帧，提问卡是本轮停在「等用户回答」时的一等状态。
+
+    var pendingAsk by mutableStateOf<PendingUiRequest?>(null)
+        private set
+
+    var askBusy by mutableStateOf(false)
+        private set
+
+    var askError by mutableStateOf<String?>(null)
+        private set
+
+    private var stateEtag: String? = null
+    private var statePollJob: Job? = null
+
+    fun dismissAskError() {
+        askError = null
+    }
+
+    /** 轮询 /api/state（带 ETag，没变就是 304，几乎不耗流量）只为了拿提问卡的最新状态。 */
+    private fun startStatePolling() {
+        if (statePollJob?.isActive == true) return
+        statePollJob = viewModelScope.launch {
+            while (true) {
+                val target = device
+                if (target != null) {
+                    runCatching { api.state(target, token, stateEtag) }
+                        .onSuccess { result ->
+                            if (result is StateFetch.Fresh) {
+                                stateEtag = result.etag
+                                StateCache.put(deviceId, result.state)
+                                val next = result.state.pendingUiRequests
+                                    .firstOrNull { it.sessionId == sessionId }
+                                if (next?.requestId != pendingAsk?.requestId) askError = null
+                                pendingAsk = next
+                            }
+                        }
+                }
+                delay(5000)
+            }
+        }
+    }
+
+    /** 回答提问卡：`response` 由 [AskUi.response] / [AskUi.serializeBatch] 组装。 */
+    fun respondAsk(response: JsonObject) {
+        val request = pendingAsk ?: return
+        val target = device ?: return
+        if (askBusy) return
+        askBusy = true
+        askError = null
+        viewModelScope.launch {
+            try {
+                api.respondUi(target, token, AskUi.body(request, response))
+                // 不本地猜结果：下一轮轮询会把 pendingUiRequests 换成服务端真值
+                pendingAsk = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                askError = dev.pideck.nativeapp.data.describeConnectionError(e)
+            } finally {
+                askBusy = false
+            }
+        }
+    }
+
+    // ---- 子代理（工作区「子任务」页） ----
+
+    var subagents by mutableStateOf<List<SubagentEntry>>(emptyList())
         private set
 
     /** 当前模型支持的思考档位（模型清单还没拉到就是空 —— 选择器据此只列能用的）。 */
@@ -275,9 +350,12 @@ class ChatViewModel @Inject constructor(
                 val files = runCatching {
                     api.files(device, token, projectId, workspaceDir)
                 }.getOrDefault(emptyList())
+                val agents = runCatching { api.subagents(device, token, sessionId) }
+                    .getOrDefault(emptyList())
                 workspaceTodo = todo
                 workspaceChanges = changes
                 workspaceFiles = files
+                subagents = agents
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -395,6 +473,7 @@ class ChatViewModel @Inject constructor(
         watchJob?.cancel()
         watchJob = null
         startWatching()
+        startStatePolling()
     }
 
     /** 常驻订阅会话流；断线退避重连，一轮结束后不退订（对齐服务端 keepAlive）。 */

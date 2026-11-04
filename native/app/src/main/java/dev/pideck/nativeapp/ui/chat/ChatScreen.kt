@@ -42,6 +42,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -55,6 +57,7 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
@@ -82,6 +85,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -132,11 +136,12 @@ fun ChatScreen(
     BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
     var draft by remember { mutableStateOf("") }
 
-    val rows = remember(viewModel.items, viewModel.live) {
-        buildList {
-            addAll(viewModel.items)
-            viewModel.live?.let { snapshot -> add(snapshot.toTimelineItem(streaming = viewModel.streaming)) }
-        }
+    // 拍平成「行」：连续的过程条目（思考 / 工具）合成一个过程组，正文回答单独成行。
+    val rows = remember(viewModel.items, viewModel.live, viewModel.streaming) {
+        buildChatRows(
+            items = viewModel.items,
+            live = viewModel.live?.toTimelineItem(streaming = viewModel.streaming),
+        )
     }
 
     // 贴底判定 = 「用户没往上翻」。
@@ -327,7 +332,19 @@ fun ChatScreen(
             }
         },
         bottomBar = {
-            Composer(
+            Column {
+                // agent 正在等回答时，卡片常驻在输入条上方（滚到历史里也不会错过）
+                viewModel.pendingAsk?.let { request ->
+                    AskCard(
+                        request = request,
+                        busy = viewModel.askBusy,
+                        error = viewModel.askError,
+                        onRespond = { viewModel.respondAsk(it) },
+                        onCancel = { viewModel.respondAsk(dev.pideck.nativeapp.data.AskUi.cancelled()) },
+                        onDismissError = { viewModel.dismissAskError() },
+                    )
+                }
+                Composer(
                 value = draft,
                 onValueChange = { draft = it },
                 sending = viewModel.streaming,
@@ -343,7 +360,8 @@ fun ChatScreen(
                     viewModel.send(text)
                 },
                 onStop = { viewModel.stop() },
-            )
+                )
+            }
         },
     ) { inner ->
         Box(
@@ -390,16 +408,23 @@ fun ChatScreen(
                             }
                         }
                     }
-                    items(rows, key = { it.key }) { item ->
-                        when (item) {
-                            is TimelineItem.UserMessage -> UserBubble(
-                                item = item,
-                                onLongPress = { actionTarget = item },
-                            )
+                    items(rows, key = { it.key }) { row ->
+                        when (row) {
+                            is ChatRow.Single -> when (val item = row.item) {
+                                is TimelineItem.UserMessage -> UserBubble(
+                                    item = item,
+                                    onLongPress = { actionTarget = item },
+                                )
 
-                            is TimelineItem.AssistantMessage -> AssistantBlock(
-                                item = item,
-                                onLongPress = { actionTarget = item },
+                                is TimelineItem.AssistantMessage -> AssistantBlock(
+                                    item = item,
+                                    onLongPress = { actionTarget = item },
+                                )
+                            }
+
+                            is ChatRow.Process -> ProcessGroupBlock(
+                                row = row,
+                                autoOpen = row.streaming && row.key == lastKey,
                             )
                         }
                     }
@@ -665,6 +690,125 @@ private fun AssistantBlock(
             )
         }
     }
+}
+
+/**
+ * 过程组：连续的过程条目（思考 + 工具调用）折成一行摘要，点开才铺开细节。
+ *
+ * 桌面端就是这么渲染的：跑起来之后屏幕上只有「读取 · 搜索 · 2 次调用」这样一行，
+ * 正文与细节要主动展开 —— 长回合里这能把几十屏的过程压成几行。
+ */
+@Composable
+private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
+    var open by rememberSaveable(row.key) { mutableStateOf(autoOpen) }
+    // 运行中自动展开（跟着流式看清楚在干什么），跑完自动收起
+    LaunchedEffect(autoOpen) { if (open != autoOpen) open = autoOpen }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { open = !open }
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = if (open) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.outline,
+            )
+            Spacer(Modifier.size(4.dp))
+            Text(
+                text = row.summary,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (row.toolCount > 0) {
+                Text(
+                    text = " · ${row.toolCount} 次调用",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            spanText(row.durationMs)?.let { span ->
+                Text(
+                    text = " · $span",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            if (row.streaming) {
+                Spacer(Modifier.size(8.dp))
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+
+        if (open) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(10.dp),
+                ) {
+                    row.steps.forEach { step ->
+                        step.thinking?.let { thinking ->
+                            var thinkingOpen by remember(step.key) { mutableStateOf(false) }
+                            ThinkingCard(
+                                text = thinking,
+                                open = thinkingOpen,
+                                streaming = step.streaming,
+                                onToggle = { thinkingOpen = !thinkingOpen },
+                            )
+                            Spacer(Modifier.size(6.dp))
+                        }
+                        step.tools.forEach { tool ->
+                            ToolCard(tool)
+                            Spacer(Modifier.size(6.dp))
+                        }
+                        step.errorText?.let { message ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    text = message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.padding(10.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 「850ms」/「1.2s」/「1m02s」；0 或负数返回 null（不显示）。 */
+private fun spanText(ms: Long): String? {
+    if (ms <= 0) return null
+    if (ms < 1000) return "${ms}ms"
+    val totalSeconds = ms / 1000
+    if (totalSeconds < 60) {
+        val tenth = ((ms % 1000) / 100).toInt()
+        return "$totalSeconds.${tenth}s"
+    }
+    return "${totalSeconds / 60}m${(totalSeconds % 60).toString().padStart(2, '0')}s"
 }
 
 @Composable

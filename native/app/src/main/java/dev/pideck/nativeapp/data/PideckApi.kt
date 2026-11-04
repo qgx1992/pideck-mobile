@@ -112,6 +112,12 @@ interface PideckApi {
      * 两条路径都是这一个端点，所以调用方改完只需重读 `/api/state` 对账。
      */
     suspend fun updateSession(device: Device, token: String?, sessionId: String, patch: JsonObject)
+
+    /** 回答 AI 的提问卡（`POST /api/ui-response`，body 由 [AskUi.body] 组装）。 */
+    suspend fun respondUi(device: Device, token: String?, body: JsonObject)
+
+    /** 会话的子代理（`/api/sessions/:id/subagents`）。 */
+    suspend fun subagents(device: Device, token: String?, sessionId: String): List<SubagentEntry>
 }
 
 class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
@@ -387,6 +393,25 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         }
     }
 
+
+    override suspend fun respondUi(device: Device, token: String?, body: JsonObject) {
+        postJson(device, token, "/api/ui-response", body)
+    }
+
+    override suspend fun subagents(
+        device: Device,
+        token: String?,
+        sessionId: String,
+    ): List<SubagentEntry> = withContext(Dispatchers.IO) {
+        val text = rawGet(device, token, "/api/sessions/$sessionId/subagents")
+        val root = PideckJson.parseToJsonElement(text) as? JsonObject ?: return@withContext emptyList()
+        val array = root["subagents"] as? JsonArray ?: return@withContext emptyList()
+        array.mapNotNull { element ->
+            runCatching {
+                PideckJson.decodeFromJsonElement(SubagentEntry.serializer(), element)
+            }.getOrNull()
+        }
+    }
     private suspend fun postJson(device: Device, token: String?, path: String, body: JsonObject): String {
         val request = requestBuilder(device, token, path)
             .post(body.toString().toRequestBody(jsonMedia))

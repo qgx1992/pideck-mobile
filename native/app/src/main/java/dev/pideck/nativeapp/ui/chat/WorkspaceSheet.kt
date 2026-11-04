@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -32,6 +34,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -43,10 +46,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.pideck.nativeapp.data.SubagentEntry
 import dev.pideck.nativeapp.data.TodoEntry
 import dev.pideck.nativeapp.data.ChangedFile
 import dev.pideck.nativeapp.data.WorkspaceChanges
@@ -72,7 +78,7 @@ fun WorkspacePanel(
     viewModel: ChatViewModel,
 ) {
     var tab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("待办", "改动", "文件")
+    val tabs = listOf("待办", "改动", "文件", "子任务")
 
     RightSidePanel(visible = visible, onDismiss = onDismiss) {
         Row(
@@ -118,7 +124,8 @@ fun WorkspacePanel(
             when (tab) {
                 0 -> TodoTab(viewModel.workspaceTodo)
                 1 -> ChangesTab(viewModel.workspaceChanges, onOpenDiff = viewModel::openDiff)
-                else -> FilesTab(viewModel)
+                2 -> FilesTab(viewModel)
+                else -> SubagentTab(viewModel.subagents)
             }
         }
         viewModel.workspaceError?.let { message ->
@@ -128,6 +135,86 @@ fun WorkspacePanel(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun SubagentTab(agents: List<SubagentEntry>) {
+    if (agents.isEmpty()) {
+        EmptyHint("这个会话还没有派过子代理")
+        return
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(agents, key = { it.id }) { agent ->
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    when {
+                                        agent.status == "error" -> Color(0xFFE05252)
+                                        agent.isRunning -> MaterialTheme.colorScheme.primary
+                                        else -> Color(0xFF4CAF50)
+                                    },
+                                ),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = agent.description.ifBlank { agent.type },
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = agent.statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    val meta = buildList {
+                        if (agent.type.isNotBlank()) add(agent.type)
+                        val uses = agent.toolUses ?: 0
+                        if (uses > 0) add("$uses 次工具")
+                        val tokens = agent.tokens ?: 0
+                        if (tokens > 0) add("$tokens tok")
+                    }
+                    if (meta.isNotEmpty()) {
+                        Text(
+                            text = meta.joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(top = 4.dp, start = 16.dp),
+                        )
+                    }
+                    agent.error?.let { err ->
+                        Text(
+                            text = err,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 6.dp, start = 16.dp),
+                        )
+                    } ?: agent.result?.let { result ->
+                        // 结果可能是几百字，这里只给一段摘要；要全文去桌面端看
+                        Text(
+                            text = result.trim().take(600) + if (result.length > 600) "…" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 6.dp, start = 16.dp),
+                        )
+                    }
+                }
+            }
         }
     }
 }
