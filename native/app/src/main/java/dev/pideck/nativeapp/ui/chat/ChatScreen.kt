@@ -95,6 +95,7 @@ fun ChatScreen(
     deviceId: String,
     onOpenSession: (String) -> Unit,
     onOpenSessions: () -> Unit,
+    onOpenHome: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenDevices: () -> Unit,
     viewModel: ChatViewModel = hiltViewModel(),
@@ -186,6 +187,10 @@ fun ChatScreen(
                 deviceId = deviceId,
                 currentSessionId = viewModel.sessionId,
                 onPickSession = onOpenSession,
+                onOpenHome = {
+                    scope.launch { drawerState.close() }
+                    onOpenHome()
+                },
                 onOpenSessions = {
                     scope.launch { drawerState.close() }
                     onOpenSessions()

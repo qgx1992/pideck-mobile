@@ -58,6 +58,9 @@ class ChatViewModel @Inject constructor(
     /** 侧栏要高亮当前会话，所以对外可见。 */
     val sessionId: String = savedStateHandle["sessionId"] ?: error("缺少 sessionId")
 
+    /** 首页「选工作区 → 直接说事」的交接：路由参数带过来的第一句话，加载完历史立刻发。 */
+    private val pendingDraft: String? = savedStateHandle.get<String>("draft")?.takeIf { it.isNotBlank() }
+
     private var device: Device? = null
     private var token: String? = null
     private var before: Long? = null
@@ -116,6 +119,7 @@ class ChatViewModel @Inject constructor(
             title = StateCache.session(deviceId, sessionId)?.title?.ifBlank { null } ?: "会话"
             refreshHistory()
             startWatching()
+            pendingDraft?.let { prompt -> send(prompt) }
         }
     }
 

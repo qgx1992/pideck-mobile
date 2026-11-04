@@ -1,6 +1,12 @@
 package dev.pideck.nativeapp.ui
 
+import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -9,31 +15,68 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dev.pideck.nativeapp.ui.chat.ChatScreen
 import dev.pideck.nativeapp.ui.devices.DevicesScreen
+import dev.pideck.nativeapp.ui.home.HomeScreen
 import dev.pideck.nativeapp.ui.sessions.SessionsScreen
 import dev.pideck.nativeapp.ui.settings.SettingsScreen
+import dev.pideck.nativeapp.ui.splash.SplashScreen
+import kotlinx.coroutines.delay
 
 object Routes {
     const val DEVICES = "devices"
+    const val HOME = "home/{deviceId}"
     const val SESSIONS = "sessions/{deviceId}"
-    const val CHAT = "chat/{deviceId}/{sessionId}"
+    const val CHAT = "chat/{deviceId}/{sessionId}?draft={draft}"
     const val SETTINGS = "settings/{deviceId}"
+
+    fun home(deviceId: String) = "home/$deviceId"
 
     fun sessions(deviceId: String) = "sessions/$deviceId"
 
-    fun chat(deviceId: String, sessionId: String) = "chat/$deviceId/$sessionId"
+    /** [draft] 非空时，聊天页加载完历史会立刻把它发出去（首页「选工作区 → 说事」的交接）。 */
+    fun chat(deviceId: String, sessionId: String, draft: String = "") =
+        "chat/$deviceId/$sessionId?draft=${Uri.encode(draft)}"
 
     fun settings(deviceId: String) = "settings/$deviceId"
 }
 
+/** 启动动画最短停留时间：读盘再快也要让过渡看得见，否则等于没有。 */
+private const val SPLASH_MIN_MS = 900L
+
 @Composable
 fun AppNav(startViewModel: StartViewModel = hiltViewModel()) {
-    // 冷启动要读一次磁盘才知道停在哪个会话 —— 读完之前不渲染导航图，免得先闪一下设备页
-    val startRoute = startViewModel.startRoute ?: return
+    val startRoute = startViewModel.startRoute
+    var splashDone by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(SPLASH_MIN_MS)
+        splashDone = true
+    }
+    // 读盘（决定落哪一页）与最短动画时间任一没完成，都停在启动页
+    if (startRoute == null || !splashDone) {
+        SplashScreen()
+        return
+    }
+
     val navController = rememberNavController()
     NavHost(navController = navController, startDestination = startRoute) {
         composable(Routes.DEVICES) {
             DevicesScreen(
-                onOpenDevice = { device -> navController.navigate(Routes.sessions(device.id)) },
+                onOpenDevice = { device -> navController.navigate(Routes.home(device.id)) },
+            )
+        }
+        composable(
+            route = Routes.HOME,
+            arguments = listOf(navArgument("deviceId") { type = NavType.StringType }),
+        ) { entry ->
+            val deviceId = entry.arguments?.getString("deviceId").orEmpty()
+            HomeScreen(
+                onOpenChat = { sessionId, draft ->
+                    navController.navigate(Routes.chat(deviceId, sessionId, draft)) {
+                        // 首页留着当返回目标：从会话退回来还是「选工作区」
+                        launchSingleTop = true
+                    }
+                },
+                onOpenSessions = { navController.navigate(Routes.sessions(deviceId)) },
+                onOpenSettings = { navController.navigate(Routes.settings(deviceId)) },
             )
         }
         composable(
@@ -57,6 +100,10 @@ fun AppNav(startViewModel: StartViewModel = hiltViewModel()) {
             arguments = listOf(
                 navArgument("deviceId") { type = NavType.StringType },
                 navArgument("sessionId") { type = NavType.StringType },
+                navArgument("draft") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
             ),
         ) { entry ->
             val deviceId = entry.arguments?.getString("deviceId").orEmpty()
@@ -71,6 +118,11 @@ fun AppNav(startViewModel: StartViewModel = hiltViewModel()) {
                 onOpenSessions = {
                     navController.navigate(Routes.sessions(deviceId))
                 },
+                onOpenHome = {
+                    navController.navigate(Routes.home(deviceId)) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
                 onOpenSettings = { navController.navigate(Routes.settings(deviceId)) },
                 onOpenDevices = {
                     navController.navigate(Routes.DEVICES) {
@@ -82,16 +134,13 @@ fun AppNav(startViewModel: StartViewModel = hiltViewModel()) {
         composable(
             route = Routes.SETTINGS,
             arguments = listOf(navArgument("deviceId") { type = NavType.StringType }),
-        ) {
+        ) { entry ->
+            val deviceId = entry.arguments?.getString("deviceId").orEmpty()
             SettingsScreen(
                 onBack = { navController.popBackStack() },
                 onManageDevices = {
-                    // 现在的首页可能是聊天页，设备页不一定在栈里 —— 弹不回去就新建一层
-                    val popped = navController.popBackStack(Routes.DEVICES, inclusive = false)
-                    if (!popped) {
-                        navController.navigate(Routes.DEVICES) {
-                            popUpTo(0) { inclusive = true }
-                        }
+                    navController.navigate(Routes.DEVICES) {
+                        popUpTo(0) { inclusive = true }
                     }
                 },
             )

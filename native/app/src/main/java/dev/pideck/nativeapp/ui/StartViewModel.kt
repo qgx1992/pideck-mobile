@@ -15,10 +15,11 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * 决定冷启动落在哪一页。
+ * 决定冷启动落在哪一页（启动动画期间完成）。
  *
- * 目标：打开就是上次那个会话，而不是先给一个设备列表让你点两下。
- * 只有在「确实有配对设备」的时候才直连 —— 设备被删了、或者从没配过，回设备页。
+ * 规则：有配对过的设备 → 直接进它的首页（不再甩设备列表让你点两下）；
+ * 没有 → 设备页，也就是添加设备页。会话历史不参与决策 —— 首页才是默认落点，
+ * 上次那个会话要进就自己从「最近的会话」点。
  */
 @HiltViewModel
 class StartViewModel @Inject constructor(
@@ -26,24 +27,16 @@ class StartViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
-    /** null = 还在读盘，先别渲染导航图。 */
+    /** null = 还在读盘，先别渲染导航图（启动动画盖着）。 */
     var startRoute by mutableStateOf<String?>(null)
         private set
 
     init {
         viewModelScope.launch {
             val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
-            val saved = runCatching { Prefs.lastSession(context) }.getOrNull()
-            val deviceId = saved?.first?.takeIf { id -> devices.any { it.id == id } }
-                ?: devices.firstOrNull()?.id
-            // 设备在但会话记不起来了 → 进这个设备的会话列表，比直接甩设备页近一步
-            startRoute = when {
-                deviceId == null -> Routes.DEVICES
-                saved?.first == deviceId && saved.second.isNotBlank() ->
-                    Routes.chat(deviceId, saved.second)
-
-                else -> Routes.sessions(deviceId)
-            }
+            val remembered = runCatching { Prefs.lastSession(context) }.getOrNull()?.first
+            val device = devices.firstOrNull { it.id == remembered } ?: devices.firstOrNull()
+            startRoute = if (device == null) Routes.DEVICES else Routes.home(device.id)
         }
     }
 }

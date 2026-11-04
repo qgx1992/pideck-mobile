@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -61,6 +62,7 @@ fun SessionDrawer(
     deviceId: String,
     currentSessionId: String,
     onPickSession: (String) -> Unit,
+    onOpenHome: () -> Unit,
     onOpenSessions: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenDevices: () -> Unit,
@@ -121,6 +123,12 @@ fun SessionDrawer(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
         Column(Modifier.padding(vertical = 6.dp, horizontal = 8.dp)) {
+            NavigationDrawerItem(
+                label = { Text("新会话") },
+                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                selected = false,
+                onClick = onOpenHome,
+            )
             NavigationDrawerItem(
                 label = { Text("全部会话") },
                 icon = { Icon(Icons.Default.KeyboardArrowRight, contentDescription = null) },
