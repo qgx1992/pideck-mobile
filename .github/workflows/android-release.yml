@@ -43,7 +43,8 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          DECLARED="$(grep -E 'versionName\s*=' native/app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          # 只认行首的声明：defaultConfig 上面的注释里也写着 "versionCode = …"，宽松匹配会抓错
+          DECLARED="$(grep -E '^[[:space:]]*versionName[[:space:]]*=' native/app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
@@ -54,7 +55,11 @@ jobs:
           if [ "$VERSION" != "$DECLARED" ]; then
             echo "::warning::tag/输入版本 ${VERSION} 与 gradle 里的 ${DECLARED} 不一致，以 ${VERSION} 命名产物"
           fi
-          CODE="$(grep -E 'versionCode\s*=' native/app/build.gradle.kts | head -1 | grep -oE '[0-9]+' | head -1)"
+          CODE="$(grep -E '^[[:space:]]*versionCode[[:space:]]*=' native/app/build.gradle.kts | head -1 | grep -oE '[0-9]+' | head -1)"
+          if [ -z "${DECLARED}" ] || [ -z "${CODE}" ]; then
+            echo "::error::没能从 native/app/build.gradle.kts 解析出 versionName / versionCode"
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "code=${CODE}" >> "$GITHUB_OUTPUT"
           echo "构建版本 ${VERSION}（versionCode=${CODE}，取自 gradle）"
