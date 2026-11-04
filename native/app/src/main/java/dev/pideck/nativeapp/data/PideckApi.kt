@@ -86,7 +86,13 @@ interface PideckApi {
     /** 工作区「文件」：某一层的目录列表，[path] 为空表示项目根。 */
     suspend fun files(device: Device, token: String?, projectId: String, path: String): List<FileNode>
     /** 点开文件时读正文（桌面端会按大小截断，这里再兜一次底）。 */
-    suspend fun fileText(device: Device, token: String?, projectId: String, path: String): String
+    suspend fun fileText(
+        device: Device,
+        token: String?,
+        projectId: String,
+        path: String,
+        sessionId: String? = null,
+    ): String
 
     /**
      * 单个文件的 git diff 文本。
@@ -220,7 +226,9 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             rawGet(
                 device,
                 token,
-                "/api/files?projectId=$projectId&path=${java.net.URLEncoder.encode(path, "UTF-8")}",
+                // 桌面端的参数名是 `dir`（见 vendor/pideck/src/renderer/src/web/webApi.ts 的
+                // fetchFileList）；早先写成 `path` 会被服务端忽略，于是永远只列项目根目录。
+                "/api/files?projectId=$projectId&dir=${java.net.URLEncoder.encode(path, "UTF-8")}",
             ),
         ),
     )
@@ -250,12 +258,18 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         token: String?,
         projectId: String,
         path: String,
+        sessionId: String?,
     ): String {
-        val text = rawGet(
-            device,
-            token,
-            "/api/file-content?projectId=$projectId&path=${java.net.URLEncoder.encode(path, "UTF-8")}",
-        )
+        val base = "/api/file-content?projectId=$projectId&path=${java.net.URLEncoder.encode(path, "UTF-8")}" +
+            (sessionId?.let { "&sessionId=$it" } ?: "")
+        // 桌面端对「项目外路径 / 敏感文件」会先拒一次（code 里带 needsConfirm），
+        // 带上 confirm=1 才会读；用户是自己在文件树里点的这个文件，就等于确认过了。
+        val text = try {
+            rawGet(device, token, base)
+        } catch (e: PideckException) {
+            if (e.code == null) throw e
+            rawGet(device, token, "$base&confirm=1")
+        }
         return runCatching {
             val obj = PideckJson.parseToJsonElement(text) as kotlinx.serialization.json.JsonObject
             val content = (obj["content"] as? kotlinx.serialization.json.JsonPrimitive)?.content

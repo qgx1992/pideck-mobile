@@ -486,6 +486,13 @@ fun ChatScreen(
         visible = showWorkspace,
         onDismiss = { showWorkspace = false },
         viewModel = viewModel,
+        // 文件树里的 @ 键：把 `@相对路径` 拼到输入框，跟桌面端同一个用法
+        onInsertMention = { path ->
+            val needsSpace = draft.isNotEmpty() && !draft.endsWith(" ")
+            draft = draft + (if (needsSpace) " " else "") + "@" + path + " "
+            showWorkspace = false
+            atBottom = true
+        },
     )
     }
 

@@ -22,9 +22,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AlternateEmail
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
@@ -32,6 +35,7 @@ import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -42,7 +46,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,6 +82,7 @@ fun WorkspacePanel(
     visible: Boolean,
     onDismiss: () -> Unit,
     viewModel: ChatViewModel,
+    onInsertMention: (String) -> Unit = {},
 ) {
     var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("待办", "改动", "文件", "子任务")
@@ -124,7 +131,7 @@ fun WorkspacePanel(
             when (tab) {
                 0 -> TodoTab(viewModel.workspaceTodo)
                 1 -> ChangesTab(viewModel.workspaceChanges, onOpenDiff = viewModel::openDiff)
-                2 -> FilesTab(viewModel)
+                2 -> FilesTab(viewModel, onInsertMention)
                 else -> SubagentTab(viewModel.subagents)
             }
         }
@@ -148,16 +155,32 @@ private fun SubagentTab(agents: List<SubagentEntry>) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(agents, key = { it.id }) { agent ->
+            // 默认折叠：一轮里可能派十几个子代理，全铺开会把待办/改动挤没影。
+            // 折叠态只留「状态点 + 描述 + 状态」，点一下才看结果全文。
+            var expanded by rememberSaveable(agent.id) { mutableStateOf(false) }
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = if (expanded) {
+                                Icons.Default.KeyboardArrowDown
+                            } else {
+                                Icons.Default.KeyboardArrowRight
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.outline,
+                        )
+                        Spacer(Modifier.width(4.dp))
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
@@ -172,46 +195,52 @@ private fun SubagentTab(agents: List<SubagentEntry>) {
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = agent.description.ifBlank { agent.type },
+                            text = agent.description.ifBlank { agent.type.ifBlank { "子代理" } },
                             style = MaterialTheme.typography.bodyMedium,
+                            maxLines = if (expanded) 3 else 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
+                        Spacer(Modifier.width(6.dp))
                         Text(
                             text = agent.statusLabel,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline,
                         )
                     }
-                    val meta = buildList {
-                        if (agent.type.isNotBlank()) add(agent.type)
-                        val uses = agent.toolUses ?: 0
-                        if (uses > 0) add("$uses 次工具")
-                        val tokens = agent.tokens ?: 0
-                        if (tokens > 0) add("$tokens tok")
-                    }
-                    if (meta.isNotEmpty()) {
-                        Text(
-                            text = meta.joinToString(" · "),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.padding(top = 4.dp, start = 16.dp),
-                        )
-                    }
-                    agent.error?.let { err ->
-                        Text(
-                            text = err,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(top = 6.dp, start = 16.dp),
-                        )
-                    } ?: agent.result?.let { result ->
-                        // 结果可能是几百字，这里只给一段摘要；要全文去桌面端看
-                        Text(
-                            text = result.trim().take(600) + if (result.length > 600) "…" else "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 6.dp, start = 16.dp),
-                        )
+
+                    if (expanded) {
+                        val meta = buildList {
+                            if (agent.type.isNotBlank()) add(agent.type)
+                            val uses = agent.toolUses ?: 0
+                            if (uses > 0) add("$uses 次工具")
+                            val tokens = agent.tokens ?: 0
+                            if (tokens > 0) add("$tokens tok")
+                        }
+                        if (meta.isNotEmpty()) {
+                            Text(
+                                text = meta.joinToString(" · "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.padding(top = 4.dp, start = 28.dp),
+                            )
+                        }
+                        agent.error?.let { err ->
+                            Text(
+                                text = err,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(top = 6.dp, start = 28.dp),
+                            )
+                        } ?: agent.result?.let { result ->
+                            // 结果可能是几百字以上，这里给一段摘要，全文还是去桌面端看
+                            Text(
+                                text = result.trim().take(1200) + if (result.length > 1200) "…" else "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 6.dp, start = 28.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -339,7 +368,7 @@ private fun letterColor(letter: String): Color = when (letter) {
 }
 
 @Composable
-private fun FilesTab(viewModel: ChatViewModel) {
+private fun FilesTab(viewModel: ChatViewModel, onInsertMention: (String) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -385,7 +414,22 @@ private fun FilesTab(viewModel: ChatViewModel) {
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
+                    if (!node.isDir) {
+                        // 只在文件上给 @：目录的路径喂给 agent 意义不大，反而容易误点
+                        IconButton(
+                            onClick = { onInsertMention(node.path) },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.AlternateEmail,
+                                contentDescription = "在输入框里引用 @${node.name}",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
                 }
             }
         }

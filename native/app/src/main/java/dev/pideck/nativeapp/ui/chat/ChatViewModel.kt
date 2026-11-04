@@ -394,7 +394,7 @@ class ChatViewModel @Inject constructor(
         previewBusy = true
         viewModelScope.launch {
             try {
-                previewText = api.fileText(device, token, projectId, path)
+                previewText = api.fileText(device, token, projectId, path, sessionId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
