@@ -13,3 +13,11 @@ st*.json
 # Python 缓存（gen-icon.py / gen-splash.py）
 __pycache__/
 *.pyc
+
+# 原生 Android 工程（C 方案）：构建产物与本机 SDK 路径不入库
+native/**/build/
+native/.gradle/
+native/local.properties
+native/.kotlin/
+native/.idea/
+native/**/*.iml

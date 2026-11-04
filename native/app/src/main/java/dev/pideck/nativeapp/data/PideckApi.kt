@@ -1,0 +1,163 @@
+package dev.pideck.nativeapp.data
+
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.serialization.json.JsonObject
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.sse.EventSource
+import okhttp3.sse.EventSourceListener
+import okhttp3.sse.EventSources
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+/**
+ * 桌面端 WebService 的 Kotlin 客户端。
+ *
+ * 只做「拿到数据」这一层，不缓存、不合并：状态合并与缓存由上层 ViewModel 决定，
+ * 这样 Ktor mock 与真机可以用同一份实现跑同一批断言。
+ */
+interface PideckApi {
+    suspend fun state(device: Device, token: String?, etag: String? = null): StateFetch
+
+    suspend fun messagesPage(
+        device: Device,
+        token: String?,
+        sessionId: String,
+        pageSize: Int = 30,
+        before: Long? = null,
+    ): SessionMessagePage
+
+    /** 按会话订阅「别处发起」的回复流：UIMessageStream 帧。 */
+    fun sessionStream(device: Device, token: String?, sessionId: String): Flow<SseFrame>
+
+    /** `/api/chat`：发一条用户消息，响应本身也是一条 SSE 流。 */
+    fun chat(device: Device, token: String?, body: JsonObject): Flow<SseFrame>
+
+    suspend fun rawGet(device: Device, token: String?, path: String): String
+}
+
+class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
+
+    private val jsonMedia = "application/json; charset=utf-8".toMediaType()
+
+    override suspend fun state(device: Device, token: String?, etag: String?): StateFetch {
+        val request = requestBuilder(device, token, "/api/state")
+            .apply { if (!etag.isNullOrBlank()) header("if-none-match", etag) }
+            .build()
+        val response = client.newCall(request).await()
+        response.use {
+            if (it.code == 304) return StateFetch.NotModified
+            if (!it.isSuccessful) throw PideckException("state ${it.code}")
+            val body = it.body?.string() ?: throw PideckException("state: 空响应")
+            return StateFetch.Fresh(PideckJson.decodeFromString(PideckState.serializer(), body), it.header("etag"))
+        }
+    }
+
+    override suspend fun messagesPage(
+        device: Device,
+        token: String?,
+        sessionId: String,
+        pageSize: Int,
+        before: Long?,
+    ): SessionMessagePage {
+        val query = buildString {
+            append("?pageSize=").append(pageSize)
+            if (before != null) append("&before=").append(before)
+        }
+        val path = "/api/sessions/${encode(sessionId)}/messages/page$query"
+        val response = client.newCall(requestBuilder(device, token, path).build()).await()
+        response.use {
+            if (!it.isSuccessful) throw PideckException("messages ${it.code}")
+            val body = it.body?.string() ?: throw PideckException("messages: 空响应")
+            return PideckJson.decodeFromString(SessionMessagePage.serializer(), body)
+        }
+    }
+
+    override fun sessionStream(device: Device, token: String?, sessionId: String): Flow<SseFrame> {
+        val request = requestBuilder(device, token, "/api/sessions/${encode(sessionId)}/stream")
+            .header("accept", "text/event-stream")
+            .header("cache-control", "no-cache")
+            .build()
+        return streamOf(request)
+    }
+
+    override fun chat(device: Device, token: String?, body: JsonObject): Flow<SseFrame> {
+        val request = requestBuilder(device, token, "/api/chat")
+            .header("accept", "text/event-stream")
+            .post(body.toString().toRequestBody(jsonMedia))
+            .build()
+        return streamOf(request)
+    }
+
+    override suspend fun rawGet(device: Device, token: String?, path: String): String {
+        val response = client.newCall(requestBuilder(device, token, path).build()).await()
+        response.use {
+            if (!it.isSuccessful) throw PideckException("GET $path → ${it.code}")
+            return it.body?.string().orEmpty()
+        }
+    }
+
+    private fun requestBuilder(device: Device, token: String?, path: String): Request.Builder =
+        Request.Builder()
+            .url(device.baseUrl.trimEnd('/') + path)
+            .apply { if (!token.isNullOrBlank()) header("authorization", "Bearer $token") }
+
+    private fun streamOf(request: Request): Flow<SseFrame> = callbackFlow {
+        val listener = object : EventSourceListener() {
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                trySend(SseFrame(id = id, type = type, data = data))
+            }
+
+            override fun onClosed(eventSource: EventSource) {
+                close()
+            }
+
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                val reason = when {
+                    response != null -> "SSE ${response.code}"
+                    t != null -> t.message ?: t::class.java.simpleName
+                    else -> "SSE 断开"
+                }
+                close(PideckException(reason, t))
+            }
+        }
+        val source = EventSources.createFactory(client).newEventSource(request, listener)
+        awaitClose { source.cancel() }
+    }
+
+    private fun encode(value: String): String =
+        java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+}
+
+/** OkHttp 的 Call 包成挂起函数（不引入 kotlinx-coroutines-okhttp 之外的依赖）。 */
+internal suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (!cont.isCancelled) cont.resumeWithException(e)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            cont.resume(response)
+        }
+    })
+    cont.invokeOnCancellation { runCatching { cancel() } }
+}
+
+/** 默认 client：SSE 需要「读不超时」，否则长时间无帧会被断开。 */
+fun defaultOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(10, TimeUnit.SECONDS)
+    .readTimeout(0, TimeUnit.MILLISECONDS)
+    .writeTimeout(30, TimeUnit.SECONDS)
+    .pingInterval(0, TimeUnit.SECONDS)
+    .retryOnConnectionFailure(true)
+    .build()
