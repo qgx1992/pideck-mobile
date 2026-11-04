@@ -1,6 +1,7 @@
 package dev.pideck.nativeapp.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Devices
@@ -57,6 +59,9 @@ import java.util.Locale
 
 /** 侧栏宽度（默认 360dp 在 390dp 宽的机器上几乎满屏）。 */
 private val DrawerWidth = 300.dp
+
+/** 展开的项目组一次最多露出多少个会话，剩下的折进「显示其余 N 个」。 */
+private const val DRAWER_SESSION_PREVIEW = 5
 
 /**
  * 聊天页的左侧栏：换会话不用退出再进来。
@@ -159,32 +164,79 @@ fun SessionDrawer(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
 
+        // 展开后每组先露 5 条，剩下的收进「显示其余 N 个」：项目一多整列就翻不到头
+        var expandedRest by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
+
         LazyColumn(
             modifier = Modifier.weight(1f),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 10.dp,
+                end = 10.dp,
+                bottom = 12.dp,
+            ),
         ) {
             groups.forEach { group ->
                 val collapsed = group.projectId in viewModel.collapsedGroups
-                item(key = "h-${group.projectId}") {
-                    DrawerGroupHeader(
-                        name = group.projectName.ifBlank { "未命名项目" },
-                        count = group.sessions.size,
-                        collapsed = collapsed,
-                        onToggle = { viewModel.toggleGroup(group.projectId) },
-                        onLongPress = { actions.menuProject = group },
-                    )
-                }
-                if (!collapsed) {
-                    items(group.sessions, key = { it.id }) { session ->
-                        DrawerSessionRow(
-                            session = session,
-                            running = viewModel.isRunning(session.id),
-                            current = session.id == currentSessionId,
-                            onClick = {
-                                if (session.id != currentSessionId) onPickSession(session.id)
-                            },
-                            onLongClick = { actions.menuSession = session },
+                item(key = "g-${group.projectId}") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp)
+                            .border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f),
+                                shape = RoundedCornerShape(12.dp),
+                            )
+                            .padding(vertical = 2.dp),
+                    ) {
+                        DrawerGroupHeader(
+                            name = group.projectName.ifBlank { "未命名项目" },
+                            count = group.sessions.size,
+                            collapsed = collapsed,
+                            onToggle = { viewModel.toggleGroup(group.projectId) },
+                            onLongPress = { actions.menuProject = group },
                         )
+                        if (!collapsed) {
+                            val showAll = group.projectId in expandedRest
+                            val shown = if (showAll) {
+                                group.sessions
+                            } else {
+                                group.sessions.take(DRAWER_SESSION_PREVIEW)
+                            }
+                            shown.forEach { session ->
+                                DrawerSessionRow(
+                                    session = session,
+                                    running = viewModel.isRunning(session.id),
+                                    current = session.id == currentSessionId,
+                                    onClick = {
+                                        if (session.id != currentSessionId) onPickSession(session.id)
+                                    },
+                                    onLongClick = { actions.menuSession = session },
+                                )
+                            }
+                            val rest = group.sessions.size - DRAWER_SESSION_PREVIEW
+                            if (rest > 0) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            expandedRest = if (showAll) {
+                                                expandedRest - group.projectId
+                                            } else {
+                                                expandedRest + group.projectId
+                                            }
+                                        }
+                                        .padding(start = 34.dp, end = 16.dp, top = 2.dp, bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = if (showAll) "收起" else "显示其余 $rest 个",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -51,6 +51,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
 import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material3.DrawerValue
@@ -203,6 +204,10 @@ fun ChatScreen(
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
 
+    // 模型表要提前拉：思考档位是从模型的 thinkingLevels 推出来的，
+    // 以前只在点开模型选择时才拉，于是「思考」按钮要点一下模型才冒出来。
+    LaunchedEffect(Unit) { viewModel.loadModels() }
+
     var showWorkspace by remember { mutableStateOf(false) }
     // 顶栏的模型 / 思考档位选择器
     var showModelSheet by remember { mutableStateOf(false) }
@@ -317,14 +322,11 @@ fun ChatScreen(
             ) {
                 SelectChip(
                     text = viewModel.sessionModel?.shortLabel ?: "选择模型",
-                    onClick = {
-                        showModelSheet = true
-                        viewModel.loadModels()
-                    },
+                    onClick = { showModelSheet = true },
                     icon = Icons.Default.Memory,
                     trailing = Icons.Filled.KeyboardArrowDown,
                     accent = viewModel.sessionModel == null,
-                    modifier = Modifier.weight(1f, fill = false),
+                    modifier = Modifier.widthIn(max = 188.dp),
                 )
                 val levels = viewModel.thinkingLevels
                 if (levels.isNotEmpty()) {
@@ -336,6 +338,14 @@ fun ChatScreen(
                         accent = level in setOf("high", "xhigh", "max"),
                     )
                 }
+                Spacer(Modifier.weight(1f))
+                // 历史会话：不用先划出抽屉也能翻（抽屉里有搜索与完整分组）
+                AppIconButton(
+                    icon = Icons.Default.History,
+                    contentDescription = "历史会话",
+                    onClick = { scope.launch { drawerState.open() } },
+                    size = 34,
+                )
             }
             }
         },
