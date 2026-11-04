@@ -95,6 +95,11 @@ jobs:
           printf '%s\n' "${KEYSTORE_PROPERTIES}" > app/android/keystore.properties
           chmod 600 app/android/pideck-release.keystore app/android/keystore.properties
 
+      # git 在 Windows 上不记录可执行位（gradlew 存成 100644），checkout 出来没有 +x，
+      # 直接 ./gradlew 会 exit 126。
+      - name: 确保 gradlew 可执行
+        run: chmod +x native/gradlew
+
       - name: 单元测试
         working-directory: native
         run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
