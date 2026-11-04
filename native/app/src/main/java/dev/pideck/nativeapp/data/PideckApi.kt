@@ -1,9 +1,11 @@
 package dev.pideck.nativeapp.data
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import okhttp3.Call
 import okhttp3.Callback
@@ -50,18 +52,26 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
-    override suspend fun state(device: Device, token: String?, etag: String?): StateFetch {
-        val request = requestBuilder(device, token, "/api/state")
-            .apply { if (!etag.isNullOrBlank()) header("if-none-match", etag) }
-            .build()
-        val response = client.newCall(request).await()
-        response.use {
-            if (it.code == 304) return StateFetch.NotModified
-            if (!it.isSuccessful) throw PideckException("state ${it.code}", code = it.code)
-            val body = it.body?.string() ?: throw PideckException("state: 空响应")
-            return StateFetch.Fresh(PideckJson.decodeFromString(PideckState.serializer(), body), it.header("etag"))
+    override suspend fun state(device: Device, token: String?, etag: String?): StateFetch =
+        withContext(Dispatchers.IO) {
+            val request = requestBuilder(device, token, "/api/state")
+                .apply { if (!etag.isNullOrBlank()) header("if-none-match", etag) }
+                .build()
+            client.newCall(request).await().use { response ->
+                when {
+                    response.code == 304 -> StateFetch.NotModified
+                    !response.isSuccessful ->
+                        throw PideckException("state ${response.code}", code = response.code)
+                    else -> {
+                        val body = response.body?.string() ?: throw PideckException("state: 空响应")
+                        StateFetch.Fresh(
+                            PideckJson.decodeFromString(PideckState.serializer(), body),
+                            response.header("etag"),
+                        )
+                    }
+                }
+            }
         }
-    }
 
     override suspend fun messagesPage(
         device: Device,
@@ -69,17 +79,18 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         sessionId: String,
         pageSize: Int,
         before: Long?,
-    ): SessionMessagePage {
+    ): SessionMessagePage = withContext(Dispatchers.IO) {
         val query = buildString {
             append("?pageSize=").append(pageSize)
             if (before != null) append("&before=").append(before)
         }
         val path = "/api/sessions/${encode(sessionId)}/messages/page$query"
-        val response = client.newCall(requestBuilder(device, token, path).build()).await()
-        response.use {
-            if (!it.isSuccessful) throw PideckException("messages ${it.code}", code = it.code)
-            val body = it.body?.string() ?: throw PideckException("messages: 空响应")
-            return PideckJson.decodeFromString(SessionMessagePage.serializer(), body)
+        client.newCall(requestBuilder(device, token, path).build()).await().use { response ->
+            if (!response.isSuccessful) {
+                throw PideckException("messages ${response.code}", code = response.code)
+            }
+            val body = response.body?.string() ?: throw PideckException("messages: 空响应")
+            PideckJson.decodeFromString(SessionMessagePage.serializer(), body)
         }
     }
 
@@ -99,13 +110,15 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         return streamOf(request)
     }
 
-    override suspend fun rawGet(device: Device, token: String?, path: String): String {
-        val response = client.newCall(requestBuilder(device, token, path).build()).await()
-        response.use {
-            if (!it.isSuccessful) throw PideckException("GET $path → ${it.code}", code = it.code)
-            return it.body?.string().orEmpty()
+    override suspend fun rawGet(device: Device, token: String?, path: String): String =
+        withContext(Dispatchers.IO) {
+            client.newCall(requestBuilder(device, token, path).build()).await().use { response ->
+                if (!response.isSuccessful) {
+                    throw PideckException("GET $path → ${response.code}", code = response.code)
+                }
+                response.body?.string().orEmpty()
+            }
         }
-    }
 
     private fun requestBuilder(device: Device, token: String?, path: String): Request.Builder =
         Request.Builder()

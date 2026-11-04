@@ -1,7 +1,9 @@
 package dev.pideck.nativeapp.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PairingLinkTest {
@@ -39,6 +41,15 @@ class PairingLinkTest {
         val parsed = PairingLink.parse("10.0.0.5:9000?token=qq")
         assertEquals("http://10.0.0.5:9000", parsed?.baseUrl)
         assertEquals("qq", parsed?.token)
+    }
+
+    @Test
+    fun `令牌当地址粘进来要认得出来`() {
+        assertTrue(PairingLink.looksLikeToken("c67b9ae4-487c-a3d9-c64b39f8c53d"))
+        assertTrue(PairingLink.looksLikeToken(" c67b9ae4-487c-a3d9-c64b39f8c53d "))
+        assertFalse(PairingLink.looksLikeToken("http://10.10.0.172:8765"))
+        assertFalse(PairingLink.looksLikeToken("10.10.0.172:8765"))
+        assertFalse(PairingLink.looksLikeToken(null))
     }
 
     @Test

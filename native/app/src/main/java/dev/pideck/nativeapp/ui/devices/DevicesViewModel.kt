@@ -49,7 +49,14 @@ class DevicesViewModel @Inject constructor(
             busy = true
             error = null
             try {
-                val parsed = PairingLink.parse(link) ?: throw PideckException("看不懂这个地址：$link")
+                val parsed = PairingLink.parse(link) ?: throw PideckException(
+                    if (PairingLink.looksLikeToken(link)) {
+                        "这串看着是令牌，不是地址。地址填 http://<电脑IP>:8765（比如 http://10.10.0.172:8765），令牌粘到下面那格。"
+                    } else {
+                        "这个地址看不懂。要的是 http://<电脑IP>:8765/?token=<令牌> 这一整条" +
+                            "（桌面端「设置 → 连接面板」里可以直接复制，含 ?token= 那段）。"
+                    },
+                )
                 val effectiveToken = PairingLink.mergeToken(token, parsed.token)
                 val draft = Device(
                     id = "",

@@ -54,6 +54,20 @@ object PairingLink {
     }
 
     /** 令牌可以单独填，也可以从链接里带出来；两边都有时以单独填的为准。 */
+    /**
+     * 用户很容易把「令牌」粘进「地址」框（令牌本身就是 UUID/十六进制串）。
+     * 认出来才能给出「这是令牌，不是地址」这种能立刻照做的提示。
+     *
+     * 不写死成标准 UUID 分组：真机上拿到的往往是少一段分隔的残串
+     * （`c67-9ae4-487c-a3d9-…`），标准正则反而认不出来。
+     */
+    fun looksLikeToken(raw: String?): Boolean {
+        val value = raw?.trim().orEmpty()
+        if (value.length < 20 || value.length > 64) return false
+        if (value.count { it == '-' } < 3) return false
+        return value.all { it == '-' || it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }
+    }
+
     fun mergeToken(explicit: String?, fromLink: String?): String? =
         explicit?.trim()?.takeIf { it.isNotEmpty() } ?: fromLink
 
