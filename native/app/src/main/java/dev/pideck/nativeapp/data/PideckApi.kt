@@ -60,6 +60,18 @@ interface PideckApi {
     /** 改会话标题（侧栏长按 → 重命名）。运行中的会话也允许改，桌面端显示的是同一份记录。 */
     suspend fun renameSession(device: Device, token: String?, sessionId: String, title: String)
 
+    /** 删会话记录（连文件一起，桌面端也一样，不可撤销）。 */
+    suspend fun deleteSession(device: Device, token: String?, sessionId: String)
+
+    /**
+     * 复制会话（浅拷贝出新记录）。只有 `pi` 后端的会话能复制 ——
+     * dsh / acp 在服务端会 500，所以返回 null 表示「这个后端不支持」。
+     */
+    suspend fun copySession(device: Device, token: String?, sessionId: String): String?
+
+    /** 从项目列表移除工作区（桌面端语义：删的是记录，磁盘目录不动）。 */
+    suspend fun removeProject(device: Device, token: String?, projectId: String)
+
     suspend fun rawGet(device: Device, token: String?, path: String): String
 
     /** `/api/sessions/runtimes`：所有会话的 runtime 概要（约 3KB，后台看护轮询用）。 */
@@ -220,6 +232,55 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             }.getOrNull()
             parsed?.takeIf { it.isNotBlank() } ?: throw PideckException("新建会话没有返回 id")
         }
+
+    override suspend fun deleteSession(
+        device: Device,
+        token: String?,
+        sessionId: String,
+    ) {
+        withContext(Dispatchers.IO) {
+            postJson(
+                device,
+                token,
+                "/api/sessions/${URLEncoder.encode(sessionId, "UTF-8")}/delete",
+                buildJsonObject { },
+            )
+        }
+    }
+
+    override suspend fun copySession(
+        device: Device,
+        token: String?,
+        sessionId: String,
+    ): String? = withContext(Dispatchers.IO) {
+        val raw = runCatching {
+            postJson(
+                device,
+                token,
+                "/api/sessions/${URLEncoder.encode(sessionId, "UTF-8")}/copy",
+                buildJsonObject { },
+            )
+        }.getOrNull() ?: return@withContext null
+        runCatching {
+            PideckJson.parseToJsonElement(raw).jsonObject["result"]?.jsonObject
+                ?.get("targetSessionId")?.jsonPrimitive?.content
+        }.getOrNull()
+    }
+
+    override suspend fun removeProject(
+        device: Device,
+        token: String?,
+        projectId: String,
+    ) {
+        withContext(Dispatchers.IO) {
+            postJson(
+                device,
+                token,
+                "/api/projects/${URLEncoder.encode(projectId, "UTF-8")}/delete",
+                buildJsonObject { },
+            )
+        }
+    }
 
     override suspend fun renameSession(
         device: Device,

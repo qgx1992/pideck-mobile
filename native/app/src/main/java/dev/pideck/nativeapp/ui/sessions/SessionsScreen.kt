@@ -62,8 +62,8 @@ fun SessionsScreen(
     viewModel: SessionsViewModel = hiltViewModel(),
 ) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
-    // 长按会话 → 重命名；长按项目标题 → 只看这一个
-    var renaming by remember { mutableStateOf<Session?>(null) }
+    // 长按菜单（会话 / 工作区），逻辑与侧栏共用
+    val actions = rememberRowActionState()
 
     Scaffold(
         topBar = {
@@ -142,7 +142,7 @@ fun SessionsScreen(
                                 count = group.sessions.size,
                                 collapsed = collapsed,
                                 onToggle = { viewModel.toggleGroup(group.projectId) },
-                                onSolo = { viewModel.soloGroup(group.projectId) },
+                                onLongPress = { actions.menuProject = group },
                             )
                         }
                         if (!collapsed) items(group.sessions, key = { it.id }) { session ->
@@ -150,7 +150,7 @@ fun SessionsScreen(
                                 session = session,
                                 running = viewModel.isRunning(session.id),
                                 onClick = { onOpenSession(session.id) },
-                                onLongClick = { renaming = session },
+                                onLongClick = { actions.menuSession = session },
                             )
                             HorizontalDivider(
                                 color = MaterialTheme.colorScheme.outlineVariant,
@@ -175,16 +175,7 @@ fun SessionsScreen(
         }
     }
 
-    renaming?.let { target ->
-        RenameSessionDialog(
-            current = target.title,
-            onDismiss = { renaming = null },
-            onConfirm = { title ->
-                viewModel.rename(target.id, title)
-                renaming = null
-            },
-        )
-    }
+    RowActionsHost(state = actions, viewModel = viewModel)
 }
 
 @Composable
@@ -194,12 +185,12 @@ private fun ProjectHeader(
     count: Int,
     collapsed: Boolean,
     onToggle: () -> Unit,
-    onSolo: () -> Unit,
+    onLongPress: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onToggle, onLongClick = onSolo)
+            .combinedClickable(onClick = onToggle, onLongClick = onLongPress)
             .padding(start = 12.dp, end = 20.dp, top = 16.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

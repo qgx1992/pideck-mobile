@@ -25,6 +25,7 @@ import javax.inject.Inject
 data class SessionGroup(
     val projectId: String,
     val projectName: String,
+    val projectPath: String?,
     val sessions: List<Session>,
 )
 
@@ -69,9 +70,6 @@ class SessionsViewModel @Inject constructor(
     fun toggleGroup(projectId: String) = GroupCollapse.toggle(projectId)
 
     /** 顶栏那个一键开关：有任何一个展开就全收起来，否则全展开。 */
-    /** 长按项目标题：只留它展开。 */
-    fun soloGroup(projectId: String) = GroupCollapse.solo(groups.map { it.projectId }, projectId)
-
     fun toggleAllGroups() = GroupCollapse.toggleAll(groups.map { it.projectId })
 
     val allCollapsed: Boolean
@@ -92,14 +90,14 @@ class SessionsViewModel @Inject constructor(
                 val sessions = byProject[project.id].orEmpty()
                     .sortedByDescending { it.updatedAt }
                 if (sessions.isEmpty()) null
-                else SessionGroup(project.id, project.name, sessions)
+                else SessionGroup(project.id, project.name, project.path, sessions)
             }
             // 项目表里查不到的会话（项目被删/换路径）兜底放最后一组，别让它们消失。
             val known = ordered.map { it.projectId }.toSet()
             val orphans = byProject
                 .filterKeys { it !in known }
                 .map { (projectId, sessions) ->
-                    SessionGroup(projectId, "其他", sessions.sortedByDescending { s -> s.updatedAt })
+                    SessionGroup(projectId, "其他", null, sessions.sortedByDescending { s -> s.updatedAt })
                 }
                 .sortedBy { it.projectName }
             return ordered + orphans
@@ -144,6 +142,58 @@ class SessionsViewModel @Inject constructor(
                 error = describeConnectionError(e)
             }
         }
+    }
+
+    /** 删除会话记录（连文件，不可撤销）。删的是当前打开的那个由调用方决定跳到哪。 */
+    fun deleteSession(id: String) {
+        val target = device ?: return
+        viewModelScope.launch {
+            try {
+                api.deleteSession(target, token, id)
+                if (StateCache.session(deviceId, id) != null) Unit
+                etag = null
+                refresh()
+            } catch (e: Exception) {
+                error = describeConnectionError(e)
+            }
+        }
+    }
+
+    /**
+     * 复制会话：成功返回新会话 id（调用方决定是跳过去还是只提示）。
+     * 只有 pi 后端支持，其余后端服务端 500 —— 这里翻成 null 让 UI 说人话。
+     */
+    fun copySession(id: String, onDone: (String?) -> Unit = {}) {
+        val target = device ?: return
+        viewModelScope.launch {
+            try {
+                val newId = api.copySession(target, token, id)
+                etag = null
+                refresh()
+                onDone(newId)
+            } catch (e: Exception) {
+                error = describeConnectionError(e)
+                onDone(null)
+            }
+        }
+    }
+
+    /** 从列表移除工作区（磁盘目录不动）。 */
+    fun removeProject(id: String) {
+        val target = device ?: return
+        viewModelScope.launch {
+            try {
+                api.removeProject(target, token, id)
+                etag = null
+                refresh()
+            } catch (e: Exception) {
+                error = describeConnectionError(e)
+            }
+        }
+    }
+
+    fun clearError() {
+        error = null
     }
 
     fun refresh() {

@@ -42,7 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pideck.nativeapp.data.Session
-import dev.pideck.nativeapp.ui.sessions.RenameSessionDialog
+import dev.pideck.nativeapp.ui.sessions.RowActionsHost
+import dev.pideck.nativeapp.ui.sessions.rememberRowActionState
 import dev.pideck.nativeapp.ui.sessions.SessionsViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -67,8 +68,8 @@ fun SessionDrawer(
 ) {
     val groups = viewModel.groups
     val state = viewModel.state
-    // 长按会话 → 重命名；长按项目标题 → 只留它展开
-    var renaming by remember { mutableStateOf<Session?>(null) }
+    // 长按菜单（会话 / 工作区），逻辑与列表页共用
+    val actions = rememberRowActionState()
 
     ModalDrawerSheet {
         Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 20.dp)) {
@@ -99,7 +100,7 @@ fun SessionDrawer(
                         count = group.sessions.size,
                         collapsed = collapsed,
                         onToggle = { viewModel.toggleGroup(group.projectId) },
-                        onSolo = { viewModel.soloGroup(group.projectId) },
+                        onLongPress = { actions.menuProject = group },
                     )
                 }
                 if (!collapsed) {
@@ -111,7 +112,7 @@ fun SessionDrawer(
                             onClick = {
                                 if (session.id != currentSessionId) onPickSession(session.id)
                             },
-                            onLongClick = { renaming = session },
+                            onLongClick = { actions.menuSession = session },
                         )
                     }
                 }
@@ -141,16 +142,14 @@ fun SessionDrawer(
         }
     }
 
-    renaming?.let { target ->
-        RenameSessionDialog(
-            current = target.title,
-            onDismiss = { renaming = null },
-            onConfirm = { title ->
-                viewModel.rename(target.id, title)
-                renaming = null
-            },
-        )
-    }
+    RowActionsHost(
+        state = actions,
+        viewModel = viewModel,
+        onSessionDeleted = { deleted ->
+            // 删掉的正是当前打开的会话：退回会话列表，别停在一个空壳页面上
+            if (deleted.id == currentSessionId) onOpenSessions()
+        },
+    )
 }
 
 @Composable
@@ -160,12 +159,12 @@ private fun DrawerGroupHeader(
     count: Int,
     collapsed: Boolean,
     onToggle: () -> Unit,
-    onSolo: () -> Unit,
+    onLongPress: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onToggle, onLongClick = onSolo)
+            .combinedClickable(onClick = onToggle, onLongClick = onLongPress)
             .padding(start = 12.dp, end = 20.dp, top = 14.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
