@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -43,8 +42,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +52,6 @@ import androidx.compose.ui.unit.dp
 import dev.pideck.nativeapp.data.TodoEntry
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
-import kotlinx.coroutines.launch
 
 /**
  * 工作区抽屉：待办 / 改动 / 文件。
@@ -69,11 +65,8 @@ fun WorkspaceSheet(
     viewModel: ChatViewModel,
     onDismiss: () -> Unit,
 ) {
-    // skipPartiallyExpanded = false 才能停在半高（往下拖一档就是「折叠」）；
-    // 表头再放一个明确的收起按钮，不用靠手势猜。
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-    val scope = rememberCoroutineScope()
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("待办", "改动", "文件")
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
@@ -90,16 +83,6 @@ fun WorkspaceSheet(
             }
             IconButton(onClick = { viewModel.refreshWorkspace() }) {
                 Icon(Icons.Default.Refresh, contentDescription = "刷新")
-            }
-            IconButton(
-                onClick = {
-                    // 先收起到半高，再点一次才整块关掉 —— 手机上「收起来」多半只是想看一眼聊天
-                    scope.launch {
-                        if (sheetState.isVisible) sheetState.partialExpand() else sheetState.hide()
-                    }
-                },
-            ) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "收起")
             }
         }
         TabRow(selectedTabIndex = tab) {

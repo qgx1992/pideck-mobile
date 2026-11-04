@@ -57,6 +57,35 @@ class SessionsViewModel @Inject constructor(
 
     val hostVersion: String? get() = state?.version
 
+    /**
+     * 折叠起来的项目分组（按 projectId 记）。
+     *
+     * 放在 ViewModel 里而不是 composable 的 remember：旋转屏幕、切走再回来都还算数，
+     * 但不动磁盘 —— 重启 App 回到「全展开」是合理的默认。
+     */
+    var collapsedGroups by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    fun toggleGroup(projectId: String) {
+        collapsedGroups = if (projectId in collapsedGroups) {
+            collapsedGroups - projectId
+        } else {
+            collapsedGroups + projectId
+        }
+    }
+
+    /** 顶栏那个一键开关：有任何一个展开就全收起来，否则全展开。 */
+    fun toggleAllGroups() {
+        val all = groups.map { it.projectId }.toSet()
+        collapsedGroups = if (collapsedGroups.size >= all.size) emptySet() else all
+    }
+
+    val allCollapsed: Boolean
+        get() {
+            val all = groups.map { it.projectId }.toSet()
+            return all.isNotEmpty() && collapsedGroups.containsAll(all)
+        }
+
     /** 项目按「置顶 → 最近打开」排，会话按最近活动排；只保留有会话的项目。 */
     val groups: List<SessionGroup>
         get() {

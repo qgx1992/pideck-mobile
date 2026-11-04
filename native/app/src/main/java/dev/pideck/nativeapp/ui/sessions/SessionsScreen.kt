@@ -1,6 +1,7 @@
 package dev.pideck.nativeapp.ui.sessions
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,7 +20,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.UnfoldLess
+import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -78,6 +83,12 @@ fun SessionsScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { viewModel.toggleAllGroups() }) {
+                        Icon(
+                            if (viewModel.allCollapsed) Icons.Default.UnfoldMore else Icons.Default.UnfoldLess,
+                            contentDescription = if (viewModel.allCollapsed) "全部展开" else "全部收起",
+                        )
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "设置")
                     }
@@ -116,10 +127,16 @@ fun SessionsScreen(
                     contentPadding = PaddingValues(bottom = 24.dp),
                 ) {
                     viewModel.groups.forEach { group ->
+                        val collapsed = group.projectId in viewModel.collapsedGroups
                         item(key = "project-${group.projectId}") {
-                            ProjectHeader(name = group.projectName, count = group.sessions.size)
+                            ProjectHeader(
+                                name = group.projectName,
+                                count = group.sessions.size,
+                                collapsed = collapsed,
+                                onToggle = { viewModel.toggleGroup(group.projectId) },
+                            )
                         }
-                        items(group.sessions, key = { it.id }) { session ->
+                        if (!collapsed) items(group.sessions, key = { it.id }) { session ->
                             SessionRow(
                                 session = session,
                                 running = viewModel.isRunning(session.id),
@@ -150,13 +167,26 @@ fun SessionsScreen(
 }
 
 @Composable
-private fun ProjectHeader(name: String, count: Int) {
+private fun ProjectHeader(
+    name: String,
+    count: Int,
+    collapsed: Boolean,
+    onToggle: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp),
+            .clickable(onClick = onToggle)
+            .padding(start = 12.dp, end = 20.dp, top = 16.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Icon(
+            if (collapsed) Icons.Filled.KeyboardArrowRight else Icons.Filled.KeyboardArrowDown,
+            contentDescription = if (collapsed) "展开" else "收起",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(6.dp))
         Text(
             name.ifBlank { "未命名项目" },
             style = MaterialTheme.typography.labelLarge,
@@ -166,7 +196,7 @@ private fun ProjectHeader(name: String, count: Int) {
             modifier = Modifier.weight(1f),
         )
         Text(
-            count.toString(),
+            if (collapsed) "$count 个会话" else count.toString(),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
