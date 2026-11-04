@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -6,6 +8,15 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
 }
+
+// 复用 WebView 壳那份发布签名（同一个开发者、同一个备份位置，少一个会丢的东西）。
+// 文件不入库：`../app/android/keystore.properties` 与 `pideck-release.keystore` 都在 .gitignore 里。
+val keystorePropsFile = rootProject.file("../app/android/keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+}
+val releaseKeystore = rootProject.file("../app/android/" + (keystoreProps.getProperty("storeFile") ?: "pideck-release.keystore"))
+val hasReleaseKeystore = keystorePropsFile.exists() && releaseKeystore.exists()
 
 android {
     namespace = "dev.pideck.nativeapp"
@@ -16,14 +27,28 @@ android {
         applicationId = "top.caoayu.pideck.native"
         minSdk = 26
         targetSdk = 35
-        versionCode = 25
-        versionName = "0.1.24-native"
+        versionCode = 26
+        versionName = "0.1.25-native"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = keystoreProps.getProperty("storePassword", "")
+                keyAlias = keystoreProps.getProperty("keyAlias", "pideck")
+                keyPassword = keystoreProps.getProperty("keyPassword", "")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

@@ -21,3 +21,7 @@ native/local.properties
 native/.kotlin/
 native/.idea/
 native/**/*.iml
+
+# 原生工程的签名配置（如有，也不入库）
+native/keystore.properties
+native/*.keystore

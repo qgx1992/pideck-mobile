@@ -47,3 +47,29 @@ cd native
 字段名与上游一致；上游新增字段时 `ignoreUnknownKeys` 保证不炸，需要展示时再补模型。
 
 注意：`native` 不能作为 Kotlin 包名的一段语义关键字风险，所以源码包名是 `dev.pideck.nativeapp`。
+
+## 出包
+
+```bash
+# 开发用弱包（debug 签名，可 everywhere 装）
+./gradlew :app:assembleDebug
+# apk 在 app/build/outputs/apk/debug/app-debug.apk
+
+# 正式包（复用 ../app/android/keystore.properties 里那份发布签名）
+./gradlew :app:assembleRelease
+# apk 在 app/build/outputs/apk/release/app-release.apk
+```
+
+签名为什么要复用壳那份：`app/android/keystore.properties` + `pideck-release.keystore` 是同一个开发者
+的长久身份，丢一次就有无数老版本无法覆盖升级；原生工程再生成一份只是平白多两个必须备份的文件。
+两个应用的 `applicationId` 不同，共用一张证书不会互相顶掉。
+
+**签名换了就不能覆盖安装**：0.1.24 及更早是 debug 签名，升到 0.1.25 的 release 包必须先卸载旧版本
+（Android 会报「签名不一致」）。版本号无关，证书不同就是不行。
+
+校验：
+
+```bash
+"C:/dsh-build/sdk/build-tools/35.0.0/aapt2.exe" dump badging app/build/outputs/apk/release/app-release.apk | head -2
+"C:/dsh-build/sdk/build-tools/35.0.0/apksigner.bat" verify --print-certs app/build/outputs/apk/release/app-release.apk
+```
