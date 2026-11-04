@@ -61,7 +61,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.ViewSidebar
+import androidx.compose.material.icons.filled.Splitscreen
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
@@ -178,6 +178,14 @@ fun ChatScreen(
                     (it.errorText?.length ?: 0)
             }
     } ?: 0
+    // 流式期间每 250ms 补一次贴底 —— 过程组的高度变化（新工具卡、组自动展开）不都体现在
+    // liveSignature 上，只靠它触发就会漏，表现就是「过程组不会自动贴底」。
+    LaunchedEffect(viewModel.streaming) {
+        while (viewModel.streaming) {
+            if (atBottom) stickToBottom()
+            kotlinx.coroutines.delay(250)
+        }
+    }
     LaunchedEffect(lastKey, liveSignature) {
         if (atBottom) {
             // 等这一帧布局量完再钉，否则钉的还是加高之前的底部
@@ -287,7 +295,7 @@ fun ChatScreen(
                         )
                     }
                     RoundIconButton(
-                        icon = Icons.Filled.ViewSidebar,
+                        icon = Icons.Filled.Splitscreen,
                         contentDescription = "工作区",
                         onClick = {
                             viewModel.loadWorkspace()
@@ -631,7 +639,7 @@ private fun AssistantBlock(
     item: TimelineItem.AssistantMessage,
     onLongPress: () -> Unit = {},
 ) {
-    var thinkingOpen by remember(item.key, item.streaming) { mutableStateOf(false) }
+    var thinkingOpen by remember(item.key, item.streaming) { mutableStateOf(item.streaming) }
 
     Column(
         modifier = Modifier
@@ -764,10 +772,18 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 shape = RoundedCornerShape(12.dp),
             ) {
+                val inner = rememberScrollState()
+                // 组里也是流式追加：不钉住的话新工具卡长在可视区外，看着像「没跟上」
+                LaunchedEffect(row.steps.size, row.streaming) {
+                    if (row.streaming) {
+                        withFrameNanos { }
+                        inner.scrollTo(inner.maxValue)
+                    }
+                }
                 Column(
                     modifier = Modifier
                         .heightIn(max = 320.dp)
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(inner)
                         .padding(10.dp),
                 ) {
                     row.steps.forEach { step ->

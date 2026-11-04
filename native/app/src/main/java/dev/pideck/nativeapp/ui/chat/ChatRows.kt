@@ -76,7 +76,21 @@ fun buildChatRows(
 
     for (item in all) {
         if (item is TimelineItem.AssistantMessage && item.text.isBlank() && !isOnlyError(item)) {
-            pending += item
+            // 思考**不进折叠组**：它是要读的内容，不是「过程噪音」。
+            // 单独成行、按原来的样式显示（一张思考卡），只有工具调用才并进过程组。
+            val thinking = item.thinking?.takeIf { it.isNotBlank() }
+            if (thinking != null) {
+                flush()
+                rows += ChatRow.Single(
+                    item.copy(thinking = thinking, tools = emptyList(), errorText = null),
+                )
+            }
+            if (item.tools.isNotEmpty() || item.errorText != null) {
+                pending += item.copy(thinking = null)
+            }
+            if (thinking == null && item.tools.isEmpty() && item.errorText == null) {
+                pending += item
+            }
             continue
         }
         flush()
