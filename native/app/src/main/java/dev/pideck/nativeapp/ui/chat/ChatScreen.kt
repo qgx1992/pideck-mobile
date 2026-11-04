@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.ViewSidebar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
@@ -132,6 +133,8 @@ fun ChatScreen(
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
 
+    var showWorkspace by remember { mutableStateOf(false) }
+
     LaunchedEffect(viewModel.error) {
         viewModel.error?.let {
             snackbar.showSnackbar(it)
@@ -167,6 +170,23 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    val todo = viewModel.workspaceTodo
+                    if (todo != null && todo.todos.isNotEmpty()) {
+                        Text(
+                            "${todo.done}/${todo.todos.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(end = 4.dp),
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            viewModel.loadWorkspace()
+                            showWorkspace = true
+                        },
+                    ) {
+                        Icon(Icons.Filled.ViewSidebar, contentDescription = "工作区")
+                    }
                     if (viewModel.streaming) {
                         CircularProgressIndicator(
                             modifier = Modifier
@@ -269,6 +289,11 @@ fun ChatScreen(
             }
         }
     }
+
+    if (showWorkspace) {
+        WorkspaceSheet(viewModel = viewModel, onDismiss = { showWorkspace = false })
+    }
+    FilePreviewDialog(viewModel = viewModel)
 }
 
 @Composable

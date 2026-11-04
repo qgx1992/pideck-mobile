@@ -60,6 +60,18 @@ interface PideckApi {
 
     /** `/api/sessions/runtimes`：所有会话的 runtime 概要（约 3KB，后台看护轮询用）。 */
     suspend fun runtimes(device: Device, token: String?): List<RuntimeInfo>
+
+    /** 工作区「待办」：会话的 todo 计划，没计划时返回 null。 */
+    suspend fun todo(device: Device, token: String?, sessionId: String): WorkspaceTodo?
+
+    /** 工作区「改动」：git status（含分支名与未跟踪文件）。 */
+    suspend fun changes(device: Device, token: String?, projectId: String, projectPath: String?): WorkspaceChanges
+
+    /** 工作区「文件」：某一层的目录列表，[path] 为空表示项目根。 */
+    suspend fun files(device: Device, token: String?, projectId: String, path: String): List<FileNode>
+
+    /** 点开文件时读正文（桌面端会按大小截断，这里再兜一次底）。 */
+    suspend fun fileText(device: Device, token: String?, projectId: String, path: String): String
 }
 
 class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
@@ -134,6 +146,56 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
                 }.getOrNull()
             } ?: emptyList()
         }
+
+    override suspend fun todo(device: Device, token: String?, sessionId: String): WorkspaceTodo? =
+        WorkspaceParser.todo(
+            PideckJson.parseToJsonElement(
+                rawGet(device, token, "/api/sessions/$sessionId/todo"),
+            ),
+        )
+
+    override suspend fun changes(
+        device: Device,
+        token: String?,
+        projectId: String,
+        projectPath: String?,
+    ): WorkspaceChanges = WorkspaceParser.changes(
+        PideckJson.parseToJsonElement(rawGet(device, token, "/api/git/status?projectId=$projectId")),
+        projectPath,
+    )
+
+    override suspend fun files(
+        device: Device,
+        token: String?,
+        projectId: String,
+        path: String,
+    ): List<FileNode> = WorkspaceParser.files(
+        PideckJson.parseToJsonElement(
+            rawGet(
+                device,
+                token,
+                "/api/files?projectId=$projectId&path=${java.net.URLEncoder.encode(path, "UTF-8")}",
+            ),
+        ),
+    )
+
+    override suspend fun fileText(
+        device: Device,
+        token: String?,
+        projectId: String,
+        path: String,
+    ): String {
+        val text = rawGet(
+            device,
+            token,
+            "/api/file-content?projectId=$projectId&path=${java.net.URLEncoder.encode(path, "UTF-8")}",
+        )
+        return runCatching {
+            val obj = PideckJson.parseToJsonElement(text) as kotlinx.serialization.json.JsonObject
+            val content = (obj["content"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            if (content != null) content else text
+        }.getOrDefault(text)
+    }
 
     override suspend fun rawGet(device: Device, token: String?, path: String): String =
         withContext(Dispatchers.IO) {

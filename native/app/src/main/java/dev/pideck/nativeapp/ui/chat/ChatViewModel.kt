@@ -16,7 +16,10 @@ import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.ReplyMerger
 import dev.pideck.nativeapp.data.ReplySnapshot
 import dev.pideck.nativeapp.data.StateCache
+import dev.pideck.nativeapp.data.FileNode
 import dev.pideck.nativeapp.data.TimelineItem
+import dev.pideck.nativeapp.data.WorkspaceChanges
+import dev.pideck.nativeapp.data.WorkspaceTodo
 import dev.pideck.nativeapp.data.describeConnectionError
 import dev.pideck.nativeapp.data.toTimelineItem
 import dev.pideck.nativeapp.data.toTimelineItems
@@ -119,6 +122,116 @@ class ChatViewModel @Inject constructor(
     /** 是否有正在往外冒的回复（本端发送 or 别处发起的订阅）。UI 用它决定停止按钮与光标。 */
     val streaming: Boolean
         get() = sending || live?.finished == false
+
+    // ---- 工作区（抽屉里的三页） ----
+    // 三份数据都是「点开抽屉才拉」，别处跑完一轮回到前台时顺带刷一下。
+
+    var workspaceTodo by mutableStateOf<WorkspaceTodo?>(null)
+        private set
+
+    var workspaceChanges by mutableStateOf<WorkspaceChanges?>(null)
+        private set
+
+    var workspaceFiles by mutableStateOf<List<FileNode>>(emptyList())
+        private set
+
+    /** 文件页当前所在目录（项目内相对路径，"" 是根）。 */
+    var workspaceDir by mutableStateOf("")
+        private set
+
+    var workspaceBusy by mutableStateOf(false)
+        private set
+
+    var workspaceError by mutableStateOf<String?>(null)
+        private set
+
+    private var workspaceLoaded = false
+
+    /** 抽屉打开时调用；同一会话只自动拉一次，之后靠下拉/切页手动刷。 */
+    fun loadWorkspace(force: Boolean = false) {
+        if (workspaceLoaded && !force) return
+        workspaceLoaded = true
+        refreshWorkspace()
+    }
+
+    fun refreshWorkspace() {
+        val device = device ?: return
+        val projectId = projectIdOf() ?: run {
+            workspaceError = "这个会话没有关联项目，看不到改动与文件"
+            return
+        }
+        workspaceBusy = true
+        workspaceError = null
+        viewModelScope.launch {
+            try {
+                val session = StateCache.session(deviceId, sessionId)
+                val todo = runCatching { api.todo(device, token, sessionId) }.getOrNull()
+                val changes = runCatching {
+                    api.changes(device, token, projectId, session?.projectPath)
+                }.getOrNull()
+                val files = runCatching {
+                    api.files(device, token, projectId, workspaceDir)
+                }.getOrDefault(emptyList())
+                workspaceTodo = todo
+                workspaceChanges = changes
+                workspaceFiles = files
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                workspaceError = dev.pideck.nativeapp.data.describeConnectionError(e)
+            } finally {
+                workspaceBusy = false
+            }
+        }
+    }
+
+    fun openDir(dir: String) {
+        workspaceDir = dir
+        refreshWorkspace()
+    }
+
+    fun openParentDir() {
+        openDir(workspaceDir.substringBeforeLast('/', ""))
+    }
+
+    // ---- 文件预览（点开一个文件看正文，只读） ----
+
+    var previewPath by mutableStateOf<String?>(null)
+        private set
+
+    var previewText by mutableStateOf("")
+        private set
+
+    var previewBusy by mutableStateOf(false)
+        private set
+
+    fun openFile(path: String) {
+        val device = device ?: return
+        val projectId = projectIdOf() ?: return
+        previewPath = path
+        previewText = ""
+        previewBusy = true
+        viewModelScope.launch {
+            try {
+                previewText = api.fileText(device, token, projectId, path)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                previewText = dev.pideck.nativeapp.data.describeConnectionError(e)
+            } finally {
+                previewBusy = false
+            }
+        }
+    }
+
+    fun closePreview() {
+        previewPath = null
+        previewText = ""
+    }
+
+    private fun projectIdOf(): String? =
+        StateCache.session(deviceId, sessionId)?.projectId
+            ?: StateCache.get(deviceId)?.sessions?.firstOrNull { it.id == sessionId }?.projectId
 
     /**
      * 回到前台：重拉历史 + 重开订阅。
