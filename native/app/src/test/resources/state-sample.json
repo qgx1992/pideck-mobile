@@ -1,0 +1,83 @@
+{
+  "projects": [
+    {
+      "id": "builtin-chat",
+      "name": "Chat",
+      "lastOpenedAt": 1792227152259,
+      "pinned": true,
+      "sortOrder": -1,
+      "kind": "chat",
+      "path": "C:\\Users\\Administrator\\AppData\\Roaming\\PiDeck\\chat-workspace",
+      "environment": "windows"
+    },
+    {
+      "id": "e4512ea5-13b5-42fb-ac44-c1f376027664",
+      "name": "PiDeck-Mobile",
+      "lastOpenedAt": 1792226000000,
+      "pinned": false,
+      "sortOrder": 0,
+      "path": "D:\\A-my project\\PiDeck-Mobile",
+      "environment": "windows"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "93720f59-8e51-43cd-b086-7832c06b3d2f",
+      "projectId": "e4512ea5-13b5-42fb-ac44-c1f376027664",
+      "title": "示例会话（浮点时间戳）",
+      "status": "active",
+      "backend": "dsh",
+      "updatedAt": 1792225287694.017,
+      "createdAt": 1792227152994
+    },
+    {
+      "id": "0a1225e4-bb00-41f6-8b0a-8b9312df06e3",
+      "projectId": "builtin-chat",
+      "title": "带模型的会话",
+      "status": "active",
+      "backend": "dsh",
+      "forked": false,
+      "thinkingLevel": "medium",
+      "model": { "provider": "anthropic", "modelId": "claude-sonnet-4-5", "modelName": "Sonnet" },
+      "updatedAt": 1792225999999,
+      "createdAt": 1792225000000
+    },
+    {
+      "id": "draft-1",
+      "projectId": "builtin-chat",
+      "title": "草稿",
+      "status": "draft",
+      "updatedAt": 1792227000000.5,
+      "createdAt": 1792227000000.5
+    }
+  ],
+  "runtimes": [
+    {
+      "sessionId": "0a1225e4-bb00-41f6-8b0a-8b9312df06e3",
+      "agentId": "055c6d61-4b55-4909-8c23-f3983faf2ce4",
+      "runtimeGeneration": 1,
+      "projectId": "builtin-chat",
+      "cwd": "C:\\Users\\Administrator\\AppData\\Roaming\\PiDeck\\chat-workspace",
+      "status": "running",
+      "sessionPath": "C:\\Users\\Administrator\\.pi\\sessions\\x.jsonl",
+      "createdAt": 1792225000000
+    },
+    {
+      "sessionId": "93720f59-8e51-43cd-b086-7832c06b3d2f",
+      "agentId": "055c6d61-4b55-4909-8c23-f3983faf2ce4",
+      "runtimeGeneration": 1,
+      "projectId": "e4512ea5-13b5-42fb-ac44-c1f376027664",
+      "cwd": "D:\\A-my project\\PiDeck-Mobile",
+      "status": "idle",
+      "sessionPath": "C:\\Users\\Administrator\\.pi\\sessions\\y.jsonl",
+      "createdAt": 1792225100000
+    }
+  ],
+  "pendingUiRequests": [],
+  "acpTools": [{ "id": "acp-tool-mvxmhgsq-mvyfxl", "name": "CodeBuddy" }],
+  "security": {
+    "enabled": true,
+    "defaultLevelId": "off",
+    "levels": [{ "id": "off", "name": "off", "builtin": true }]
+  }
+}

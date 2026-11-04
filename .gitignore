@@ -8,7 +8,8 @@ apk/
 
 # 调试临时文件
 *.tmp.json
-st*.json
+# 旧壳调试用的根目录转储（只限根目录，别误伤 test/resources 里的 fixtures）
+/st*.json
 
 # Python 缓存（gen-icon.py / gen-splash.py）
 __pycache__/
