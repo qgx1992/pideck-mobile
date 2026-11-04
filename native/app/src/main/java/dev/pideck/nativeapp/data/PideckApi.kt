@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -56,6 +57,9 @@ interface PideckApi {
     suspend fun stopRuntime(device: Device, token: String?, sessionId: String, agentId: String, runtimeGeneration: Long)
 
     suspend fun rawGet(device: Device, token: String?, path: String): String
+
+    /** `/api/sessions/runtimes`：所有会话的 runtime 概要（约 3KB，后台看护轮询用）。 */
+    suspend fun runtimes(device: Device, token: String?): List<RuntimeInfo>
 }
 
 class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
@@ -119,6 +123,17 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             .build()
         return streamOf(request)
     }
+
+    override suspend fun runtimes(device: Device, token: String?): List<RuntimeInfo> =
+        withContext(Dispatchers.IO) {
+            val text = rawGet(device, token, "/api/sessions/runtimes")
+            val root = PideckJson.parseToJsonElement(text) as? JsonObject ?: return@withContext emptyList()
+            (root["runtimes"] as? JsonArray)?.mapNotNull { element ->
+                runCatching {
+                    PideckJson.decodeFromJsonElement(RuntimeInfo.serializer(), element)
+                }.getOrNull()
+            } ?: emptyList()
+        }
 
     override suspend fun rawGet(device: Device, token: String?, path: String): String =
         withContext(Dispatchers.IO) {

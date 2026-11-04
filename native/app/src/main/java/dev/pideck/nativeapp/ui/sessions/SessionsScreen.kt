@@ -37,6 +37,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.pideck.nativeapp.data.Session
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,6 +48,8 @@ fun SessionsScreen(
     onOpenSession: (String) -> Unit,
     viewModel: SessionsViewModel = hiltViewModel(),
 ) {
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
+
     Scaffold(
         topBar = {
             TopAppBar(

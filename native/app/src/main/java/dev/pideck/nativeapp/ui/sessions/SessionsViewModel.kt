@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui.sessions
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -15,8 +16,10 @@ import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.StateCache
 import dev.pideck.nativeapp.data.StateFetch
 import dev.pideck.nativeapp.data.describeConnectionError
+import dev.pideck.nativeapp.watch.RunWatcher
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
 data class SessionGroup(
@@ -30,6 +33,7 @@ class SessionsViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: DeviceRepository,
     private val api: PideckApi,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     private val deviceId: String = savedStateHandle["deviceId"] ?: error("缺少 deviceId")
@@ -37,6 +41,7 @@ class SessionsViewModel @Inject constructor(
     private var device: Device? = null
     private var token: String? = null
     private var etag: String? = null
+    private var firstResume = true
 
     var deviceName by mutableStateOf<String?>(null)
         private set
@@ -96,6 +101,15 @@ class SessionsViewModel @Inject constructor(
         }
     }
 
+    /** 回到前台刷新一次（别处发起的运行、桌面端改的标题都能看到）。首次进入不重复拉。 */
+    fun onForeground() {
+        if (firstResume) {
+            firstResume = false
+            return
+        }
+        refresh()
+    }
+
     fun refresh() {
         val target = device ?: return
         if (loading) return
@@ -108,6 +122,8 @@ class SessionsViewModel @Inject constructor(
                         state = fetched.state
                         etag = fetched.etag
                         StateCache.put(deviceId, fetched.state)
+                        // 有会话在跑就挂上看护（跑完了一条通知），没跑就等下次再说。
+                        if (fetched.state.runtimes.any { it.isRunning }) RunWatcher.start(context)
                     }
                     StateFetch.NotModified -> Unit
                 }

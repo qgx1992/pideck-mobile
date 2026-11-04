@@ -55,6 +55,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -127,6 +129,8 @@ fun ChatScreen(
             if (atBottom) stickToBottom()
         }
     }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
 
     LaunchedEffect(viewModel.error) {
         viewModel.error?.let {

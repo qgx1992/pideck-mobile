@@ -40,6 +40,10 @@
                 <data android:scheme="pideck" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".watch.RunWatchService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

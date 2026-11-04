@@ -6,7 +6,9 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.content.Context
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.pideck.nativeapp.data.Device
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
@@ -18,6 +20,7 @@ import dev.pideck.nativeapp.data.TimelineItem
 import dev.pideck.nativeapp.data.describeConnectionError
 import dev.pideck.nativeapp.data.toTimelineItem
 import dev.pideck.nativeapp.data.toTimelineItems
+import dev.pideck.nativeapp.watch.RunWatcher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -44,6 +47,7 @@ class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: DeviceRepository,
     private val api: PideckApi,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     private val deviceId: String = savedStateHandle["deviceId"] ?: error("缺少 deviceId")
@@ -63,6 +67,7 @@ class ChatViewModel @Inject constructor(
      * 回放本轮已产出的帧）。两条流互斥：本端发送期间忽略订阅帧，避免同一轮渲染两遍。
      */
     private var watchJob: Job? = null
+    private var firstResume = true
     private var watchMerger = ReplyMerger()
 
     var title by mutableStateOf("会话")
@@ -114,6 +119,23 @@ class ChatViewModel @Inject constructor(
     /** 是否有正在往外冒的回复（本端发送 or 别处发起的订阅）。UI 用它决定停止按钮与光标。 */
     val streaming: Boolean
         get() = sending || live?.finished == false
+
+    /**
+     * 回到前台：重拉历史 + 重开订阅。
+     *
+     * 后台时系统可能把 SSE 掐掉而 OkHttp 那边还挂着「已连接」，光等它自己发现要很久；
+     * 直接重开一次最省事（服务端会在订阅时回放本轮已产出的帧）。
+     */
+    fun onForeground() {
+        if (firstResume) {
+            firstResume = false
+            return
+        }
+        refreshHistory()
+        watchJob?.cancel()
+        watchJob = null
+        startWatching()
+    }
 
     /** 常驻订阅会话流；断线退避重连，一轮结束后不退订（对齐服务端 keepAlive）。 */
     private fun startWatching() {
@@ -212,6 +234,8 @@ class ChatViewModel @Inject constructor(
         if (body.isEmpty() || sending) return
         sending = true
         error = null
+        // 前台起服务是稳的（后台启动会被系统拒），run 一结束服务自己退出。
+        RunWatcher.start(context)
         merger = ReplyMerger()
         live = null
         // 用户消息先上屏：等磁盘落盘再显示会有半秒的「没反应」。
