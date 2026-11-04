@@ -35,8 +35,8 @@ import androidx.compose.ui.unit.dp
 import dev.pideck.nativeapp.data.AskQuestion
 import dev.pideck.nativeapp.data.AskUi
 import dev.pideck.nativeapp.data.PendingUiRequest
-import dev.pideck.nativeapp.ui.theme.PillButton
-import dev.pideck.nativeapp.ui.theme.PillStyle
+import dev.pideck.nativeapp.ui.theme.AppButton
+import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -147,16 +147,16 @@ fun AskCard(
                     options.isNotEmpty() && type == "multi_select" -> {
                         options.forEach { option ->
                             val selected = option.value in multi
-                            PillButton(
+                            AppButton(
                                 text = (if (selected) "✓ " else "○ ") + option.label,
                                 onClick = {
                                     multi = if (selected) multi - option.value else multi + option.value
                                 },
-                                style = if (selected) PillStyle.Filled else PillStyle.Tonal,
+                                style = if (selected) AppButtonStyle.Filled else AppButtonStyle.Tonal,
                                 fillWidth = true,
                             )
                         }
-                        PillButton(
+                        AppButton(
                             text = if (isBatch && tab < questions.size - 1) "下一题" else "提交",
                             onClick = { submit(AskUi.Answer.Many(multi.toList())) },
                             enabled = !busy && multi.isNotEmpty(),
@@ -167,11 +167,11 @@ fun AskCard(
                     options.isNotEmpty() -> {
                         options.forEach { option ->
                             Column {
-                                PillButton(
+                                AppButton(
                                     text = option.label,
                                     onClick = { submit(AskUi.Answer.Text(option.value)) },
                                     enabled = !busy,
-                                    style = PillStyle.Tonal,
+                                    style = AppButtonStyle.Tonal,
                                     fillWidth = true,
                                 )
                                 option.description?.let { desc ->
@@ -193,7 +193,7 @@ fun AskCard(
                                 minLines = 2,
                                 maxLines = 4,
                             )
-                            PillButton(
+                            AppButton(
                                 text = if (isBatch && tab < questions.size - 1) "下一题" else "提交",
                                 onClick = { submit(AskUi.Answer.Text(draft.trim())) },
                                 enabled = !busy && draft.isNotBlank(),
@@ -204,16 +204,16 @@ fun AskCard(
 
                     type == "confirm" -> {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            PillButton(
+                            AppButton(
                                 text = "是",
                                 onClick = { submit(AskUi.Answer.Flag(true)) },
                                 enabled = !busy,
                             )
-                            PillButton(
+                            AppButton(
                                 text = "否",
                                 onClick = { submit(AskUi.Answer.Flag(false)) },
                                 enabled = !busy,
-                                style = PillStyle.Tonal,
+                                style = AppButtonStyle.Tonal,
                             )
                         }
                     }
@@ -227,7 +227,7 @@ fun AskCard(
                             minLines = 2,
                             maxLines = 6,
                         )
-                        PillButton(
+                        AppButton(
                             text = if (isBatch && tab < questions.size - 1) "下一题" else "提交",
                             onClick = { submit(AskUi.Answer.Text(draft.trim())) },
                             enabled = !busy && draft.isNotBlank(),

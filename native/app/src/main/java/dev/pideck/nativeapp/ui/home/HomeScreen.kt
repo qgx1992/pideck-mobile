@@ -50,9 +50,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.data.Session
-import dev.pideck.nativeapp.ui.theme.PillButton
-import dev.pideck.nativeapp.ui.theme.PillStyle
-import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.ui.theme.AppButton
+import dev.pideck.nativeapp.ui.theme.AppButtonStyle
+import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.ui.sessions.relativeTime
 
 /**
@@ -89,13 +89,13 @@ fun HomeScreen(
                     }
                 },
                 actions = {
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.AutoMirrored.Filled.List,
                         contentDescription = "会话列表",
                         onClick = onOpenSessions,
                     )
                     Spacer(Modifier.width(8.dp))
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.Default.Settings,
                         contentDescription = "设置",
                         onClick = onOpenSettings,
@@ -193,7 +193,7 @@ fun HomeScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onErrorContainer,
                             )
-                            PillButton(text = "重新加载", onClick = { viewModel.load() }, style = PillStyle.Ghost)
+                            AppButton(text = "重新加载", onClick = { viewModel.load() }, style = AppButtonStyle.Ghost)
                         }
                     }
                 }
@@ -272,7 +272,7 @@ private fun WorkspacePicker(viewModel: HomeViewModel) {
 @Composable
 private fun SendButton(enabled: Boolean, busy: Boolean, onClick: () -> Unit) {
     Surface(
-        shape = RoundedCornerShape(50),
+        shape = RoundedCornerShape(14.dp),
         color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.size(48.dp),
     ) {

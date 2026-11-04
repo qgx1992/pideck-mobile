@@ -35,9 +35,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.BuildConfig
-import dev.pideck.nativeapp.ui.theme.PillButton
-import dev.pideck.nativeapp.ui.theme.PillStyle
-import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.ui.theme.AppButton
+import dev.pideck.nativeapp.ui.theme.AppButtonStyle
+import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.data.ThemeMode
 
 /**
@@ -59,7 +59,7 @@ fun SettingsScreen(
             TopAppBar(
                 title = { Text("设置") },
                 navigationIcon = {
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "返回",
                         onClick = onBack,
@@ -144,10 +144,10 @@ fun SettingsScreen(
             InfoRow("已配对设备", "${viewModel.deviceCount} 台")
             InfoRow("会话数", "${viewModel.sessionCount}")
             Spacer(Modifier.height(6.dp))
-            PillButton(
+            AppButton(
                 text = "管理设备 / 添加新设备",
                 onClick = onManageDevices,
-                style = PillStyle.Tonal,
+                style = AppButtonStyle.Tonal,
                 icon = Icons.Default.Dns,
                 fillWidth = true,
             )

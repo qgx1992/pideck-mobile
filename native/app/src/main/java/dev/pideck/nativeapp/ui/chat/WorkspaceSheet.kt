@@ -63,7 +63,7 @@ import dev.pideck.nativeapp.data.TodoEntry
 import dev.pideck.nativeapp.data.ChangedFile
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
-import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.ui.theme.AppIconButton
 
 /**
  * 工作区抽屉：待办 / 改动 / 文件。
@@ -99,7 +99,7 @@ fun WorkspacePanel(
                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))
             }
-            RoundIconButton(
+            AppIconButton(
                 icon = Icons.Default.Refresh,
                 contentDescription = "刷新",
                 onClick = { viewModel.refreshWorkspace() },
@@ -107,7 +107,7 @@ fun WorkspacePanel(
                 container = MaterialTheme.colorScheme.surfaceVariant,
             )
             Spacer(Modifier.width(6.dp))
-            RoundIconButton(
+            AppIconButton(
                 icon = Icons.Default.Close,
                 contentDescription = "收起",
                 onClick = onDismiss,

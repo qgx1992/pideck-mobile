@@ -49,7 +49,7 @@ fun SearchField(
             }
         },
         singleLine = true,
-        shape = RoundedCornerShape(50),
+        shape = RoundedCornerShape(12.dp),
         textStyle = MaterialTheme.typography.bodyMedium,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { }),

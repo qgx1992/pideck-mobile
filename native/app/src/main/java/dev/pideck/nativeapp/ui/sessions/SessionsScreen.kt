@@ -58,9 +58,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.pideck.nativeapp.data.Session
-import dev.pideck.nativeapp.ui.theme.PillButton
-import dev.pideck.nativeapp.ui.theme.PillStyle
-import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.ui.theme.AppButton
+import dev.pideck.nativeapp.ui.theme.AppButtonStyle
+import dev.pideck.nativeapp.ui.theme.AppIconButton
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -100,7 +100,7 @@ fun SessionsScreen(
                     }
                 },
                 navigationIcon = {
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "返回",
                         onClick = onBack,
@@ -108,7 +108,7 @@ fun SessionsScreen(
                     )
                 },
                 actions = {
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.Default.Search,
                         contentDescription = "搜索会话",
                         onClick = {
@@ -117,19 +117,19 @@ fun SessionsScreen(
                         },
                     )
                     Spacer(Modifier.width(8.dp))
-                    RoundIconButton(
+                    AppIconButton(
                         icon = if (viewModel.allCollapsed) Icons.Default.UnfoldMore else Icons.Default.UnfoldLess,
                         contentDescription = if (viewModel.allCollapsed) "全部展开" else "全部收起",
                         onClick = { viewModel.toggleAllGroups() },
                     )
                     Spacer(Modifier.width(8.dp))
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.Default.Settings,
                         contentDescription = "设置",
                         onClick = onOpenSettings,
                     )
                     Spacer(Modifier.width(8.dp))
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.Default.Refresh,
                         contentDescription = "刷新",
                         onClick = { viewModel.refresh() },
@@ -337,7 +337,7 @@ private fun ErrorBlock(message: String, onRetry: () -> Unit) {
             color = MaterialTheme.colorScheme.error,
         )
         Spacer(Modifier.height(18.dp))
-        PillButton(text = "重新加载", onClick = onRetry, style = PillStyle.Ghost)
+        AppButton(text = "重新加载", onClick = onRetry, style = AppButtonStyle.Ghost)
     }
 }
 

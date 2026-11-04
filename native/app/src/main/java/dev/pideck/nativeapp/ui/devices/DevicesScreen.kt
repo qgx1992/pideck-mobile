@@ -53,9 +53,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pideck.nativeapp.data.Device
-import dev.pideck.nativeapp.ui.theme.PillButton
-import dev.pideck.nativeapp.ui.theme.PillStyle
-import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.ui.theme.AppButton
+import dev.pideck.nativeapp.ui.theme.AppButtonStyle
+import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.ui.pairing.ScanScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -89,13 +89,13 @@ fun DevicesScreen(
             TopAppBar(
                 title = { Text("设备") },
                 actions = {
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.Default.QrCodeScanner,
                         contentDescription = "扫码配对",
                         onClick = { showScan = true },
                     )
                     Spacer(Modifier.width(8.dp))
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.Default.Add,
                         contentDescription = "添加设备",
                         onClick = { showAdd = true },
@@ -199,9 +199,9 @@ private fun EmptyDevices(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(20.dp))
-        PillButton(text = "扫码配对", onClick = onScan, icon = Icons.Default.QrCodeScanner, fillWidth = true)
+        AppButton(text = "扫码配对", onClick = onScan, icon = Icons.Default.QrCodeScanner, fillWidth = true)
         Spacer(Modifier.height(10.dp))
-        PillButton(text = "手动输入地址", onClick = onAdd, style = PillStyle.Tonal, fillWidth = true)
+        AppButton(text = "手动输入地址", onClick = onAdd, style = AppButtonStyle.Tonal, fillWidth = true)
     }
 }
 
@@ -248,7 +248,7 @@ private fun DeviceRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            RoundIconButton(
+            AppIconButton(
                 icon = Icons.Default.DeleteOutline,
                 contentDescription = "删除设备",
                 onClick = onRemove,

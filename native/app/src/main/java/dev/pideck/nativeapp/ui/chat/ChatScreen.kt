@@ -106,7 +106,7 @@ import dev.pideck.nativeapp.data.ToolView
 import dev.pideck.nativeapp.data.SessionModel
 import dev.pideck.nativeapp.data.thinkingLabel
 import dev.pideck.nativeapp.data.toTimelineItem
-import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.data.ImagePrep
 import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.ui.theme.SelectChip
@@ -277,7 +277,7 @@ fun ChatScreen(
                     }
                 },
                 navigationIcon = {
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.Default.Menu,
                         contentDescription = "会话列表",
                         onClick = { scope.launch { drawerState.open() } },
@@ -294,7 +294,7 @@ fun ChatScreen(
                             modifier = Modifier.padding(end = 6.dp),
                         )
                     }
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.Filled.Splitscreen,
                         contentDescription = "工作区",
                         onClick = {
@@ -464,7 +464,7 @@ fun ChatScreen(
                 exit = fadeOut(tween(180)),
             ) {
                 Surface(
-                    shape = RoundedCornerShape(50),
+                    shape = RoundedCornerShape(10.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     shadowElevation = 2.dp,
                 ) {
@@ -1001,7 +1001,7 @@ private fun Composer(
                 }
             }
             Row(verticalAlignment = Alignment.Bottom) {
-                RoundIconButton(
+                AppIconButton(
                     icon = Icons.Default.AddPhotoAlternate,
                     contentDescription = "添加图片",
                     onClick = onAttach,
@@ -1016,12 +1016,12 @@ private fun Composer(
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("发消息给这个会话…") },
                     maxLines = 6,
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(12.dp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                 )
                 Spacer(Modifier.width(8.dp))
                 if (sending) {
-                    FilledIconButton(onClick = onStop) {
+                    FilledIconButton(onClick = onStop, shape = RoundedCornerShape(12.dp)) {
                         Box(
                             modifier = Modifier
                                 .size(12.dp)
@@ -1032,6 +1032,7 @@ private fun Composer(
                     FilledIconButton(
                         onClick = onSend,
                         enabled = value.isNotBlank() || images.isNotEmpty(),
+                        shape = RoundedCornerShape(12.dp),
                     ) {
                         Icon(Icons.Filled.Send, contentDescription = "发送")
                     }

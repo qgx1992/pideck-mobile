@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.dp
 import dev.pideck.nativeapp.data.AvailableModel
 import dev.pideck.nativeapp.data.SessionModel
 import dev.pideck.nativeapp.data.thinkingLabel
-import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.ui.theme.AppIconButton
 
 /**
  * 模型选择。
@@ -58,7 +58,7 @@ fun ModelSheet(
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.size(8.dp))
                 }
-                RoundIconButton(
+                AppIconButton(
                     icon = Icons.Default.Refresh,
                     contentDescription = "刷新模型列表",
                     onClick = onRefresh,

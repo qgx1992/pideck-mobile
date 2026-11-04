@@ -28,9 +28,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import dev.pideck.nativeapp.ui.theme.PillButton
-import dev.pideck.nativeapp.ui.theme.PillStyle
-import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.ui.theme.AppButton
+import dev.pideck.nativeapp.ui.theme.AppButtonStyle
+import dev.pideck.nativeapp.ui.theme.AppIconButton
 
 /**
  * 「自由复制」：把整段正文摊开，交给系统选区。
@@ -76,7 +76,7 @@ fun FreeCopyDialog(
                         )
                     }
                     Spacer(Modifier.width(8.dp))
-                    RoundIconButton(
+                    AppIconButton(
                         icon = Icons.Default.Close,
                         contentDescription = "关闭",
                         onClick = onDismiss,
@@ -116,10 +116,10 @@ fun FreeCopyDialog(
                     )
                     TextButton(onClick = onDismiss) { Text("关闭") }
                     Spacer(Modifier.width(6.dp))
-                    PillButton(
+                    AppButton(
                         text = "复制全文",
                         onClick = { onCopyAll(text) },
-                        style = PillStyle.Filled,
+                        style = AppButtonStyle.Filled,
                     )
                 }
             }

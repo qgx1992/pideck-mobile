@@ -45,15 +45,18 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pideck.nativeapp.data.Session
-import dev.pideck.nativeapp.ui.theme.PillButton
-import dev.pideck.nativeapp.ui.theme.PillStyle
-import dev.pideck.nativeapp.ui.theme.RoundIconButton
+import dev.pideck.nativeapp.ui.theme.AppButton
+import dev.pideck.nativeapp.ui.theme.AppButtonStyle
+import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.ui.sessions.RowActionsHost
 import dev.pideck.nativeapp.ui.sessions.rememberRowActionState
 import dev.pideck.nativeapp.ui.sessions.SessionsViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/** 侧栏宽度（默认 360dp 在 390dp 宽的机器上几乎满屏）。 */
+private val DrawerWidth = 300.dp
 
 /**
  * 聊天页的左侧栏：换会话不用退出再进来。
@@ -79,7 +82,8 @@ fun SessionDrawer(
     // 长按菜单（会话 / 工作区），逻辑与列表页共用
     val actions = rememberRowActionState()
 
-    ModalDrawerSheet {
+    // 宽度别用默认的 360dp：390dp 宽的机器上几乎占满，右侧只留一条缝，看着像整页切换。
+    ModalDrawerSheet(modifier = Modifier.width(DrawerWidth)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -99,7 +103,7 @@ fun SessionDrawer(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            RoundIconButton(
+            AppIconButton(
                 icon = Icons.Default.Search,
                 contentDescription = "搜索会话",
                 onClick = {
@@ -111,7 +115,7 @@ fun SessionDrawer(
             )
             Spacer(Modifier.width(6.dp))
             // 设置放右上角：它不常用，但每次都翻到底很烦
-            RoundIconButton(
+            AppIconButton(
                 icon = Icons.Default.Settings,
                 contentDescription = "设置",
                 onClick = onOpenSettings,
@@ -126,19 +130,19 @@ fun SessionDrawer(
                 .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            PillButton(
+            AppButton(
                 text = "新会话",
                 onClick = onOpenHome,
                 icon = Icons.Default.Add,
-                style = PillStyle.Filled,
+                style = AppButtonStyle.Filled,
                 modifier = Modifier.weight(1f),
                 fillWidth = true,
             )
-            PillButton(
+            AppButton(
                 text = "切换设备",
                 onClick = onOpenDevices,
                 icon = Icons.Default.Devices,
-                style = PillStyle.Tonal,
+                style = AppButtonStyle.Tonal,
                 modifier = Modifier.weight(1f),
                 fillWidth = true,
             )

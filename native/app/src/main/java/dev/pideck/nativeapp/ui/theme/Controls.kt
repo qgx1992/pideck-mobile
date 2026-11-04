@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -26,40 +25,43 @@ import androidx.compose.ui.unit.dp
 /**
  * 全 App 共用的几种控件。
  *
- * 起因是「按钮太丑」：Material3 的默认 Button/FilledTonalButton 是 40dp 高、4~8dp 圆角、
- * 左右内边距 24dp，在手机上看着又矮又方；顶栏又一律是裸 IconButton（40dp 透明热区，看不见边界）。
- * 这里把两件事定死：**胶囊形按钮（46dp，圆角 50%）** 与 **圆形底色的图标按钮（38dp）**。
+ * 形状统一成**矩形**（12dp 圆角）：胶囊（圆角 50%）在手机上一排排出现时太"软"，
+ * 与卡片、输入框的直角体系也不搭。所有按钮 / 图标按钮 / 选择项都从下面这几个入口出发，
+ * 要调整风格只改这里的 [ControlShape] / [ControlShapeSmall]。
  */
-enum class PillStyle { Filled, Tonal, Ghost }
+private val ControlShape = RoundedCornerShape(12.dp)
+private val ControlShapeSmall = RoundedCornerShape(10.dp)
+
+enum class AppButtonStyle { Filled, Tonal, Ghost }
 
 @Composable
-fun PillButton(
+fun AppButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     icon: ImageVector? = null,
-    style: PillStyle = PillStyle.Filled,
+    style: AppButtonStyle = AppButtonStyle.Filled,
     fillWidth: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
     val container = when (style) {
-        PillStyle.Filled -> if (enabled) scheme.primary else scheme.surfaceVariant
-        PillStyle.Tonal -> if (enabled) scheme.surfaceContainerHigh else scheme.surfaceVariant.copy(alpha = 0.6f)
-        PillStyle.Ghost -> Color.Transparent
+        AppButtonStyle.Filled -> if (enabled) scheme.primary else scheme.surfaceVariant
+        AppButtonStyle.Tonal -> if (enabled) scheme.surfaceContainerHigh else scheme.surfaceVariant.copy(alpha = 0.6f)
+        AppButtonStyle.Ghost -> Color.Transparent
     }
     val content = when (style) {
-        PillStyle.Filled -> if (enabled) scheme.onPrimary else scheme.onSurfaceVariant
-        PillStyle.Tonal -> if (enabled) scheme.onSurface else scheme.onSurfaceVariant
-        PillStyle.Ghost -> if (enabled) scheme.primary else scheme.onSurfaceVariant
+        AppButtonStyle.Filled -> if (enabled) scheme.onPrimary else scheme.onSurfaceVariant
+        AppButtonStyle.Tonal -> if (enabled) scheme.onSurface else scheme.onSurfaceVariant
+        AppButtonStyle.Ghost -> if (enabled) scheme.primary else scheme.onSurfaceVariant
     }
     Surface(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(50),
+        shape = ControlShape,
         color = container,
         contentColor = content,
-        border = if (style == PillStyle.Ghost) {
+        border = if (style == AppButtonStyle.Ghost) {
             BorderStroke(1.dp, scheme.outline.copy(alpha = if (enabled) 0.7f else 0.3f))
         } else {
             null
@@ -68,8 +70,8 @@ fun PillButton(
     ) {
         Row(
             modifier = Modifier
-                .defaultMinSize(minHeight = 46.dp)
-                .padding(horizontal = 22.dp, vertical = 12.dp),
+                .defaultMinSize(minHeight = 44.dp)
+                .padding(horizontal = 20.dp, vertical = 11.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -96,9 +98,9 @@ fun PillButton(
     }
 }
 
-/** 顶栏用的圆形图标按钮：有底色、有边界，不再是看不见的透明热区。 */
+/** 顶栏用的图标按钮：矩形圆角、有底色与边界，不再是看不见的透明热区。 */
 @Composable
-fun RoundIconButton(
+fun AppIconButton(
     icon: ImageVector,
     contentDescription: String?,
     onClick: () -> Unit,
@@ -111,7 +113,7 @@ fun RoundIconButton(
     Surface(
         onClick = onClick,
         enabled = enabled,
-        shape = CircleShape,
+        shape = ControlShapeSmall,
         color = container,
         modifier = modifier.size(size.dp),
     ) {
@@ -126,7 +128,7 @@ fun RoundIconButton(
     }
 }
 
-/** 顶栏/输入条上的小胶囊（模型、档位这类可点开的选择项）。 */
+/** 顶栏/输入条上的小选择项（模型、档位这类可点开的选择项）。 */
 @Composable
 fun SelectChip(
     text: String,
@@ -141,7 +143,7 @@ fun SelectChip(
     Surface(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(50),
+        shape = ControlShapeSmall,
         color = if (accent) scheme.primary.copy(alpha = 0.14f) else scheme.surfaceContainerHigh,
         modifier = modifier,
     ) {
