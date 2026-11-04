@@ -203,6 +203,18 @@ app/android/                原生插件：SsePlugin（GET/POST 流式）、RunW
   只有右侧栏和文件预览会自己订阅返回，**其余层不压历史记录**，所以必须由壳这边按选择器命中；
   `app/shell/back.test.ts` 对这些选择器逐个读 vendor 源码对账，上游改 class 就红。
 
+## 动效：`app/shell/motion.ts`（0.4.11 起）
+
+上游的动效按鼠标/大屏调，手机上偏「硬」。移动端的手感统一放在 `app/shell/motion.ts`：
+运行向往 `<head>` 末尾追加一张样式表（靠「后出现」压过上游同优先级规则，同名 `@keyframes` 也是后者覆盖）。
+
+- **不要改 `vendor/`** 里的动画：下次同步上游会丢。要调就加在 `MOTION_RULES`。
+- 缓动与三档时长在 `MOTION_VARS`（`enter` / `exit` / `fast 130ms` / `base 200ms` / `slow 280ms`）。
+- 每条规则的 `where` 写明上游对应位置；`shell/motion.test.ts` 会读 vendor 源码对账，
+  上游换 class 或 keyframes 名就失败，不会静默失效。
+- 约束：手机上是长列表 + 贴底追滚，**新消息入场别用大位移**（10px 就会跟追滚叠加成弹一下）；
+  keyframes 只动 `opacity` / `transform`，别碰会触发重排的属性。
+
 ## 改动完成后必须跑的验证
 
 ```bash

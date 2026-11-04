@@ -20,6 +20,7 @@ import { installDownloadBridge } from "./downloads.ts";
 import { installExternalLinks } from "./external-links.ts";
 import { getSseTransport, isNativeSseAvailable } from "./native-sse.ts";
 import { installFetchBridge } from "./fetch-bridge.ts";
+import { installMotion } from "./motion.ts";
 import { installEventSource } from "./event-source.ts";
 import { startRunWatch } from "./run-watch.ts";
 import { readNativeInsets, startSafeArea } from "./safe-area.ts";
@@ -47,6 +48,8 @@ if (!device) {
 	// 只有聊天页给手势条那一条铺画布色（它不扫码；启动页要透明，相机预览在 WebView 下面）
 	startSafeArea({ canvas: "var(--color-bg-app, #0b0b0c)" });
 	startSystemBars();
+	// 动效层：抽屉/弹层/新消息的时长与曲线（见 motion.ts 顶部，可一处调）
+	installMotion();
 
 	const container = navigator as unknown as { serviceWorker?: ServiceWorkerContainer };
 	if (container.serviceWorker) {
