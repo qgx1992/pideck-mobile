@@ -355,7 +355,9 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   跨设备 / 翻历史只能靠 meta 的 `durationMs`，而**只有 pi 后端有**
   （实测：pi = `{usage, durationMs, startedAt, endedAt}`，dsh = 只有 `usage`，acp = `null`）——
   那种情况只报端到端速度，别硬算「生成速度」。渲染在 `ui/chat/ChatScreen.kt` 的 `TurnStatsLine`
-  （输入条上方一行 `labelSmall`；没有可显示的数时整行不渲染，别留空行把输入条顶下去）。
+  （输入条上方一行 `labelSmall`）——**这一行常驻**，缺项用 `—` 占位（`formatTurnStats` 永远返回
+  非空串，`stats` 为 null 也照样给占位）。用户明确要的（0.5.32）：忽隐忽现会把输入条顶来顶去，
+  宁可显示一排破折号。
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
   不做「有一张卡但不知道在问什么」。展开内容走 `AnimatedVisibility`，选项列仍是 `heightIn(max = 320.dp)` 内部滚动。
