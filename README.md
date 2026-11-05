@@ -8,12 +8,12 @@
 > 这个仓库只是手机端。Agent 行为、模型调用、会话读写全部由电脑上的 pi 负责，
 > 手机只是一个「连着它的遥控器 + 阅读器」。
 
-当前版本 **0.5.30**（`versionCode 530`），包名 `top.caoayu.pideck`，
+当前版本 **0.5.31**（`versionCode 531`），包名 `top.caoayu.pideck`，
 Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
 ```bash
 cd native
-./gradlew :app:testDebugUnitTest    # 184 条 JVM 单测
+./gradlew :app:testDebugUnitTest    # 193 条 JVM 单测
 ./gradlew :app:assembleRelease      # app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -23,7 +23,7 @@ cd native
 
 ---
 
-## 它现在能做什么（0.5.30）
+## 它现在能做什么（0.5.31）
 
 | 能力 | 说明 |
 |---|---|
@@ -35,6 +35,8 @@ cd native
 | **右侧工作区** | 待办进度、git 改动列表（点开看逐行 diff）、文件树（进二级目录、@ 插入路径、只读预览）、子任务面板 |
 | **问答卡** | 桌面端 Agent 问问题时在手机上行内作答：单选 / 多选 / 自定义输入 / 是-否 / 批量信封 |
 | **历史** | 顶栏「历史记录」列出该会话每一轮的提问，点一条滚到那句提问本身并闪三下高亮 |
+| **节奏** | 每条回复下面一行：首字等待 · 输出 tokens · 生成 tok/s · 端到端 tok/s（与桌面端同口径） |
+| **问答卡** | AI 提问卡可折叠，默认展开；收起时仍显示一行题干 |
 | **后台** | 有会话在跑就拉起 `dataSync` 前台服务，跑完发通知（可在设置里关）；回到前台自动续上 |
 | **外观** | 深 / 浅 / 跟随系统；系统栏颜色跟随主题（Android 15 强制 edge-to-edge 后按窗口背景取色） |
 
