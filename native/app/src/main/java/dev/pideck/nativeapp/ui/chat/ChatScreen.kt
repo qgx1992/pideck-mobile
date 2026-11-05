@@ -10,6 +10,11 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DataUsage
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.background
@@ -55,8 +60,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -115,6 +121,7 @@ import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.ui.theme.ControlShape
 import dev.pideck.nativeapp.ui.theme.softPress
 import dev.pideck.nativeapp.data.ImagePrep
+import dev.pideck.nativeapp.data.FileNode
 import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.ui.theme.SelectChip
 import java.text.SimpleDateFormat
@@ -216,6 +223,11 @@ fun ChatScreen(
     // 模型表要提前拉：思考档位是从模型的 thinkingLevels 推出来的，
     // 以前只在点开模型选择时才拉，于是「思考」按钮要点一下模型才冒出来。
     LaunchedEffect(Unit) { viewModel.loadModels() }
+    // 上下文用量：进来先读一次，每轮跑完再对一次（用量只在运行时活着时拿得到）
+    LaunchedEffect(Unit) { viewModel.refreshContext() }
+    LaunchedEffect(viewModel.streaming) {
+        if (!viewModel.streaming) viewModel.refreshContext()
+    }
 
     var showWorkspace by remember { mutableStateOf(false) }
     // 顶栏的模型 / 思考档位选择器
@@ -223,6 +235,10 @@ fun ChatScreen(
     var showThinkingSheet by remember { mutableStateOf(false) }
     // 本会话的历史提问：点一条跳回那一段
     var showHistory by remember { mutableStateOf(false) }
+    // 顶栏溢出口：导出 HTML / 权限预设 / 上下文用量
+    var showMore by remember { mutableStateOf(false) }
+    var showPermission by remember { mutableStateOf(false) }
+    var showContext by remember { mutableStateOf(false) }
     // 图片附件：系统相册多选；粘贴走剪贴板
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
@@ -317,8 +333,74 @@ fun ChatScreen(
                             viewModel.loadWorkspace()
                             showWorkspace = true
                         },
-                        modifier = Modifier.padding(end = 6.dp),
+                        modifier = Modifier.padding(end = 2.dp),
                     )
+                    // 导出 / 权限预设 / 上下文：低频动作收进溢出菜单，顶栏只留最常用的两个图标
+                    Box {
+                        AppIconButton(
+                            icon = Icons.Default.MoreVert,
+                            contentDescription = "更多",
+                            onClick = { showMore = true },
+                            modifier = Modifier.padding(end = 6.dp),
+                        )
+                        DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text("导出会话 HTML")
+                                        Text(
+                                            if (viewModel.exportBusy) "正在生成…" else "存到「下载/PiDeck」",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) },
+                                enabled = !viewModel.exportBusy,
+                                onClick = {
+                                    showMore = false
+                                    viewModel.exportHtml()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text("权限预设")
+                                        Text(
+                                            dev.pideck.nativeapp.data.PermissionPresets.labelOf(viewModel.permissionPreset),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                                onClick = {
+                                    showMore = false
+                                    showPermission = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text("上下文用量与压缩")
+                                        viewModel.contextUsage?.let { usage ->
+                                            Text(
+                                                if (usage.known) "${usage.percentLabel} · ${usage.detail}" else "暂未取到用量",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.DataUsage, contentDescription = null) },
+                                onClick = {
+                                    showMore = false
+                                    viewModel.refreshContext()
+                                    showContext = true
+                                },
+                            )
+                        }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             )
@@ -350,6 +432,18 @@ fun ChatScreen(
                     )
                 }
                 Spacer(Modifier.weight(1f))
+                // 上下文占用：只在使用量拿得到时出现，点开看明细并压缩
+                val usage = viewModel.contextUsage
+                if (usage != null && usage.known) {
+                    SelectChip(
+                        text = "上下文 ${usage.percentLabel}",
+                        onClick = {
+                            viewModel.refreshContext()
+                            showContext = true
+                        },
+                        accent = usage.overflow || usage.contextPercent >= 85,
+                    )
+                }
                 // 本会话的历史：列出问过的每一句，点一条滚回去
                 AppIconButton(
                     icon = Icons.Default.History,
@@ -390,9 +484,26 @@ fun ChatScreen(
                     draft = ""
                     ChatDrafts.clear(viewModel.sessionId)
                     atBottom = true
-                    viewModel.send(text)
+                    // 客户端接管的斜杠命令不发出去：`/compact` 交给运行时压缩，`/new` 回首页选工作区
+                    val command = slashIntent(text)
+                    when (command?.id) {
+                        "compact" -> viewModel.compact(slashArgument(text, command).ifBlank { null })
+                        "new" -> onOpenHome()
+                        else -> viewModel.send(text)
+                    }
                 },
                 onStop = { viewModel.stop() },
+                mentionFiles = viewModel.mentionFiles,
+                onNeedMention = { viewModel.ensureMentionFiles() },
+                onCommand = { command ->
+                    draft = "/${command.id} "
+                    ChatDrafts.put(viewModel.sessionId, draft)
+                    if (command.id == "new") {
+                        draft = ""
+                        ChatDrafts.clear(viewModel.sessionId)
+                        onOpenHome()
+                    }
+                },
                 )
             }
         },
@@ -630,6 +741,32 @@ fun ChatScreen(
                 }
             },
         )
+    }
+    if (showPermission) {
+        PermissionSheet(
+            current = viewModel.permissionPreset,
+            busy = viewModel.presetBusy,
+            onPick = { preset ->
+                viewModel.choosePermission(preset)
+                showPermission = false
+            },
+            onDismiss = { showPermission = false },
+        )
+    }
+    if (showContext) {
+        ContextSheet(
+            usage = viewModel.contextUsage,
+            busy = viewModel.contextBusy,
+            compactBusy = viewModel.compactBusy,
+            onRefresh = { viewModel.refreshContext() },
+            onCompact = { prompt -> viewModel.compact(prompt) },
+            onDismiss = { showContext = false },
+        )
+    }
+    LaunchedEffect(viewModel.actionNote) {
+        val note = viewModel.actionNote ?: return@LaunchedEffect
+        snackbar.showSnackbar(note)
+        viewModel.dismissActionNote()
     }
     FilePreviewDialog(viewModel = viewModel)
     DiffDialog(viewModel = viewModel)
@@ -1017,6 +1154,9 @@ private fun Composer(
     onDismissImageError: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    mentionFiles: List<FileNode> = emptyList(),
+    onNeedMention: () -> Unit = {},
+    onCommand: (SlashCommand) -> Unit = {},
 ) {
     // 输入区不需要一个「底板」：之前是 Surface + tonalElevation，会在底部铺出一条
     // 顶边笔直的浅色方块，跟圆角输入卡片放一起很割裂。改成向上渐隐的遮罩，
@@ -1066,6 +1206,32 @@ private fun Composer(
                     )
                     TextButton(onClick = onDismissImageError) { Text("知道了") }
                 }
+            }
+            // `@文件` / `/命令` 的候选：只在输入框末尾正打着半截引用时出现
+            val trigger = remember(value) { detectTrigger(value) }
+            LaunchedEffect(trigger is ComposerTrigger.Mention) {
+                if (trigger is ComposerTrigger.Mention) onNeedMention()
+            }
+            when (trigger) {
+                is ComposerTrigger.Mention -> ComposerSuggest(
+                    files = filterMentionFiles(mentionFiles, trigger.query),
+                    commands = emptyList(),
+                    onPickFile = { node ->
+                        onValueChange(applyMention(value, trigger, node.path))
+                    },
+                    onPickCommand = {},
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+
+                is ComposerTrigger.Slash -> ComposerSuggest(
+                    files = emptyList(),
+                    commands = filterSlashCommands(trigger.query),
+                    onPickFile = {},
+                    onPickCommand = { command -> onCommand(command) },
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+
+                null -> Unit
             }
             // 整条输入区就是一张卡片：正文在上，动作在下。
             // 以前是「圆形按钮 + 输入框 + 圆形按钮」并排，两个浮在框外的圆点看着很别扭。

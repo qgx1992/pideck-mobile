@@ -38,12 +38,21 @@ import dev.pideck.nativeapp.data.WorkspaceTodo
 import dev.pideck.nativeapp.data.describeConnectionError
 import dev.pideck.nativeapp.data.toTimelineItem
 import dev.pideck.nativeapp.data.toTimelineItems
+import dev.pideck.nativeapp.data.ContextUsage
+import dev.pideck.nativeapp.data.FileSaver
+import dev.pideck.nativeapp.data.PermissionPresets
+import dev.pideck.nativeapp.data.PideckException
+import dev.pideck.nativeapp.data.RuntimeTarget
+import dev.pideck.nativeapp.data.exportFileName
+import dev.pideck.nativeapp.data.htmlLooksValid
 import dev.pideck.nativeapp.watch.RunWatcher
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -134,6 +143,7 @@ class ChatViewModel @Inject constructor(
             title = cached?.title?.ifBlank { null } ?: "会话"
             sessionModel = cached?.model.toSessionModel()
             thinkingLevel = cached?.thinkingLevel
+            permissionPreset = cached?.permissionPreset
             // 从冷启动 / 历史跳进来时缓存里没有这条会话：模型与思考档位就都显示不出来。
             // 拉一次 /api/state 把记录补上（只在缺记录时才发这一趟）。
             if (cached == null && found != null) {
@@ -161,7 +171,156 @@ class ChatViewModel @Inject constructor(
         if (record == null) return
         record.model.toSessionModel()?.let { sessionModel = it }
         record.thinkingLevel?.takeIf { it.isNotBlank() }?.let { thinkingLevel = it }
+        record.permissionPreset?.takeIf { it.isNotBlank() }?.let { permissionPreset = it }
         record.title?.takeIf { it.isNotBlank() }?.let { if (title == "会话") title = it }
+    }
+
+    // ---- 运行时动作：权限预设 / 上下文用量 / 压缩 / 导出 HTML ----
+    // 全都需要 target（agentId + runtimeGeneration）；runtime 没起来时这几项没法做，
+    // 所以每次用之前都从 StateCache 现取，不缓存（target 会随会话重启失效）。
+
+    var contextUsage by mutableStateOf<ContextUsage?>(null)
+        private set
+
+    var contextBusy by mutableStateOf(false)
+        private set
+
+    var compactBusy by mutableStateOf(false)
+        private set
+
+    var permissionPreset by mutableStateOf<String?>(null)
+        private set
+
+    var presetBusy by mutableStateOf(false)
+        private set
+
+    var exportBusy by mutableStateOf(false)
+        private set
+
+    /** 一次性提示（已导出到哪里 / 压缩已请求），UI 弹完调 [dismissActionNote]。 */
+    var actionNote by mutableStateOf<String?>(null)
+        private set
+
+    private fun runtimeTarget(): RuntimeTarget? {
+        val runtime = StateCache.runtime(deviceId, sessionId) ?: return null
+        return RuntimeTarget(sessionId, runtime.agentId, runtime.runtimeGeneration.toLong())
+    }
+
+    fun dismissActionNote() {
+        actionNote = null
+    }
+
+    /** 拉上下文用量（也顺便对账权限预设：运行时的值比会话记录新）。 */
+    fun refreshContext() {
+        val target = device ?: return
+        val runtime = runtimeTarget()
+        if (runtime == null) {
+            contextUsage = null
+            return
+        }
+        viewModelScope.launch {
+            contextBusy = true
+            try {
+                val usage = api.runtimeState(target, token, runtime)
+                contextUsage = usage
+                usage.permissionPreset?.takeIf { it.isNotBlank() }?.let { permissionPreset = it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // 用量只是辅助信息，拿不到就不显示，不打断阅读
+                contextUsage = null
+            } finally {
+                contextBusy = false
+            }
+        }
+    }
+
+    /** 切换权限预设（桌面端叫「计划模式」的那组：只读 / 工作区可写 / 完全访问）。 */
+    fun choosePermission(preset: String) {
+        val target = device ?: return
+        viewModelScope.launch {
+            presetBusy = true
+            try {
+                val runtime = runtimeTarget()
+                val viaRuntime = if (runtime == null) false else runCatching {
+                    api.runtimeCommand(target, token, runtime, "permission", buildJsonObject { put("preset", preset) })
+                }.isSuccess
+                // 落一条记录上的偏好：下次激活时宿主按它 apply（pi 后端只走这条路）
+                runCatching {
+                    api.updateSession(target, token, sessionId, buildJsonObject { put("permissionPreset", preset) })
+                }
+                permissionPreset = preset
+                actionNote = if (viaRuntime) {
+                    "权限已切到「${PermissionPresets.labelOf(preset)}」"
+                } else {
+                    "已记下「${PermissionPresets.labelOf(preset)}」，下一轮生效"
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                error = describeConnectionError(e)
+            } finally {
+                presetBusy = false
+            }
+        }
+    }
+
+    /** 压缩上下文（`runtime/compact`，可带一句「保留什么」的提示）。 */
+    fun compact(prompt: String? = null) {
+        val target = device ?: return
+        val runtime = runtimeTarget()
+        if (runtime == null) {
+            error = "运行时还没起来，等这一轮跑完再压缩"
+            return
+        }
+        viewModelScope.launch {
+            compactBusy = true
+            try {
+                val extra = if (prompt.isNullOrBlank()) {
+                    JsonObject(emptyMap())
+                } else {
+                    buildJsonObject { put("prompt", prompt.trim()) }
+                }
+                api.runtimeCommand(target, token, runtime, "compact", extra)
+                actionNote = "已请求压缩，历史里会多出一条压缩记录"
+                delay(600)
+                refreshHistory()
+                refreshContext()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                error = describeConnectionError(e)
+            } finally {
+                compactBusy = false
+            }
+        }
+    }
+
+    /** 导出整份会话 HTML 到「下载/PiDeck」。 */
+    fun exportHtml() {
+        val target = device ?: return
+        viewModelScope.launch {
+            exportBusy = true
+            try {
+                val html = api.exportHtml(target, token, sessionId)
+                if (!htmlLooksValid(html)) throw PideckException("导出失败：服务端没有返回 HTML")
+                val saved = withContext(Dispatchers.IO) {
+                    FileSaver.saveText(
+                        context,
+                        exportFileName(sessionId, title),
+                        "text/html",
+                        html,
+                    )
+                }
+                actionNote = "已导出到 $saved"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                error = describeConnectionError(e)
+            } finally {
+                exportBusy = false
+            }
+        }
     }
 
     /** 是否有正在往外冒的回复（本端发送 or 别处发起的订阅）。UI 用它决定停止按钮与光标。 */
@@ -413,6 +572,27 @@ class ChatViewModel @Inject constructor(
     fun openDir(dir: String) {
         workspaceDir = dir
         refreshWorkspace()
+    }
+
+    // ---- `@` 文件候选 ----
+    // 候选只用当前目录这一层：深目录全量扫太贵，而用户打 `@` 时通常只想引当前层或已知路径。
+    // 拿不到时输入框不弹候选，不报错。
+
+    var mentionFiles by mutableStateOf<List<FileNode>>(emptyList())
+        private set
+
+    private var mentionLoading = false
+
+    fun ensureMentionFiles() {
+        if (mentionLoading) return
+        val target = device ?: return
+        val projectId = projectIdOf() ?: return
+        mentionLoading = true
+        viewModelScope.launch {
+            runCatching { api.files(target, token, projectId, workspaceDir) }
+                .onSuccess { mentionFiles = it }
+            mentionLoading = false
+        }
     }
 
     fun openParentDir() {

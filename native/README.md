@@ -48,6 +48,18 @@ cd native
 
 注意：`native` 不能作为 Kotlin 包名的一段语义关键字风险，所以源码包名是 `dev.pideck.nativeapp`。
 
+## 运行时动作与输入增强（0.5.15 起）
+
+| 位置 | 做什么 | 走哪个接口 |
+|---|---|---|
+| 顶栏溢出菜单 | 导出会话 HTML，存到「下载/PiDeck」（Android 10+ 走 MediaStore，不需要存储权限） | `GET /api/sessions/:id/export-html` |
+| 顶栏溢出菜单 | 权限预设（桌面端的「计划模式」那组）：只读 / 工作区可写 / 完全访问 | `POST runtime/permission` + 写回会话记录 |
+| 顶栏溢出菜单 / 顶栏胶囊 | 上下文用量（百分比环的等价物）+ 立即压缩，可带「保留什么」的提示词 | `POST runtime/state`、`POST runtime/compact` |
+| 输入框打 `@` | 按当前目录补全路径，选中后插入 `@相对路径 ` | `GET /api/files?dir=` |
+| 输入框打 `/` | `/new`（回首页选工作区）、`/compact [提示词]` —— 只列客户端接管的，其余直接发给 pi | 本地拦截 |
+
+这几项都需要 `target`（`agentId + runtimeGeneration`），所以运行时没起来时菜单会说明原因而不是静默失败。
+
 ## 包名（0.5.0 起）
 
 | 构建类型 | applicationId | 说明 |

@@ -124,6 +124,25 @@ interface PideckApi {
 
     /** 会话的子代理（`/api/sessions/:id/subagents`）。 */
     suspend fun subagents(device: Device, token: String?, sessionId: String): List<SubagentEntry>
+
+    /**
+     * 运行时状态投影（`POST /api/sessions/:id/runtime/state`）：上下文用量与权限预设都从这里取。
+     *
+     * 桌面端头部那个圆环就是它；运行时没起来时服务端返回空对象，这里也就给 [ContextUsage] 默认值。
+     */
+    suspend fun runtimeState(device: Device, token: String?, target: RuntimeTarget): ContextUsage
+
+    /** 通用运行时动作（`runtime/permission`、`runtime/compact` …），body 里自动带上 target。 */
+    suspend fun runtimeCommand(
+        device: Device,
+        token: String?,
+        target: RuntimeTarget,
+        action: String,
+        extra: JsonObject = JsonObject(emptyMap()),
+    ): String
+
+    /** 导出会话 HTML（`GET /api/sessions/:id/export-html`，响应体就是整份 HTML）。 */
+    suspend fun exportHtml(device: Device, token: String?, sessionId: String): String
 }
 
 class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
@@ -390,6 +409,47 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             val list = root?.get("models") as? JsonArray ?: return@withContext emptyList()
             list.toList().toAvailableModels()
         }
+
+    override suspend fun runtimeState(
+        device: Device,
+        token: String?,
+        target: RuntimeTarget,
+    ): ContextUsage = withContext(Dispatchers.IO) {
+        val text = postJson(
+            device,
+            token,
+            "/api/sessions/${encode(target.sessionId)}/runtime/state",
+            runtimeTargetBody(target),
+        )
+        parseContextUsage(unwrapRuntimeState(runCatching {
+            PideckJson.parseToJsonElement(text)
+        }.getOrNull()))
+    }
+
+    override suspend fun runtimeCommand(
+        device: Device,
+        token: String?,
+        target: RuntimeTarget,
+        action: String,
+        extra: JsonObject,
+    ): String = withContext(Dispatchers.IO) {
+        val body = JsonObject(runtimeTargetBody(target) + extra)
+        postJson(device, token, "/api/sessions/${encode(target.sessionId)}/runtime/$action", body)
+    }
+
+    override suspend fun exportHtml(
+        device: Device,
+        token: String?,
+        sessionId: String,
+    ): String = withContext(Dispatchers.IO) {
+        val path = "/api/sessions/${encode(sessionId)}/export-html"
+        client.newCall(requestBuilder(device, token, path).build()).await().use { response ->
+            if (!response.isSuccessful) {
+                throw PideckException("export ${response.code}", code = response.code)
+            }
+            response.body?.string().orEmpty()
+        }
+    }
 
     override suspend fun updateSession(
         device: Device,
