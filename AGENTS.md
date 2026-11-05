@@ -346,12 +346,14 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   桌面端那一行数是主进程现测的（`out/main/index.js` 的 perf：起点 `requestedAt` 是宿主**收到** prompt 的时刻，
   `firstDeltaAt`/`firstTextAt` 由 agent 事件流打点），走 `agentsRuntimeState` 边沿推送，
   **不在消息 meta 里**，手机订不到。所以本端自己开秒表：`ChatViewModel.send()` 里 `resetTurnClock()`（记按下发送），
-  `/api/chat` 的**首个 SSE 帧**到达时 `markTurnFirstFrame()`（这是首字的起点），流里首个增量
+  紧靠 `api.chat(...).collect` 之前 `markTurnRequestSent()`（**首字的起点**：本端请求发出的那一刻，
+  与宿主 `startedAt` 通常差 27ms 左右，见实测），流里首个增量
   `markTurnFirstContent()`（正文优先、reasoning 兜底，对应桌面 `firstTextAt → firstDeltaAt`），
   收尾记 `turnEndedAt`，落盘后 `settleTurnStats()` 用 `meta.usage.outputTokens` 结算。
-  **起点不能用「按下发送」**：手机到宿主的建连/排队能吃掉 20s+（0.5.32 就是被这个坑出来的，
-  用户看到「桌面 2s / 手机 28s」），那段时间与模型无关，算进首字就永远对不上账。
-  生成速度同样只取「首字 → 收尾」，别拿 `total − ttft`（会把排队稀释进分母）。
+  **起点既不能用「按下发送」，也不能用「SSE 首帧到达」**：按下那一刻算进去，手机到宿主的建连/排队
+  能吃掉 20s+（0.5.32 最初的坑：桌面 2s / 手机 28s）；改到首帧又反过来少了宿主收下请求后的排队
+  （实测 2.4s，同一轮手机 2.7s / 桌面 5.1s）。请求发出时刻才对得上桌面，也让「首字 + 解码 ≈ 全程」闭合。
+  生成速度只取「首字 → 收尾」，别拿 `total − ttft`（会把排队稀释进分母）。
   跨设备 / 翻历史只能靠 meta 的 `durationMs`，而**只有 pi 后端有**
   （实测：pi = `{usage, durationMs, startedAt, endedAt}`，dsh = 只有 `usage`，acp = `null`）——
   那种情况只报端到端速度，别硬算「生成速度」。渲染在 `ui/chat/ChatScreen.kt` 的 `TurnStatsLine`
