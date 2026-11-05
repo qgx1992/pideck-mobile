@@ -12,6 +12,28 @@ PiDeck 手机客户端（Android，Kotlin + Jetpack Compose）。
 
 ---
 
+## 0.5.30 — 2026-11-05
+
+**历史跳转：落到你发的那一句，并闪三下。**
+
+两个毛病：
+
+1. **跳错行**。列表顶上挂着「加载更早的消息」时，LazyColumn 的第 0 项是那个按钮，
+   而 `rows` 的第 0 项是第一条消息 —— 原来直接拿 `rows.indexOfFirst { it.key == turn.key }`
+   当下标，于是点每一条都落到**上一条**。现在由 `ui/chat/ChatRows.kt` 的
+   `historyListIndex(rows, key, leadingItems)` 统一换算，前导项按 `viewModel.hasOlder` 补。
+2. **落点不稳**。行高要等布局量完才知道，量之前滚动落在的是估算位置，长会话里会差一屏。
+   现在滚完用 `listState.layoutInfo.visibleItemsInfo` 校验目标行是否真贴到顶部，不够就再滚
+   （最多 3 次）。
+
+顺带补上「闪一下」：目标气泡从 `primaryContainer` 向主题色过渡、同时描一圈边，
+170ms 亮 / 230ms 灭、闪三下，1.8s 后清掉。只动颜色与描边、不碰尺寸 ——
+不然列表会跳高度，把追滚带跑偏。
+
+单测 180 → **184 条**（`ui/chat/ChatRowIndexTest.kt` 钉住下标换算的四种情形）。
+
+---
+
 ## 0.5.29 — 2026-11-05
 
 **启动页：工作区选择改成下拉，跟后端选择同一形态。**
