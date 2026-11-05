@@ -88,6 +88,20 @@ fun buildChatRows(
     return rows
 }
 
+/**
+ * 历史面板里点一条 → LazyColumn 的下标。
+ *
+ * `rows` 只是列表的**主体**，列表头上还可能有「加载更早的消息」这类前导项，
+ * 下标要按 `leadingItems` 平移。以前直接拿 `rows.indexOfFirst` 当 LazyColumn 下标，
+ * 于是只要顶上挂着「加载更早的消息」，点哪一条都落到上一条 —— 就是「跳转不准确」。
+ *
+ * 找不到（例如这条提问已经被折进过程组、或上下文被压缩掉了）时返回 -1，调用方跳过即可。
+ */
+fun historyListIndex(rows: List<ChatRow>, key: String, leadingItems: Int = 0): Int {
+    val index = rows.indexOfFirst { it.key == key }
+    return if (index < 0) -1 else index + leadingItems
+}
+
 /** 只有错误、没有任何过程内容的空白消息：单独一行显示红字，不塞进过程组。 */
 private fun isOnlyError(item: TimelineItem.AssistantMessage): Boolean =
     item.text.isBlank() && item.thinking?.isBlank() != false && item.tools.isEmpty() && !item.errorText.isNullOrBlank()

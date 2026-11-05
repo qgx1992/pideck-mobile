@@ -1,6 +1,7 @@
 package dev.pideck.nativeapp.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -94,6 +95,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -248,6 +250,12 @@ fun ChatScreen(
     var showThinkingSheet by remember { mutableStateOf(false) }
     // 本会话的历史提问：点一条跳回那一段
     var showHistory by remember { mutableStateOf(false) }
+    // 历史跳转：key = 要落到的提问，tick 让「再点同一条」也能重新滚、重新闪
+    var jumpKey by remember { mutableStateOf<String?>(null) }
+    var jumpTick by remember { mutableIntStateOf(0) }
+    // 闪谁：key + tick（tick 只是为了让同一个 key 也能再触发一次动画）
+    var flashKey by remember { mutableStateOf<String?>(null) }
+    var flashTick by remember { mutableIntStateOf(0) }
     // 顶栏溢出口：导出 HTML / 权限预设 / 上下文用量
     var showMore by remember { mutableStateOf(false) }
     var showPermission by remember { mutableStateOf(false) }
@@ -647,6 +655,7 @@ fun ChatScreen(
                                 is TimelineItem.UserMessage -> UserBubble(
                                     item = item,
                                     onLongPress = { actionTarget = item },
+                                    flashTick = if (item.key == flashKey) flashTick else 0,
                                 )
 
                                 is TimelineItem.AssistantMessage -> AssistantBlock(
@@ -802,6 +811,31 @@ fun ChatScreen(
         snackbar.showSnackbar(message)
         viewModel.dismissPrefError()
     }
+    // 历史跳转：滚到那一句并让它停稳。
+    // 直接 scrollToItem 有两个坑 —— ① 顶上挂着「加载更早的消息」时行下标要 +1；
+    // ② 行高要等布局量完才知道，量之前滚到的是估算位置。所以滚完校验一次，
+    //    目标没贴到顶部就再来一遍（最多 3 次，够覆盖慢机型上的长列表）。
+    LaunchedEffect(jumpKey, jumpTick) {
+        val key = jumpKey ?: return@LaunchedEffect
+        if (key.isEmpty()) return@LaunchedEffect
+        repeat(3) {
+            val leading = if (viewModel.hasOlder) 1 else 0
+            val index = historyListIndex(rows, key, leading)
+            if (index < 0) return@LaunchedEffect
+            listState.scrollToItem(index)
+            withFrameNanos { }
+            val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+            val top = listState.layoutInfo.viewportStartOffset
+            if (info != null && info.offset - top <= 1) return@LaunchedEffect
+        }
+    }
+    // 高亮闪完就清掉，别让气泡一直亮着
+    LaunchedEffect(flashKey, flashTick) {
+        if (flashKey == null) return@LaunchedEffect
+        kotlinx.coroutines.delay(1_800)
+        flashKey = null
+    }
+
     freeCopyTarget?.let { target ->
         FreeCopyDialog(
             text = when (target) {
@@ -823,11 +857,11 @@ fun ChatScreen(
             onDismiss = { showHistory = false },
             onPick = { turn ->
                 showHistory = false
-                val index = rows.indexOfFirst { it.key == turn.key }
-                if (index >= 0) {
-                    atBottom = false
-                    scope.launch { listState.scrollToItem(index) }
-                }
+                atBottom = false
+                jumpKey = turn.key
+                jumpTick += 1
+                flashKey = turn.key
+                flashTick += 1
             },
         )
     }
@@ -882,7 +916,21 @@ fun ChatScreen(
 private fun UserBubble(
     item: TimelineItem.UserMessage,
     onLongPress: () -> Unit = {},
+    flashTick: Int = 0,
 ) {
+    // 高亮闪烁：从历史面板跳过来时闪三下，告诉人「落在这儿了」。
+    // 只动颜色与描边（不碰尺寸），所以不会让列表跳高度、也不会把追滚带跑偏。
+    val flash = remember { Animatable(0f) }
+    LaunchedEffect(flashTick) {
+        if (flashTick == 0) return@LaunchedEffect
+        flash.snapTo(0f)
+        repeat(3) {
+            flash.animateTo(1f, tween(durationMillis = 170))
+            flash.animateTo(0f, tween(durationMillis = 230))
+        }
+    }
+    val container = MaterialTheme.colorScheme.primaryContainer
+    val accent = MaterialTheme.colorScheme.primary
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -895,8 +943,13 @@ private fun UserBubble(
         horizontalArrangement = Arrangement.End,
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.primaryContainer,
+            color = androidx.compose.ui.graphics.lerp(container, accent, flash.value * 0.55f),
             shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp),
+            border = if (flash.value > 0.01f) {
+                BorderStroke(1.5.dp, accent.copy(alpha = flash.value))
+            } else {
+                null
+            },
             modifier = Modifier.widthIn(max = 320.dp),
         ) {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
