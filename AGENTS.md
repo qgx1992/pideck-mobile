@@ -255,3 +255,31 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
 `app/shell/*.test.ts` 覆盖的是壳自己的纯逻辑（设备存储、配对输入、SSE 分帧）。界面行为不再有
 客户端侧测试——它属于上游，上游自己有 1,862 个测试文件。
 
+
+## 原生客户端（0.5.x，2026-11 起接管）
+
+上面「界面栈 / 动效 / 回合统计行」几节描述的是 0.4.x 的 WebView 壳（`app/vendor/` + `app/shell/`），
+**已经不是当前实现**。现在的客户端是纯 Kotlin + Compose，源码在
+`native/app/src/main/java/dev/pideck/nativeapp/`，版本号与出包约定见本文件开头两节（改动仍走
+`native/app/build.gradle.kts` 的 `versionCode`/`versionName`，`patch + 1`，
+`versionCode = 500 + patch`）。
+
+两个踩过的坑，改这两处前先看：
+
+- **顶栏那排胶囊的宽度必须有一个「可伸缩」的**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatScreen.kt`，
+  `TopAppBar` 正下方那行 `Row`（模型 / 思考档位胶囊））：模型胶囊外面套一层 `Box(Modifier.weight(1f))`、内部封顶 188dp，
+  右侧（上下文胶囊 + 历史按钮）才永远有位置。全都给固定宽度时，上下文胶囊一出现，
+  历史按钮就只量到 0 宽度、直接看不见（踩过一次，用户报「查看上下文后历史按钮被顶掉」）。
+- **点「回复完成」通知要能进那个会话**：`native/app/src/main/java/dev/pideck/nativeapp/watch/Notifications.kt`
+  的 `finished()` 必须把 `pideckDeviceId` + `pideckSessionId` 塞进 Intent，并且**每条通知一份
+  PendingIntent**（requestCode 用 `NotificationNav.notificationId(deviceId, sessionId)`）；
+  共用一个 requestCode + `FLAG_UPDATE_CURRENT` 会让后发的通知覆盖前一条的 extras
+  （表现：点 A 进去是 B）。通知 id 也要带 deviceId，否则两台设备的同名会话互相覆盖。
+  交接台是 `native/app/src/main/java/dev/pideck/nativeapp/watch/NotificationNav.kt`：
+  `MainActivity` 在 `onCreate`/`onNewIntent` 里 `post()` 并摘掉 extras（转屏重建会拿同一份
+  Intent 再走一遍 `onCreate`），`AppNav` 冷启动用 `take()` 直接把它当起点、热启动靠 `flow` 就地跳。
+
+验证：`cd native && ./gradlew --offline -q :app:testDebugUnitTest`，出包
+`./gradlew :app:assembleRelease`，产物在 `native/app/build/outputs/apk/release/app-release.apk`，
+拷成 `apk/PiDeck-native-<版本>-release.apk` 后更新 `apk/SHA256SUMS.txt` 与 `apk/index.html`
+（页面只写当前版本，旧包删掉）。

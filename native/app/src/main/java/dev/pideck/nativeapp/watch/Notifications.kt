@@ -35,13 +35,34 @@ object Notifications {
         )
     }
 
-    /** 点通知回到 App。 */
+    /** 点通知回到 App（常驻通知没有具体会话，只把人叫回来）。 */
     private fun openApp(context: Context): PendingIntent {
         val intent = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         return PendingIntent.getActivity(
             context,
             0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    /**
+     * 点「回复完成」要直接进那个会话，不能只把 App 叫起来。
+     *
+     * 每个目标一份 PendingIntent（requestCode 用 `deviceId|sessionId` 的 hash）：共用一个
+     * requestCode 时 `FLAG_UPDATE_CURRENT` 会让后发的通知把前一条的 extras 覆盖掉，
+     * 表现为「点了 A 会话，进去是 B」。
+     */
+    private fun openSession(context: Context, deviceId: String, sessionId: String): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java)
+            .setAction("${context.packageName}.OPEN_SESSION")
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            .putExtra(NotificationNav.EXTRA_DEVICE_ID, deviceId)
+            .putExtra(NotificationNav.EXTRA_SESSION_ID, sessionId)
+        return PendingIntent.getActivity(
+            context,
+            NotificationNav.notificationId(deviceId, sessionId),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -60,7 +81,7 @@ object Notifications {
             .build()
 
     /** 回复完成通知。同一会话复用同一个 id，避免堆一屏。 */
-    fun finished(context: Context, sessionId: String, title: String, failed: Boolean) {
+    fun finished(context: Context, deviceId: String, sessionId: String, title: String, failed: Boolean) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val builder = NotificationCompat.Builder(context, CHANNEL_DONE)
             .setSmallIcon(R.drawable.ic_notification)
@@ -69,7 +90,7 @@ object Notifications {
             .setStyle(NotificationCompat.BigTextStyle().bigText(title.ifBlank { "会话" }))
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setContentIntent(openApp(context))
-        runCatching { manager.notify(sessionId.hashCode(), builder.build()) }
+            .setContentIntent(openSession(context, deviceId, sessionId))
+        runCatching { manager.notify(NotificationNav.notificationId(deviceId, sessionId), builder.build()) }
     }
 }

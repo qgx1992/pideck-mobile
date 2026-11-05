@@ -1,6 +1,7 @@
 package dev.pideck.nativeapp
 
 import android.Manifest
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
@@ -18,6 +19,7 @@ import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.ThemeMode
 import dev.pideck.nativeapp.ui.AppNav
 import dev.pideck.nativeapp.ui.theme.PiDeckTheme
+import dev.pideck.nativeapp.watch.NotificationNav
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -33,6 +35,7 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        takeNotificationTarget(intent)
         setContent {
             val mode by Prefs.themeFlow.collectAsState()
             val dark = when (mode) {
@@ -56,5 +59,27 @@ class MainActivity : ComponentActivity() {
                 AppNav()
             }
         }
+    }
+
+    /**
+     * 点「回复完成」通知进来：把目标会话交给 [AppNav]（冷启动当起点，热启动直接跳）。
+     *
+     * 读完就把 extras 摘掉：Activity 因配置变更重建时会拿同一份 Intent 再走一次
+     * `onCreate`，不清掉的话转屏一次就又被拽到那个会话去。
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        takeNotificationTarget(intent)
+    }
+
+    private fun takeNotificationTarget(intent: Intent?) {
+        if (intent == null) return
+        val deviceId = intent.getStringExtra(NotificationNav.EXTRA_DEVICE_ID)
+        val sessionId = intent.getStringExtra(NotificationNav.EXTRA_SESSION_ID)
+        intent.removeExtra(NotificationNav.EXTRA_DEVICE_ID)
+        intent.removeExtra(NotificationNav.EXTRA_SESSION_ID)
+        if (deviceId.isNullOrBlank() || sessionId.isNullOrBlank()) return
+        NotificationNav.post(NotificationNav.Target(deviceId, sessionId))
     }
 }

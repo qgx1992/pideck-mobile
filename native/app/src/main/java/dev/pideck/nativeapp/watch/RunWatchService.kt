@@ -101,7 +101,13 @@ class RunWatchService : Service() {
                             val title = titles[runtime.sessionId]
                                 ?: runCatching { titleOf(device, token, runtime.sessionId) }.getOrNull()
                             if (!title.isNullOrBlank()) titles[runtime.sessionId] = title
-                            Notifications.finished(this, runtime.sessionId, title.orEmpty(), failed = false)
+                            Notifications.finished(
+                                this,
+                                device.id,
+                                runtime.sessionId,
+                                title.orEmpty(),
+                                failed = false,
+                            )
                         }
                         wasRunning.remove(key)
                     } else {

@@ -440,17 +440,25 @@ fun ChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SelectChip(
-                    // 记录里没模型时不要把用户的选择误读成「未选」：手机新建的会话
-                    // 记录本来就不带模型，实际跑的是电脑端的默认模型（运行时起来后会换成
-                    // 真实名字，见 ChatViewModel.displayModel）
-                    text = viewModel.displayModel?.shortLabel ?: "默认模型",
-                    onClick = { showModelSheet = true },
-                    icon = Icons.Default.Memory,
-                    trailing = Icons.Filled.KeyboardArrowDown,
-                    accent = viewModel.displayModel == null,
-                    modifier = Modifier.widthIn(max = 188.dp),
-                )
+                // 模型胶囊吃掉剩余的宽度（内部封顶 188dp），而不是固定宽度占位：
+                // 上下文胶囊一出现，固定宽度的 Row 就没位置给后面的历史按钮，
+                // 会被整块挤出屏幕（实测「查了上下文，历史按钮不见了」）。
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    SelectChip(
+                        // 记录里没模型时不要把用户的选择误读成「未选」：手机新建的会话
+                        // 记录本来就不带模型，实际跑的是电脑端的默认模型（运行时起来后会换成
+                        // 真实名字，见 ChatViewModel.displayModel）
+                        text = viewModel.displayModel?.shortLabel ?: "默认模型",
+                        onClick = { showModelSheet = true },
+                        icon = Icons.Default.Memory,
+                        trailing = Icons.Filled.KeyboardArrowDown,
+                        accent = viewModel.displayModel == null,
+                        modifier = Modifier.widthIn(max = 188.dp),
+                    )
+                }
                 val levels = viewModel.thinkingLevels
                 if (levels.isNotEmpty()) {
                     // 没选过档位就是跟随电脑端默认：别再显示成「不思考」—— 那是档位表的第一项，
@@ -463,7 +471,6 @@ fun ChatScreen(
                         accent = level in setOf("high", "xhigh", "max"),
                     )
                 }
-                Spacer(Modifier.weight(1f))
                 // 上下文占用：只在使用量拿得到时出现，点开看明细并压缩
                 val usage = viewModel.contextUsage
                 if (usage != null && usage.known) {

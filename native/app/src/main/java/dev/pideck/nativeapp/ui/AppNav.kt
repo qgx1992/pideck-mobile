@@ -3,11 +3,13 @@ package dev.pideck.nativeapp.ui
 import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -19,6 +21,7 @@ import dev.pideck.nativeapp.ui.home.HomeScreen
 import dev.pideck.nativeapp.ui.sessions.SessionsScreen
 import dev.pideck.nativeapp.ui.settings.SettingsScreen
 import dev.pideck.nativeapp.ui.splash.SplashScreen
+import dev.pideck.nativeapp.watch.NotificationNav
 import kotlinx.coroutines.delay
 
 object Routes {
@@ -57,7 +60,33 @@ fun AppNav(startViewModel: StartViewModel = hiltViewModel()) {
     }
 
     val navController = rememberNavController()
-    NavHost(navController = navController, startDestination = startRoute) {
+    // 冷启动点了「回复完成」通知：直接把那个会话当起点，别先闪一下首页再跳。
+    // take() 顺带清空，下面的 LaunchedEffect 只负责「App 已经在跑时又点了通知」。
+    val coldTarget = remember { NotificationNav.take() }
+    val pendingTarget by NotificationNav.flow.collectAsState()
+    LaunchedEffect(pendingTarget) {
+        val target = pendingTarget ?: return@LaunchedEffect
+        NotificationNav.clear()
+        val current = navController.currentBackStackEntry
+        val alreadyThere = current?.destination?.route == Routes.CHAT &&
+            current.arguments?.getString("deviceId") == target.deviceId &&
+            current.arguments?.getString("sessionId") == target.sessionId
+        if (alreadyThere) return@LaunchedEffect
+        navController.navigate(Routes.chat(target.deviceId, target.sessionId)) {
+            if (current?.destination?.route == Routes.CHAT) {
+                // 从别的会话点通知过来＝替换当前条目，返回键不会在会话之间来回退
+                popUpTo(Routes.CHAT) { inclusive = true }
+            } else {
+                popUpTo(navController.graph.findStartDestination().id) { inclusive = false }
+                launchSingleTop = true
+            }
+        }
+    }
+
+    NavHost(
+        navController = navController,
+        startDestination = coldTarget?.let { Routes.chat(it.deviceId, it.sessionId) } ?: startRoute,
+    ) {
         composable(Routes.DEVICES) {
             DevicesScreen(
                 onOpenDevice = { device -> navController.navigate(Routes.home(device.id)) },
