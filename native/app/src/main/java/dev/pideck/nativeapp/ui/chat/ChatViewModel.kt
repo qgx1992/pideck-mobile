@@ -1129,17 +1129,14 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * 首个增量到达。正文优先，思考阶段只有 reasoning 时先记下作兜底
-     * （对应桌面端 `firstTextAt > 0 ? firstTextAt : firstDeltaAt`）。
+     * 首个增量到达。正文与「任意增量」分开记（对应桌面 `firstTextAt` 与 `firstDeltaAt`）：
+     * 首字用正文（思考阶段没有字可读），生成速度用任意增量（思考也算在吐 token）。
      */
     private fun markTurnFirstContent(snapshot: ReplySnapshot) {
         if (turnStartedAt <= 0L) return
         val now = System.currentTimeMillis()
-        when {
-            snapshot.text.isNotEmpty() && turnFirstTextAt == 0L -> turnFirstTextAt = now
-            snapshot.reasoning.isNotEmpty() && turnFirstAnyAt == 0L -> turnFirstAnyAt = now
-            else -> return
-        }
+        if (turnFirstAnyAt == 0L) turnFirstAnyAt = now
+        if (snapshot.text.isNotEmpty() && turnFirstTextAt == 0L) turnFirstTextAt = now
         val first = if (turnFirstTextAt > 0L) turnFirstTextAt else turnFirstAnyAt
         val base = if (turnRequestSentAt > 0L) turnRequestSentAt else turnStartedAt
         // 流式期间先上「首字 x.xs · 生成中…」，tok/s 要等落盘后拿到 usage 才算得出来。
@@ -1160,6 +1157,7 @@ class ChatViewModel @Inject constructor(
                 startedAt = turnStartedAt,
                 requestSentAt = turnRequestSentAt,
                 firstContentAt = if (turnFirstTextAt > 0L) turnFirstTextAt else turnFirstAnyAt,
+                firstDeltaAt = turnFirstAnyAt,
                 endedAt = turnEndedAt,
             )
         } else {

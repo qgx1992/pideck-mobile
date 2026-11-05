@@ -40,7 +40,10 @@ data class TurnStats(
  * 所以两端口径能对上、四个数也能相加吻合（首字 + 解码 ≈ 全程）。
  * - [startedAt]：按下发送（只用于「全程」的兜底，以及没有 [requestSentAt] 时的退路）；
  * - [requestSentAt]：`/api/chat` 请求**发出**的时刻 —— 首字的计时起点；
- * - [firstContentAt]：第一个正文/思考增量的到达时刻。
+ * - [firstContentAt]：第一个**正文**增量的到达时刻（首字的分母，与桌面 `firstTextAt ?: firstDeltaAt` 同口径）；
+ * - [firstDeltaAt]：第一个**任意**增量的到达时刻（含思考）—— 生成速度的分母，与桌面 `firstDeltaAt` 同口径。
+ *   两分开是因为思考会先行几十到几百毫秒：桌面 `流式` 从思考算起，若这里也用正文，
+ *   同一条回复会比桌面快 5~10%（实测 161 vs 150）。
  *
  * 曾经把起点定在「SSE 首帧到达」，结果把宿主收到请求后的排队（实测 2.4s）从首字里剔了出去：
  * 手机显示 2.7s 而桌面显示 5.1s，同一轮对不上。现在改回请求发出时刻。
@@ -49,6 +52,7 @@ data class TurnClock(
     val startedAt: Long = 0L,
     val requestSentAt: Long = 0L,
     val firstContentAt: Long = 0L,
+    val firstDeltaAt: Long = 0L,
     val endedAt: Long = 0L,
 )
 
@@ -74,7 +78,10 @@ fun deriveTurnStats(clock: TurnClock?, outputTokens: Int?, metaTotalMs: Long? = 
     }
     val tokens = outputTokens?.takeIf { it > 0 }
     // 生成速度只看「已经出字之后」那段，别把排队/建连/首字等待稀释进去。
-    val decodeMs = if (content > 0L && ended > content) ended - content else null
+    // 起点用首个任意增量（含思考）：桌面端 `firstDeltaAt` 就是这么算的，用正文字会快 5~10%。
+    val delta = clock?.firstDeltaAt ?: 0L
+    val decodeStart = if (delta > 0L) delta else content
+    val decodeMs = if (decodeStart > 0L && ended > decodeStart) ended - decodeStart else null
     return TurnStats(
         ttftMs = ttft,
         totalMs = total,

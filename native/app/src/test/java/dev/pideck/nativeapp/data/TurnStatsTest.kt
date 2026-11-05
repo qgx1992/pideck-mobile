@@ -20,10 +20,12 @@ class TurnStatsTest {
         firstContentAt: Long,
         endedAt: Long,
         requestSentAt: Long = 0L,
+        firstDeltaAt: Long = 0L,
     ) = TurnClock(
         startedAt = startedAt,
         requestSentAt = requestSentAt,
         firstContentAt = firstContentAt,
+        firstDeltaAt = firstDeltaAt,
         endedAt = endedAt,
     )
 
@@ -78,6 +80,28 @@ class TurnStatsTest {
     fun `没有请求发出时刻时退回按下发送`() {
         val stats = deriveTurnStats(clock = clock(1_000L, 4_000L, 6_000L), outputTokens = 100)
         assertEquals(3_000L, stats.ttftMs)
+    }
+
+    @Test
+    fun `生成速度的分母从首个增量（含思考）起算，与桌面流式同口径`() {
+        // 实测那一轮：请求 1.0s 发出 → 思考首帧 3.5s → 正文首帧 4.0s → 收尾 9.0s；1000 tok
+        // 桌面报「流式」用 firstDeltaAt（3.5s），报「首 token」用 firstTextAt（4.0s）
+        val stats = deriveTurnStats(
+            clock = clock(1_000L, 4_000L, 9_000L, requestSentAt = 1_000L, firstDeltaAt = 3_500L),
+            outputTokens = 1_000,
+        )
+        assertEquals("首字算到正文，不是思考", 3_000L, stats.ttftMs)
+        assertEquals(181.8, stats.tps!!, 0.1)          // 1000 ÷ 5.5s
+        assertEquals(125.0, stats.endToEndTps!!, 0.001) // 1000 ÷ 8.0s
+    }
+
+    @Test
+    fun `没有首个增量时刻时用正文起点算生成速度`() {
+        val stats = deriveTurnStats(
+            clock = clock(1_000L, 4_000L, 9_000L, requestSentAt = 1_000L),
+            outputTokens = 500,
+        )
+        assertEquals(100.0, stats.tps!!, 0.001) // 500 ÷ 5.0s
     }
 
     @Test
