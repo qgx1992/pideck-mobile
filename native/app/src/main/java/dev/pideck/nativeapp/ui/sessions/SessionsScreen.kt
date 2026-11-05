@@ -58,7 +58,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.pideck.nativeapp.data.Session
-import dev.pideck.nativeapp.ui.chat.RunningDot
+import dev.pideck.nativeapp.ui.chat.StatusDot
 import dev.pideck.nativeapp.ui.theme.AppButton
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import dev.pideck.nativeapp.ui.theme.AppIconButton
@@ -288,7 +288,7 @@ private fun SessionRow(
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            RunningDot(active = running)
+            StatusDot(status = dev.pideck.nativeapp.data.SessionActivity.statusOf(session.id))
             Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
                 Text(

@@ -24,6 +24,7 @@ import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.ReplyMerger
 import dev.pideck.nativeapp.data.ReplySnapshot
+import dev.pideck.nativeapp.data.SessionActivity
 import dev.pideck.nativeapp.data.StateCache
 import dev.pideck.nativeapp.data.StateFetch
 import dev.pideck.nativeapp.data.AskUi
@@ -216,22 +217,37 @@ class ChatViewModel @Inject constructor(
     /** 拉上下文用量（也顺便对账权限预设：运行时的值比会话记录新）。 */
     fun refreshContext() {
         val target = device ?: return
-        val runtime = runtimeTarget()
-        if (runtime == null) {
-            contextUsage = null
-            return
-        }
         viewModelScope.launch {
             contextBusy = true
             try {
+                // 缓存里没有 runtime（刚打开会话、轮询还没到）就现拉一次 /api/state，
+                // 否则这一屏永远显示「读取不到」。
+                var runtime = runtimeTarget()
+                if (runtime == null) {
+                    runCatching { api.state(target, token, null) }
+                        .getOrNull()
+                        ?.let { fresh ->
+                            if (fresh is StateFetch.Fresh) {
+                                StateCache.put(deviceId, fresh.state)
+                                SessionActivity.observe(fresh.state)
+                            }
+                        }
+                    runtime = runtimeTarget()
+                }
+                if (runtime == null) {
+                    contextUsage = null
+                    actionNote = "这个会话的运行时还没起来 —— 先发一句话再来读上下文"
+                    return@launch
+                }
                 val usage = api.runtimeState(target, token, runtime)
                 contextUsage = usage
                 usage.permissionPreset?.takeIf { it.isNotBlank() }?.let { permissionPreset = it }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Throwable) {
-                // 用量只是辅助信息，拿不到就不显示，不打断阅读
+            } catch (e: Throwable) {
+                // 用量只是辅助信息，不打断阅读；但要说清楚为什么是空的
                 contextUsage = null
+                actionNote = "读取上下文用量失败：${describeConnectionError(e)}"
             } finally {
                 contextBusy = false
             }
@@ -381,6 +397,7 @@ class ChatViewModel @Inject constructor(
                             if (result is StateFetch.Fresh) {
                                 stateEtag = result.etag
                                 StateCache.put(deviceId, result.state)
+                                SessionActivity.observe(result.state)
                                 val next = result.state.pendingUiRequests
                                     .firstOrNull { it.sessionId == sessionId }
                                 if (next?.requestId != pendingAsk?.requestId) askError = null
@@ -770,6 +787,9 @@ class ChatViewModel @Inject constructor(
                         val snapshot = applyWatchFrame(frame.data) ?: return@collect
                         live = snapshot
                         if (snapshot.finished) {
+                            snapshot.errorText?.takeIf { it.isNotBlank() }?.let {
+                                SessionActivity.markTurnResult(sessionId, failed = true)
+                            }
                             live = null
                             // 收尾帧比落盘早一点点，等一下再以磁盘为准对齐。
                             delay(400)
@@ -804,6 +824,13 @@ class ChatViewModel @Inject constructor(
     }
 
     /** 拉最新一页并替换列表（进入页面 / 发送收尾 / 下拉刷新都走这里）。 */
+    /** 这一轮是成功还是失败：宿主只在消息里给 errorText，就用它判定侧栏颜色。 */
+    private fun markLastTurnResult() {
+        val last = items.lastOrNull { it is TimelineItem.AssistantMessage } as? TimelineItem.AssistantMessage
+            ?: return
+        SessionActivity.markTurnResult(sessionId, failed = !last.errorText.isNullOrBlank())
+    }
+
     fun refreshHistory() {
         val target = device ?: return
         viewModelScope.launch {
@@ -813,6 +840,7 @@ class ChatViewModel @Inject constructor(
                 val page = api.messagesPage(target, token, sessionId, pageSize = 40)
                 unavailable = page.unavailable
                 items = page.messages.toTimelineItems()
+                markLastTurnResult()
                 before = page.nextBefore
                 hasOlder = page.nextBefore != null && page.messages.isNotEmpty()
             } catch (e: CancellationException) {

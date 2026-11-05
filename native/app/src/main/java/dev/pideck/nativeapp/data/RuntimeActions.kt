@@ -85,10 +85,25 @@ fun parseContextUsage(root: JsonElement?): ContextUsage {
     )
 }
 
-/** `runtime/state` 的返回可能是 `{state: {...}}`，也可能直接是状态本体 —— 两种都认。 */
+/**
+ * `runtime/state` 的真实信封：
+ * `{"result":{"ok":true,"value":{"target":{…},"value":{...状态本体...}}}}`。
+ * 另外兼容 `{state: {...}}` 与「直接就是状态本体」两种形状 —— 宿主改过几次外壳，
+ * 只在一种上写死就会「读取不到」。
+ */
 fun unwrapRuntimeState(root: JsonElement?): JsonElement? {
     val obj = root as? JsonObject ?: return root
-    return obj["state"]?.takeIf { it is JsonObject } ?: root
+    val result = obj["result"] as? JsonObject
+    if (result != null) {
+        val ok = (result["ok"] as? JsonPrimitive)?.booleanOrNull
+        if (ok == false) return null
+        val outer = result["value"] as? JsonObject
+        val inner = outer?.get("value") as? JsonObject
+        if (inner != null) return inner
+        if (outer != null) return outer
+    }
+    obj["state"]?.takeIf { it is JsonObject }?.let { return it }
+    return obj
 }
 
 /** 导出文件名：会话 id 里可能有 `:` `/` 之类，替换掉。 */

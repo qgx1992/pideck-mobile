@@ -110,4 +110,40 @@ class RuntimeActionsTest {
         assertEquals("自定义 x", PermissionPresets.labelOf("自定义 x"))
         assertEquals("只读", PermissionPresets.labelOf("read-only"))
     }
+
+    @Test
+    fun `runtime state unwraps the result envelope`() {
+        val raw = Json.parseToJsonElement(
+            """
+            {"result":{"ok":true,"value":{"target":{"sessionId":"s"},"value":{
+              "modelName":"DeepSeek V4.1 Flash","provider":"magpie","thinkingLevel":"high",
+              "isStreaming":false,"isCompacting":false,"contextTokens":14284,
+              "contextWindow":1000000,"contextPercent":1.4284,"contextOverflow":false,
+              "contextMessageTokens":3497,"contextSystemTokens":5615,"contextToolsTokens":5172,
+              "inputTokens":22593,"outputTokens":286,"cacheRead":32000,"cacheWrite":0,
+              "cacheHitPercent":98.9,"cost":0.0036,"ttftMs":1401
+            }}}}
+            """.trimIndent(),
+        )
+        val usage = parseContextUsage(unwrapRuntimeState(raw))
+        assertTrue(usage.known)
+        assertEquals(14284L, usage.contextTokens)
+        assertEquals(1000000L, usage.contextWindow)
+        assertEquals("1%", usage.percentLabel)
+    }
+
+    @Test
+    fun `runtime state unwrap rejects a failed envelope`() {
+        val raw = Json.parseToJsonElement("""{"result":{"ok":false,"error":"no runtime"}}""")
+        assertNull(unwrapRuntimeState(raw))
+        assertFalse(parseContextUsage(unwrapRuntimeState(raw)).known)
+    }
+
+    @Test
+    fun `runtime state unwrap still accepts the legacy state wrapper`() {
+        val raw = Json.parseToJsonElement("""{"state":{"contextTokens":100,"contextWindow":1000}}""")
+        val usage = parseContextUsage(unwrapRuntimeState(raw))
+        assertTrue(usage.known)
+        assertEquals("10%", usage.percentLabel)
+    }
 }

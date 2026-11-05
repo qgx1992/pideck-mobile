@@ -13,6 +13,7 @@ import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.Session
+import dev.pideck.nativeapp.data.SessionActivity
 import dev.pideck.nativeapp.data.StateCache
 import dev.pideck.nativeapp.data.StateFetch
 import dev.pideck.nativeapp.data.describeConnectionError
@@ -229,6 +230,7 @@ class SessionsViewModel @Inject constructor(
                         state = fetched.state
                         etag = fetched.etag
                         StateCache.put(deviceId, fetched.state)
+                        SessionActivity.observe(fetched.state)
                         // 有会话在跑就挂上看护（跑完了一条通知），没跑就等下次再说。
                         if (fetched.state.runtimes.any { it.isRunning }) RunWatcher.start(context)
                     }

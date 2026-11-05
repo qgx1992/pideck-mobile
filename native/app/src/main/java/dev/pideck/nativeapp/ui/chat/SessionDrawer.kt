@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.saveable.rememberSaveable
+import dev.pideck.nativeapp.data.SessionActivity
 import dev.pideck.nativeapp.ui.common.SearchField
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
@@ -186,9 +187,18 @@ fun SessionDrawer(
                 } else {
                     group.sessions.take(DRAWER_SESSION_PREVIEW)
                 }
-                val runningIds = group.sessions.mapNotNull { s -> if (viewModel.isRunning(s.id)) s.id else null }
-                // 折叠时整组都不露行；展开但运行中的会话被「先露 5 条」截掉时同样看不到 —— 两种情况都由组头显示
-                val headerRunning = runningIds.any { id -> collapsed || previewShown.none { it.id == id } }
+                // 「正在动」的会话：运行中或在等用户回答 —— 完成/失败是静态结果，不需要在组头强调
+                val activeIds = group.sessions.mapNotNull { s ->
+                    val status = SessionActivity.statusOf(s.id)
+                    if (status == SessionActivity.Status.Running || status == SessionActivity.Status.Waiting) {
+                        s.id to status
+                    } else {
+                        null
+                    }
+                }
+                // 折叠时整组都不露行；展开但被「先露 5 条」截掉时同样看不到 —— 两种情况都由组头显示
+                val headerStatus = activeIds.firstOrNull { (id, _) -> collapsed || previewShown.none { it.id == id } }
+                    ?.second
                 item(key = "g-${group.projectId}") {
                     Column(
                         modifier = Modifier
@@ -205,7 +215,7 @@ fun SessionDrawer(
                             name = group.projectName.ifBlank { "未命名项目" },
                             count = group.sessions.size,
                             collapsed = collapsed,
-                            running = headerRunning,
+                            status = headerStatus,
                             onToggle = { viewModel.toggleGroup(group.projectId) },
                             onLongPress = { actions.menuProject = group },
                         )
@@ -215,7 +225,7 @@ fun SessionDrawer(
                             shown.forEach { session ->
                                 DrawerSessionRow(
                                     session = session,
-                                    running = viewModel.isRunning(session.id),
+                                    status = SessionActivity.statusOf(session.id),
                                     current = session.id == currentSessionId,
                                     onClick = {
                                         if (session.id != currentSessionId) onPickSession(session.id)
@@ -269,7 +279,7 @@ private fun DrawerGroupHeader(
     name: String,
     count: Int,
     collapsed: Boolean,
-    running: Boolean,
+    status: SessionActivity.Status?,
     onToggle: () -> Unit,
     onLongPress: () -> Unit,
 ) {
@@ -296,14 +306,14 @@ private fun DrawerGroupHeader(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        if (running) {
-            RunningDot(active = true)
+        if (status != null) {
+            StatusDot(status = status)
             Spacer(Modifier.width(2.dp))
         }
         Text(
             if (collapsed) "$count" else "$count",
             style = MaterialTheme.typography.labelSmall,
-            color = if (running) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline,
+            color = if (status != null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline,
         )
     }
 }
@@ -312,7 +322,7 @@ private fun DrawerGroupHeader(
 @OptIn(ExperimentalFoundationApi::class)
 private fun DrawerSessionRow(
     session: Session,
-    running: Boolean,
+    status: SessionActivity.Status,
     current: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -336,7 +346,7 @@ private fun DrawerSessionRow(
                 .padding(start = 29.dp, end = 7.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            RunningDot(active = running)
+            StatusDot(status = status)
             Spacer(Modifier.width(2.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
