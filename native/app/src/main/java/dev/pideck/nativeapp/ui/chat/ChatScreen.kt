@@ -71,6 +71,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Splitscreen
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -113,6 +114,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import dev.pideck.nativeapp.data.BusySendMode
 import dev.pideck.nativeapp.data.TimelineItem
 import dev.pideck.nativeapp.data.ToolView
 import dev.pideck.nativeapp.data.SessionModel
@@ -154,6 +156,13 @@ fun ChatScreen(
     // 草稿按会话各自保存：换会话再回来，写了一半的内容还在
     var draft by remember(viewModel.sessionId) {
         mutableStateOf(ChatDrafts.get(viewModel.sessionId))
+    }
+
+    // 并行问询面板点「插入输入框」：答案塞进草稿，面板随即收掉
+    LaunchedEffect(viewModel.parallelInsert) {
+        val text = viewModel.consumeParallelInsert() ?: return@LaunchedEffect
+        draft = if (draft.isBlank()) text else draft.trimEnd() + System.lineSeparator() + text
+        ChatDrafts.put(viewModel.sessionId, draft)
     }
 
     // 拍平成「行」：连续的过程条目（思考 / 工具）合成一个过程组，正文回答单独成行。
@@ -506,6 +515,16 @@ fun ChatScreen(
                         onDismissError = { viewModel.dismissAskError() },
                     )
                 }
+                if (viewModel.queuedTexts.isNotEmpty()) {
+                    QueuedBanner(viewModel.queuedTexts)
+                }
+                viewModel.parallelAsk?.let { ask ->
+                    ParallelAskCard(
+                        ask = ask,
+                        onInsert = { viewModel.insertParallelAnswer() },
+                        onClose = { viewModel.closeParallelAsk() },
+                    )
+                }
                 Composer(
                 value = draft,
                 onValueChange = { text ->
@@ -518,16 +537,21 @@ fun ChatScreen(
                 onAttach = { showAttachSheet = true },
                 onRemoveImage = { viewModel.removeImage(it) },
                 onDismissImageError = { viewModel.dismissImageError() },
-                onSend = {
+                busyMode = viewModel.busySendMode,
+                onBusyModeChange = { viewModel.rememberBusySendMode(it) },
+                onSend = { mode ->
                     val text = draft
                     draft = ""
                     ChatDrafts.clear(viewModel.sessionId)
                     atBottom = true
                     // 客户端接管的斜杠命令不发出去：`/compact` 交给运行时压缩，`/new` 回首页选工作区
                     val command = slashIntent(text)
-                    when (command?.id) {
-                        "compact" -> viewModel.compact(slashArgument(text, command).ifBlank { null })
-                        "new" -> onOpenHome()
+                    when {
+                        command?.id == "compact" ->
+                            viewModel.compact(slashArgument(text, command).ifBlank { null })
+                        command?.id == "new" -> onOpenHome()
+                        // 还在跑：按用户选的档位投递（加入当前回合 / 排队 / 并行问）
+                        viewModel.streaming -> if (text.isNotBlank()) viewModel.sendWhileBusy(text, mode)
                         else -> viewModel.send(text)
                     }
                 },
@@ -1211,12 +1235,14 @@ private fun Composer(
     value: String,
     onValueChange: (String) -> Unit,
     sending: Boolean,
+    busyMode: BusySendMode = BusySendMode.STEER,
+    onBusyModeChange: (BusySendMode) -> Unit = {},
     images: List<PendingImage>,
     imageError: String?,
     onAttach: () -> Unit,
     onRemoveImage: (String) -> Unit,
     onDismissImageError: () -> Unit,
-    onSend: () -> Unit,
+    onSend: (BusySendMode) -> Unit,
     onStop: () -> Unit,
     mentionFiles: List<FileNode> = emptyList(),
     mentionIndexing: Boolean = false,
@@ -1353,6 +1379,12 @@ private fun Composer(
                             container = Color.Transparent,
                         )
                         Spacer(Modifier.weight(1f))
+                        // 正在跑、而且框里有内容：先给一个「怎么发」的选择器，
+                        // 停止按钮和发送按钮并存 —— 停止不会清掉输入框。
+                        if (sending && value.isNotBlank()) {
+                            BusySendPicker(mode = busyMode, onChange = onBusyModeChange)
+                            Spacer(Modifier.width(8.dp))
+                        }
                         if (sending) {
                             FilledIconButton(
                                 onClick = onStop,
@@ -1368,9 +1400,11 @@ private fun Composer(
                                         ),
                                 )
                             }
-                        } else {
+                            if (value.isNotBlank()) Spacer(Modifier.width(8.dp))
+                        }
+                        if (!sending || value.isNotBlank()) {
                             FilledIconButton(
-                                onClick = onSend,
+                                onClick = { onSend(busyMode) },
                                 enabled = value.isNotBlank() || images.isNotEmpty(),
                                 shape = ControlShape,
                                 modifier = Modifier.size(36.dp),
@@ -1379,6 +1413,173 @@ private fun Composer(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 「这条消息怎么发」：加入当前回合 / 排队到下一轮 / 并行发送。
+ *
+ * 只在会话还在跑、且输入框里有内容时出现 —— 空闲时发送没有歧义，多一个选择器只是噪音。
+ */
+@Composable
+private fun BusySendPicker(mode: BusySendMode, onChange: (BusySendMode) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Surface(
+            shape = ControlShape,
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.clickable { open = true },
+        ) {
+            Row(
+                modifier = Modifier.padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = mode.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = "选择发送方式",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            BusySendMode.entries.forEach { entry ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(entry.label, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                text = entry.hint,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    onClick = {
+                        open = false
+                        onChange(entry)
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** 排队到下一轮的那几条：宿主不回传队列内容，这里只报数 + 头几个字。 */
+@Composable
+private fun QueuedBanner(queued: List<String>) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Schedule,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "已排队 " + queued.size + " 条，本轮结束后自动发送：" +
+                    queued.joinToString("；") { it.take(24) },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/**
+ * 并行问询面板：另开的匿名会话在本轮之外作答，答案不打断当前回合。
+ *
+ * 收尾后可以「插入输入框」，把它当成下一条消息的素材（桌面端也是这么带回主线的）。
+ */
+@Composable
+private fun ParallelAskCard(ask: ParallelAsk, onInsert: () -> Unit, onClose: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (ask.busy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Splitscreen,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "并行问询",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                AppIconButton(
+                    icon = Icons.Default.Close,
+                    contentDescription = "关闭并行问询",
+                    onClick = onClose,
+                    size = 28,
+                    container = Color.Transparent,
+                )
+            }
+            Text(
+                text = ask.question,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            if (ask.answer.isNotBlank()) {
+                Text(
+                    text = ask.answer,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .heightIn(max = 180.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            }
+            ask.error?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            if (ask.answer.isNotBlank()) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onInsert) { Text("插入输入框") }
                 }
             }
         }

@@ -29,6 +29,7 @@ object Prefs {
     private val KEY_LAST_SESSION = stringPreferencesKey("last_session")
     private val KEY_COLLAPSED = stringSetPreferencesKey("collapsed_groups")
     private val KEY_COLLAPSE_RESTORE = booleanPreferencesKey("collapse_restore")
+    private val KEY_BUSY_MODE = stringPreferencesKey("busy_send_mode")
 
     /** 主题变化用 StateFlow 播出去，MainActivity 直接 collect。 */
     val themeFlow = MutableStateFlow(ThemeMode.SYSTEM)
@@ -61,6 +62,11 @@ object Prefs {
     var collapseRestore: Boolean = true
         private set
 
+    /** 上次选的「运行中发送」方式（[BusySendMode]），只当默认值用，每次发还能临时换。 */
+    @Volatile
+    var busySendMode: BusySendMode = BusySendMode.STEER
+        private set
+
     private var loaded = false
 
     /** 首次从磁盘读完就置 true —— 折叠状态要等这个，否则读到的是默认值。 */
@@ -82,6 +88,7 @@ object Prefs {
                 lastSessionId = data[KEY_LAST_SESSION]
                 collapsedGroups = data[KEY_COLLAPSED] ?: emptySet()
                 collapseRestore = data[KEY_COLLAPSE_RESTORE] ?: true
+                busySendMode = BusySendMode.parse(data[KEY_BUSY_MODE])
                 loadedFlow.value = true
             }
         }
@@ -128,6 +135,11 @@ object Prefs {
         theme = mode
         themeFlow.value = mode
         context.prefsStore.edit { it[KEY_THEME] = mode.id }
+    }
+
+    suspend fun setBusySendMode(context: Context, mode: BusySendMode) {
+        busySendMode = mode
+        context.prefsStore.edit { it[KEY_BUSY_MODE] = mode.id }
     }
 
     suspend fun setNotifyDone(context: Context, enabled: Boolean) {

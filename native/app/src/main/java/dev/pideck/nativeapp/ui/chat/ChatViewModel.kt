@@ -17,6 +17,7 @@ import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.ImagePrep
 import dev.pideck.nativeapp.data.LineDiff
 import dev.pideck.nativeapp.data.PendingImage
+import dev.pideck.nativeapp.data.BusySendMode
 import dev.pideck.nativeapp.data.ChatPayloads
 import dev.pideck.nativeapp.data.PendingUiRequest
 import dev.pideck.nativeapp.data.PideckJson
@@ -139,6 +140,7 @@ class ChatViewModel @Inject constructor(
         private set
 
     init {
+        restoreBusySendMode()
         viewModelScope.launch {
             val found = repository.devices.first { list -> list.any { it.id == deviceId } }
                 .firstOrNull { it.id == deviceId }
@@ -1041,6 +1043,7 @@ class ChatViewModel @Inject constructor(
                 unavailable = page.unavailable
                 items = page.messages.toTimelineItems()
                 markLastTurnResult()
+                reconcileQueue()
                 before = page.nextBefore
                 hasOlder = page.nextBefore != null && page.messages.isNotEmpty()
             } catch (e: CancellationException) {
@@ -1200,7 +1203,267 @@ class ChatViewModel @Inject constructor(
             }
         }
     }
+
+    // ---- 运行中发送：加入当前回合 / 排队到下一轮 / 并行发送 ----
+    //
+    // 桌面端这三档分在两个地方：「忙碌时发送」是设置项（`settings.busySendDelivery`，
+    // steer / followUp），「并行发送」是另一个入口（并行问询：另开匿名会话去问，答案单独看）。
+    // 手机上不设独立设置页，只记上次用哪一档，每次发还能临时换。
+
+    /** 上次用的投递方式，只当默认值。 */
+    var busySendMode by mutableStateOf(BusySendMode.STEER)
+        private set
+
+    /**
+     * 排队到下一轮、还没被 pi 取走的那些文本。
+     *
+     * 宿主不回传队列内容（桌面端走 Electron IPC 的 queued messages，HTTP 侧没有这个接口），
+     * 所以这边只留自己发过的那几条，等它们出现在历史里就自动删掉 —— 对账而不是缓存。
+     */
+    var queuedTexts by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** 并行问询面板的状态；null = 面板关着。 */
+    var parallelAsk by mutableStateOf<ParallelAsk?>(null)
+        private set
+
+    /** 「插入输入框」交接：面板点插入就写这里，界面取走塞进草稿。 */
+    var parallelInsert by mutableStateOf<String?>(null)
+        private set
+
+    private var askJob: Job? = null
+    private var askTarget: RuntimeTarget? = null
+    private var askMerger = ReplyMerger()
+
+    /** Prefs 的镜像在 App 启动时就装好了，这里只是把上次的选择拿过来。 */
+    private fun restoreBusySendMode() {
+        busySendMode = Prefs.busySendMode
+    }
+
+    fun consumeParallelInsert(): String? {
+        val value = parallelInsert ?: return null
+        parallelInsert = null
+        return value
+    }
+
+    /**
+     * 会话还在跑时按 [mode] 发一条。
+     *
+     * [BusySendMode.STEER] 走原来的 `/api/chat` 流式通道（宿主在忙碌时默认就是 steer，
+     * 这一轮回复照样在本端逐字渲染）；另外两档换别的通道，见各自实现。
+     */
+    /** 记住这一档：下次进会话还是它（只记偏好，不改会话记录）。 */
+    fun rememberBusySendMode(mode: BusySendMode) {
+        if (busySendMode == mode) return
+        busySendMode = mode
+        viewModelScope.launch { runCatching { Prefs.setBusySendMode(context, mode) } }
+    }
+
+    fun sendWhileBusy(text: String, mode: BusySendMode) {
+        rememberBusySendMode(mode)
+        if (!streaming) {
+            send(text)
+            return
+        }
+        if (images.isNotEmpty()) {
+            // 运行中这三条通道都不吃图片（`prompt` 的 body 里就没有 images 字段），
+            // 与其悄悄丢图，不如明说一句。
+            actionNote = "运行中的消息不带图片，等这一轮结束再发"
+            return
+        }
+        when (mode) {
+            BusySendMode.STEER -> steerDuringRun(text)
+            BusySendMode.FOLLOW_UP -> enqueueFollowUp(text)
+            BusySendMode.PARALLEL -> startParallelAsk(text)
+        }
+    }
+
+    /**
+     * 排队到下一轮：`POST /api/sessions/:id/prompt` + `streamingBehavior: "followUp"`。
+     *
+     * 这条通道只投递、不返回回复流，所以本端不动 `sending` / `live`：等 pi 把消息取走、
+     * 开始新一轮时，常驻的会话订阅（[startWatching]）会把它当成「别处发起的回合」渲染出来。
+     */
+    /**
+     * 加入当前回合（steer）：`prompt` + `streamingBehavior: "steer"`。
+     *
+     * 不新开回复流 —— 这条消息是注入到**正在跑的**那一轮里，文本会顺着已有的流
+     * （本端 `/api/chat` 的 sendJob，或后台起的会话订阅）继续过来，再开一条只会两份互相覆盖。
+     */
+    private fun steerDuringRun(text: String) {
+        val target = device ?: return
+        val body = text.trim()
+        if (body.isEmpty()) return
+        // 先上屏：等落盘再显示会有半秒「没反应」，重拉历史时这条本地气泡会被真实记录替掉
+        items = items + TimelineItem.UserMessage(
+            key = "local-${System.currentTimeMillis()}",
+            text = body,
+            timestamp = System.currentTimeMillis(),
+        )
+        viewModelScope.launch {
+            try {
+                val delivery = api.sendPrompt(
+                    target,
+                    token,
+                    sessionId,
+                    ChatPayloads.promptBody(newRequestId(), body, "steer"),
+                )
+                if (!delivery.accepted) error = delivery.error ?: "宿主没有接受这条消息"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                error = describeConnectionError(e)
+            }
+        }
+    }
+
+    private fun enqueueFollowUp(text: String) {
+        val target = device ?: return
+        val body = text.trim()
+        if (body.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val delivery = api.sendPrompt(
+                    target,
+                    token,
+                    sessionId,
+                    ChatPayloads.promptBody(newRequestId(), body, "followUp"),
+                )
+                if (!delivery.accepted) {
+                    error = delivery.error ?: "宿主没有接受这条消息"
+                    return@launch
+                }
+                queuedTexts = queuedTexts + body
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                error = describeConnectionError(e)
+            }
+        }
+    }
+
+    /**
+     * 并行发送：开一个匿名会话（`noSession: true`，不落盘、不进项目列表）去问。
+     *
+     * 模型与思考档位由宿主按启动默认值填，客户端不用传；答案走该会话的回复流，
+     * 面板里逐字显示，收尾后可以把它插回输入框。
+     */
+    private fun startParallelAsk(text: String) {
+        val target = device ?: return
+        val question = text.trim()
+        if (question.isEmpty()) return
+        val projectId = projectIdOf()
+        if (projectId == null) {
+            actionNote = "这个会话没有归属项目，没法另开匿名会话"
+            return
+        }
+        askJob?.cancel()
+        stopParallelRuntime()
+        askMerger = ReplyMerger()
+        parallelAsk = ParallelAsk(question = question, sessionId = "", busy = true)
+        askJob = viewModelScope.launch {
+            try {
+                val anon = api.createAnonymousSession(target, token, projectId)
+                parallelAsk = parallelAsk?.copy(sessionId = anon)
+                val delivery = api.sendPrompt(
+                    target,
+                    token,
+                    anon,
+                    ChatPayloads.promptBody(newRequestId(), question),
+                )
+                askTarget = delivery.agentId?.let { agentId ->
+                    RuntimeTarget(anon, agentId, delivery.runtimeGeneration ?: 0L)
+                }
+                if (!delivery.accepted) {
+                    parallelAsk = parallelAsk?.copy(busy = false, error = delivery.error ?: "宿主没有接受这条问题")
+                    return@launch
+                }
+                // 先投递后订阅也不丢帧：服务端在订阅时会回放本轮已产出的帧。
+                try {
+                    api.sessionStream(target, token, anon).collect { frame ->
+                        val snapshot = when {
+                            frame.data.trim() == "[DONE]" -> askMerger.finish()
+                            else -> {
+                                val parsed = runCatching {
+                                    PideckJson.parseToJsonElement(frame.data) as? JsonObject
+                                }.getOrNull()
+                                if (parsed != null) askMerger.applyFrame(parsed) else askMerger.snapshot()
+                            }
+                        } ?: return@collect
+                        parallelAsk = parallelAsk?.copy(
+                            answer = snapshot.text,
+                            busy = !snapshot.finished,
+                            error = snapshot.errorText,
+                        )
+                        // 这一轮收尾就别再挂着 keepAlive 的订阅（服务端不会主动断）
+                        if (snapshot.finished) throw AskStreamDone()
+                    }
+                } catch (e: AskStreamDone) {
+                    // 正常收尾
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                parallelAsk = parallelAsk?.copy(busy = false, error = describeConnectionError(e))
+            }
+        }
+    }
+
+    /** 面板上「插入输入框」：把答案交出去，然后收掉匿名会话。 */
+    fun insertParallelAnswer() {
+        val ask = parallelAsk ?: return
+        if (ask.answer.isBlank()) return
+        parallelInsert = ask.answer.trim()
+        closeParallelAsk()
+    }
+
+    /** 关面板：取消订阅并停掉匿名会话的 runtime（`noSession` 会话不会自己出现在项目列表里）。 */
+    fun closeParallelAsk() {
+        askJob?.cancel()
+        askJob = null
+        parallelAsk = null
+        stopParallelRuntime()
+    }
+
+    private fun stopParallelRuntime() {
+        val target = device
+        val runtime = askTarget ?: return
+        askTarget = null
+        if (target == null) return
+        viewModelScope.launch {
+            runCatching {
+                api.stopRuntime(target, token, runtime.sessionId, runtime.agentId, runtime.runtimeGeneration)
+            }
+        }
+    }
+
+    /** 排队的消息一旦出现在历史里就把提示撤掉（宿主那边已经没有「待发」这回事）。 */
+    private fun reconcileQueue() {
+        if (queuedTexts.isEmpty()) return
+        val landed = items.filterIsInstance<TimelineItem.UserMessage>().map { it.text }.toSet()
+        val rest = queuedTexts.filterNot { it in landed }
+        if (rest.size != queuedTexts.size) queuedTexts = rest
+    }
+
+    override fun onCleared() {
+        stopParallelRuntime()
+        super.onCleared()
+    }
 }
+
+/** 并行问询面板的状态。 */
+data class ParallelAsk(
+    val question: String,
+    val sessionId: String,
+    val answer: String = "",
+    val busy: Boolean = true,
+    val error: String? = null,
+)
+
+/** 匿名会话这一轮已经收尾：用它退出 keepAlive 的回复流订阅。 */
+private class AskStreamDone : Exception()
+
+private fun newRequestId(): String = java.util.UUID.randomUUID().toString()
 
 /** pi 的标准档位表（桌面端在拿不到模型能力时也用这一份）。 */
 private val STANDARD_THINKING_LEVELS =

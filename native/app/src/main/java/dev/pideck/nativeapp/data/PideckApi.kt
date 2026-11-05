@@ -8,6 +8,9 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -53,6 +56,26 @@ interface PideckApi {
 
     /** `POST /api/sessions`：按项目新建草稿会话，返回新会话 id。 */
     suspend fun createSession(device: Device, token: String?, projectId: String): String
+
+    /**
+     * `POST /api/sessions/:id/prompt`：投递一条 prompt，返回回执（不是回复流）。
+     *
+     * 唯一能吃 `streamingBehavior` 的通道 —— 「排队到下一轮」靠它；回复本身从
+     * 会话流（[sessionStream]）里来，和「别处发起的回合」是同一条路。
+     */
+    suspend fun sendPrompt(
+        device: Device,
+        token: String?,
+        sessionId: String,
+        body: kotlinx.serialization.json.JsonObject,
+    ): PromptDelivery
+
+    /**
+     * `POST /api/sessions/anonymous`：开一个匿名会话（`noSession: true`，不落盘、
+     * 不进项目列表），并行问询用。会话里模型 / 思考档位由宿主按启动默认值填，
+     * 客户端不用管。
+     */
+    suspend fun createAnonymousSession(device: Device, token: String?, projectId: String): String
 
     /** `POST /api/sessions/:id/runtime/stop`：停掉正在跑的 runtime。 */
     suspend fun stopRuntime(device: Device, token: String?, sessionId: String, agentId: String, runtimeGeneration: Long)
@@ -330,6 +353,34 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             parsed?.takeIf { it.isNotBlank() } ?: throw PideckException("新建会话没有返回 id")
         }
 
+    override suspend fun sendPrompt(
+        device: Device,
+        token: String?,
+        sessionId: String,
+        body: kotlinx.serialization.json.JsonObject,
+    ): PromptDelivery = withContext(Dispatchers.IO) {
+        val text = postJson(
+            device,
+            token,
+            "/api/sessions/${URLEncoder.encode(sessionId, "UTF-8")}/prompt",
+            body,
+        )
+        parsePromptDelivery(text)
+    }
+
+    override suspend fun createAnonymousSession(
+        device: Device,
+        token: String?,
+        projectId: String,
+    ): String = withContext(Dispatchers.IO) {
+        val body = buildJsonObject { put("projectId", projectId) }
+        val text = postJson(device, token, "/api/sessions/anonymous", body)
+        val parsed = runCatching {
+            PideckJson.parseToJsonElement(text).jsonObject["session"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+        }.getOrNull()
+        parsed?.takeIf { it.isNotBlank() } ?: throw PideckException("匿名会话没有返回 id")
+    }
+
     override suspend fun deleteSession(
         device: Device,
         token: String?,
@@ -515,6 +566,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             }.getOrNull()
         }
     }
+
     private suspend fun postJson(device: Device, token: String?, path: String, body: JsonObject): String {
         val request = requestBuilder(device, token, path)
             .post(body.toString().toRequestBody(jsonMedia))
@@ -582,3 +634,24 @@ fun defaultOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .pingInterval(0, TimeUnit.SECONDS)
     .retryOnConnectionFailure(true)
     .build()
+
+/** 回执解析：`{"result":{"accepted":true,...}}`；拒绝时只有 `accepted:false` + `error`。 */
+internal fun parsePromptDelivery(text: String): PromptDelivery {
+    val root = runCatching { PideckJson.parseToJsonElement(text).jsonObject }.getOrNull()
+    val result = root?.get("result") as? JsonObject
+        ?: root?.get("state") as? JsonObject
+        ?: root
+    val accepted = (result?.get("accepted") as? JsonPrimitive)?.booleanOrNull ?: false
+    fun str(key: String): String? =
+        (result?.get(key) as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+    val generation = (result?.get("runtimeGeneration") as? JsonPrimitive)?.let { p ->
+        p.doubleOrNull?.toLong() ?: p.content.toLongOrNull()
+    }
+    return PromptDelivery(
+        accepted = accepted,
+        error = str("error"),
+        agentId = str("agentId"),
+        runtimeGeneration = generation,
+        delivery = str("delivery"),
+    )
+}

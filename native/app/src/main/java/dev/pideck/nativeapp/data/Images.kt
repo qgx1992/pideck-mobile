@@ -127,6 +127,21 @@ object ChatPayloads {
             put("messages", buildJsonArray { add(userMessage(text, imageDataUrls)) })
         }
 
+    /**
+     * `POST /api/sessions/:id/prompt` 的请求体。
+     *
+     * 和 [chatBody] 的区别：这条通道只投递一条 prompt，返回的是回执而不是回复流；
+     * 也只有它吃 `streamingBehavior` —— 宿主把它原样塞进 pi 的 prompt 请求，
+     * 「排队到下一轮」才成立（`/api/chat` 的 body 没有这个字段，
+     * 宿主忙碌时一律按 steer 处理）。
+     */
+    fun promptBody(requestId: String, text: String, behavior: String? = null): JsonObject =
+        buildJsonObject {
+            put("requestId", requestId)
+            put("message", text.trim())
+            if (!behavior.isNullOrBlank()) put("streamingBehavior", behavior)
+        }
+
     fun userMessage(text: String, imageDataUrls: List<String>): JsonObject = buildJsonObject {
         put("role", "user")
         put("content", text)

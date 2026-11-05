@@ -279,7 +279,20 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   `MainActivity` 在 `onCreate`/`onNewIntent` 里 `post()` 并摘掉 extras（转屏重建会拿同一份
   Intent 再走一遍 `onCreate`），`AppNav` 冷启动用 `take()` 直接把它当起点、热启动靠 `flow` 就地跳。
 
+- **运行中发送有三条通道，别混成一条**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt`
+  的 `sendWhileBusy`）：
+  - 加入当前回合 → `POST /api/sessions/:id/prompt` + `streamingBehavior:"steer"`，
+    **不要**再开一条 `/api/chat` 流：这条消息是注入到跑着的那一轮里，文本会顺着已有的流过来，
+    再开一条只会两份 `live` 互相覆盖（`send()` 自己也带 `sending` 守卫）。
+  - 排队到下一轮 → 同一条通道 + `"followUp"`。宿主不回传队列内容（桌面端走 Electron IPC），
+    所以「已排队 N 条」是客户端自己的账：发出去时记账，等文本出现在历史里再撤销（`reconcileQueue()`）。
+  - 并行发送 → `POST /api/sessions/anonymous`（`noSession:true`，不落盘）→ `prompt` →
+    `GET /api/sessions/:id/stream`。这条会话的消息查不到（`messages/page` 返回空），
+    答案只能从流里取；关面板要 `runtime/stop`，否则匿名运行时一直挂着。
+  - `prompt` 的 body 没有 images 字段：运行中的消息一律不带图片，带图就明确提示，别悄悄丢。
+
 验证：`cd native && ./gradlew --offline -q :app:testDebugUnitTest`，出包
 `./gradlew :app:assembleRelease`，产物在 `native/app/build/outputs/apk/release/app-release.apk`，
 拷成 `apk/PiDeck-native-<版本>-release.apk` 后更新 `apk/SHA256SUMS.txt` 与 `apk/index.html`
-（页面只写当前版本，旧包删掉）。
+（页面只写当前版本，旧包删掉）。逐版改动记在根目录 `CHANGELOG.md`（0.5.0 起），
+每次发版往里加一段，别只靠提交信息。
