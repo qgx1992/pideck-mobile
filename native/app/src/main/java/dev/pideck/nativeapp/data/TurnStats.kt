@@ -12,7 +12,7 @@ import kotlin.math.roundToLong
  * 一轮回复的节奏数据：首字等待、总耗时、输出 tokens、两档速度。
  *
  * 口径参照桌面端（`out/main/index.js` 的 perf 结算注释），两处刻意不同（见 [TurnClock]）：
- * - `ttftMs` = 正文首个增量到达 − **SSE 首帧到达**（思考期间没有正文时退回首增量）；
+ * - `ttftMs` = 正文首个增量到达 − **本端 `/api/chat` 请求发出时刻**（思考期间没有正文时退回首增量）；
  * - `totalMs` = 宿主结算的 `durationMs`，没有就用「按下发送 → 收尾」；
  * - `tps` = outputTokens ÷ 首字 → 收尾；
  * - `endToEndTps` = outputTokens ÷ `totalMs`（含首字等待与发出前的排队）。
@@ -35,17 +35,19 @@ data class TurnStats(
 /**
  * 客户端秒表（epoch 毫秒，0 表示还没发生）。
  *
- * 三个时刻都要，是因为「按下发送 → 首帧」这段里混了两件不同的事：
- * 手机到宿主的建连/排队，和模型自己的思考。桌面端的秒表起在宿主收到请求那一刻，
- * 而手机按下发送到宿主收到之间还有一截（实测可到 20s+，见 `CHANGELOG.md` 0.5.32），
- * 把那一截算进首字会让两端口径没法对账。所以：
- * - [startedAt]：按下发送（只用于「全程」的兜底，以及没有 [firstFrameAt] 时的退路）；
- * - [firstFrameAt]：`/api/chat` 的 **SSE 首帧**到达 —— 首字的计时起点；
+ * 桌面端的秒表起在宿主 `sendPrompt` 那一刻（`notePromptRequested`），手机没有那个时刻，
+ * 只能用「本端 `/api/chat` 请求发出」当代理 —— 两者相差通常几十毫秒（实测 27ms），
+ * 所以两端口径能对上、四个数也能相加吻合（首字 + 解码 ≈ 全程）。
+ * - [startedAt]：按下发送（只用于「全程」的兜底，以及没有 [requestSentAt] 时的退路）；
+ * - [requestSentAt]：`/api/chat` 请求**发出**的时刻 —— 首字的计时起点；
  * - [firstContentAt]：第一个正文/思考增量的到达时刻。
+ *
+ * 曾经把起点定在「SSE 首帧到达」，结果把宿主收到请求后的排队（实测 2.4s）从首字里剔了出去：
+ * 手机显示 2.7s 而桌面显示 5.1s，同一轮对不上。现在改回请求发出时刻。
  */
 data class TurnClock(
     val startedAt: Long = 0L,
-    val firstFrameAt: Long = 0L,
+    val requestSentAt: Long = 0L,
     val firstContentAt: Long = 0L,
     val endedAt: Long = 0L,
 )
@@ -60,9 +62,9 @@ fun deriveTurnStats(clock: TurnClock?, outputTokens: Int?, metaTotalMs: Long? = 
     val started = clock?.startedAt ?: 0L
     val ended = clock?.endedAt ?: 0L
     val content = clock?.firstContentAt ?: 0L
-    // 首字起点优先用 SSE 首帧（它已经证明「请求到了宿主、流开了」），没有才退回按下发送。
-    val frame = clock?.firstFrameAt ?: 0L
-    val base = if (frame > 0L) frame else started
+    // 首字起点优先用「请求发出」那一刻（≈ 宿主的 startedAt），没有才退回按下发送。
+    val requestAt = clock?.requestSentAt ?: 0L
+    val base = if (requestAt > 0L) requestAt else started
     val measured = if (started > 0L && ended > started) ended - started else null
     val total = metaTotalMs?.takeIf { it > 0L } ?: measured
     val ttft = if (base > 0L && content > base && total != null) {

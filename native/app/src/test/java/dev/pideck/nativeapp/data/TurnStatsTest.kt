@@ -10,8 +10,8 @@ import org.junit.Test
 /**
  * 统计行（首字时间 / tok/s）的口径与格式。
  *
- * 口径参照桌面端 `out/main/index.js` 的 perf 结算，但在两处刻意不同：
- * 首字起点是 **SSE 首帧到达**（不是按下发送），生成速度只算「首字 → 收尾」那段。
+ * 口径参照桌面端 `out/main/index.js` 的 perf 结算：首字起点是 **本端发出 `/api/chat` 那一刻**
+ * （≈ 宿主的 `startedAt`），生成速度只算「首字 → 收尾」那段。
  */
 class TurnStatsTest {
 
@@ -19,10 +19,10 @@ class TurnStatsTest {
         startedAt: Long,
         firstContentAt: Long,
         endedAt: Long,
-        firstFrameAt: Long = 0L,
+        requestSentAt: Long = 0L,
     ) = TurnClock(
         startedAt = startedAt,
-        firstFrameAt = firstFrameAt,
+        requestSentAt = requestSentAt,
         firstContentAt = firstContentAt,
         endedAt = endedAt,
     )
@@ -45,20 +45,37 @@ class TurnStatsTest {
     }
 
     @Test
-    fun `首帧打点把「按下发送」到建连排队那段剔出首字`() {
-        // 按下 1.0s → 首帧 29.0s（建连/排队 28s）→ 首字 30.0s → 收尾 34.0s；400 tok
+    fun `首字从请求发出那一刻起算，按下后拼请求的本地耗时不计入`() {
+        // 按下 1.0s → 请求发出 3.0s（本地拼 payload 2s）→ 首字 4.0s → 收尾 9.0s；500 tok
         val stats = deriveTurnStats(
-            clock = clock(1_000L, 30_000L, 34_000L, firstFrameAt = 29_000L),
-            outputTokens = 400,
+            clock = clock(1_000L, 4_000L, 9_000L, requestSentAt = 3_000L),
+            outputTokens = 500,
         )
-        assertEquals("首字只算模型那 1.0s，不含排队", 1_000L, stats.ttftMs)
-        assertEquals("全程仍是你按下的那一刻到结束", 33_000L, stats.totalMs)
-        assertEquals(100.0, stats.tps!!, 0.001)          // 400 ÷ 4.0s
-        assertEquals(12.1212, stats.endToEndTps!!, 0.001) // 400 ÷ 33.0s
+        assertEquals("首字 = 首字 − 请求发出", 1_000L, stats.ttftMs)
+        assertEquals("全程仍是按下到结束", 8_000L, stats.totalMs)
+        assertEquals(100.0, stats.tps!!, 0.001)          // 500 ÷ 5.0s
+        assertEquals(62.5, stats.endToEndTps!!, 0.001)   // 500 ÷ 8.0s
     }
 
     @Test
-    fun `没有首帧时刻时退回按下发送`() {
+    fun `首字 + 解码 ≈ 全程（与桌面端同口径，四个数能相加吻合）`() {
+        // 实测那一轮：宿主 12.036s、1476 tok、首字 2.7s，但宿主排队 2.4s 要算进首字
+        val sent = 1_000L
+        val content = sent + 5_100L      // 首字 5.1s = 排队 2.4 + 模型 2.7
+        val ended = sent + 12_036L
+        val stats = deriveTurnStats(
+            clock = clock(sent, content, ended, requestSentAt = sent),
+            outputTokens = 1_476,
+        )
+        assertEquals(5_100L, stats.ttftMs)
+        assertEquals(12_036L, stats.totalMs)
+        assertEquals(212.8, stats.tps!!, 0.1)            // 1476 ÷ 6.936s
+        assertEquals(122.6, stats.endToEndTps!!, 0.1)    // 1476 ÷ 12.036s
+        assertEquals("首字 + 解码 = 全程", stats.totalMs, stats.ttftMs!! + (ended - content))
+    }
+
+    @Test
+    fun `没有请求发出时刻时退回按下发送`() {
         val stats = deriveTurnStats(clock = clock(1_000L, 4_000L, 6_000L), outputTokens = 100)
         assertEquals(3_000L, stats.ttftMs)
     }
