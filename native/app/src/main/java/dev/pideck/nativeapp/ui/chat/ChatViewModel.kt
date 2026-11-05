@@ -148,6 +148,7 @@ class ChatViewModel @Inject constructor(
     /** 已经算过统计的那条 assistant 消息（id），避免每次重拉历史都把秒表重算一遍。 */
     private var statsForMessageId: String? = null
     private var turnStartedAt = 0L
+    private var turnFirstFrameAt = 0L
     private var turnFirstTextAt = 0L
     private var turnFirstAnyAt = 0L
     private var turnEndedAt = 0L
@@ -1108,10 +1109,23 @@ class ChatViewModel @Inject constructor(
 
     private fun resetTurnClock(now: Long = System.currentTimeMillis()) {
         turnStartedAt = now
+        turnFirstFrameAt = 0L
         turnFirstTextAt = 0L
         turnFirstAnyAt = 0L
         turnEndedAt = 0L
         turnStats = null
+    }
+
+    /**
+     * `/api/chat` 的 SSE 首帧到达 —— 首字的计时起点。
+     *
+     * 按下发送到首帧之间是「手机 → 宿主的建连与排队」，不是模型在想；桌面端从宿主收到
+     * 请求就开始算，手机若也从按下算，同一条回复会凭空多出这段（实测能差 20s+），
+     * 两端口径就对不上了。
+     */
+    private fun markTurnFirstFrame(now: Long = System.currentTimeMillis()) {
+        if (turnStartedAt <= 0L || turnFirstFrameAt > 0L) return
+        turnFirstFrameAt = now
     }
 
     /**
@@ -1127,8 +1141,9 @@ class ChatViewModel @Inject constructor(
             else -> return
         }
         val first = if (turnFirstTextAt > 0L) turnFirstTextAt else turnFirstAnyAt
+        val base = if (turnFirstFrameAt > 0L) turnFirstFrameAt else turnStartedAt
         // 流式期间先上「首字 x.xs · 生成中…」，tok/s 要等落盘后拿到 usage 才算得出来。
-        turnStats = TurnStats(ttftMs = (first - turnStartedAt).coerceAtLeast(0L))
+        turnStats = TurnStats(ttftMs = (first - base).coerceAtLeast(0L))
     }
 
     /**
@@ -1143,6 +1158,7 @@ class ChatViewModel @Inject constructor(
         val clock = if (turnStartedAt > 0L && turnEndedAt > 0L) {
             TurnClock(
                 startedAt = turnStartedAt,
+                firstFrameAt = turnFirstFrameAt,
                 firstContentAt = if (turnFirstTextAt > 0L) turnFirstTextAt else turnFirstAnyAt,
                 endedAt = turnEndedAt,
             )
@@ -1153,6 +1169,7 @@ class ChatViewModel @Inject constructor(
         turnStats = turnStatsFromMeta(last.meta, clock).takeIf { !it.isEmpty }
         // 秒表只能用一次：下次重拉历史不能拿旧起点再算一遍。
         turnStartedAt = 0L
+        turnFirstFrameAt = 0L
         turnFirstTextAt = 0L
         turnFirstAnyAt = 0L
         turnEndedAt = 0L
@@ -1295,6 +1312,7 @@ class ChatViewModel @Inject constructor(
             )
             try {
                 api.chat(target, token, payload).collect { frame ->
+                    markTurnFirstFrame()
                     val snapshot = when {
                         frame.data.trim() == "[DONE]" -> merger.finish()
                         else -> {

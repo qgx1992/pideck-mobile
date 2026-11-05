@@ -11,11 +11,11 @@ import kotlin.math.roundToLong
 /**
  * 一轮回复的节奏数据：首字等待、总耗时、输出 tokens、两档速度。
  *
- * 口径照搬桌面端（`out/main/index.js` 的 perf 结算注释）：
- * - `ttftMs` = 正文首个增量到达的时刻 − 请求发出时刻（思考期间没有正文时退回首增量）；
- * - `totalMs` = 终态 − 请求发出时刻；
- * - `tps` = outputTokens ÷ 扣掉首字等待后的生成耗时；
- * - `endToEndTps` = outputTokens ÷ `totalMs`（含首字等待）。
+ * 口径参照桌面端（`out/main/index.js` 的 perf 结算注释），两处刻意不同（见 [TurnClock]）：
+ * - `ttftMs` = 正文首个增量到达 − **SSE 首帧到达**（思考期间没有正文时退回首增量）；
+ * - `totalMs` = 宿主结算的 `durationMs`，没有就用「按下发送 → 收尾」；
+ * - `tps` = outputTokens ÷ 首字 → 收尾；
+ * - `endToEndTps` = outputTokens ÷ `totalMs`（含首字等待与发出前的排队）。
  *
  * 桌面端的这组数**不在消息 meta 里**：主进程在流式过程中现测现算，走
  * `agentsRuntimeState` 边沿推送。手机上同理，只不过秒表由客户端自己打点
@@ -35,11 +35,17 @@ data class TurnStats(
 /**
  * 客户端秒表（epoch 毫秒，0 表示还没发生）。
  *
- * [startedAt] 取「按下发送」那一刻，比宿主的 `startedAt` 早一点点（排队、建连），
- * 与桌面端「请求发出」的口径一致 —— 用户感知的等待就是从按下开始。
+ * 三个时刻都要，是因为「按下发送 → 首帧」这段里混了两件不同的事：
+ * 手机到宿主的建连/排队，和模型自己的思考。桌面端的秒表起在宿主收到请求那一刻，
+ * 而手机按下发送到宿主收到之间还有一截（实测可到 20s+，见 `CHANGELOG.md` 0.5.32），
+ * 把那一截算进首字会让两端口径没法对账。所以：
+ * - [startedAt]：按下发送（只用于「全程」的兜底，以及没有 [firstFrameAt] 时的退路）；
+ * - [firstFrameAt]：`/api/chat` 的 **SSE 首帧**到达 —— 首字的计时起点；
+ * - [firstContentAt]：第一个正文/思考增量的到达时刻。
  */
 data class TurnClock(
     val startedAt: Long = 0L,
+    val firstFrameAt: Long = 0L,
     val firstContentAt: Long = 0L,
     val endedAt: Long = 0L,
 )
@@ -52,24 +58,26 @@ data class TurnClock(
  */
 fun deriveTurnStats(clock: TurnClock?, outputTokens: Int?, metaTotalMs: Long? = null): TurnStats {
     val started = clock?.startedAt ?: 0L
-    val measured = if (started > 0L && (clock?.endedAt ?: 0L) > started) {
-        clock!!.endedAt - started
-    } else {
-        null
-    }
-    val total = measured ?: metaTotalMs?.takeIf { it > 0L }
-    val ttft = if (started > 0L && (clock?.firstContentAt ?: 0L) > started && total != null) {
-        (clock!!.firstContentAt - started).coerceIn(0L, total)
+    val ended = clock?.endedAt ?: 0L
+    val content = clock?.firstContentAt ?: 0L
+    // 首字起点优先用 SSE 首帧（它已经证明「请求到了宿主、流开了」），没有才退回按下发送。
+    val frame = clock?.firstFrameAt ?: 0L
+    val base = if (frame > 0L) frame else started
+    val measured = if (started > 0L && ended > started) ended - started else null
+    val total = metaTotalMs?.takeIf { it > 0L } ?: measured
+    val ttft = if (base > 0L && content > base && total != null) {
+        (content - base).coerceIn(0L, total)
     } else {
         null
     }
     val tokens = outputTokens?.takeIf { it > 0 }
-    val decodeMs = if (total != null && ttft != null) (total - ttft).coerceAtLeast(0L) else null
+    // 生成速度只看「已经出字之后」那段，别把排队/建连/首字等待稀释进去。
+    val decodeMs = if (content > 0L && ended > content) ended - content else null
     return TurnStats(
         ttftMs = ttft,
         totalMs = total,
         outputTokens = tokens,
-        tps = if (tokens != null && decodeMs != null && decodeMs >= 100L) {
+        tps = if (tokens != null && decodeMs != null && decodeMs >= 100L && ttft != null) {
             tokens / (decodeMs / 1000.0)
         } else {
             null

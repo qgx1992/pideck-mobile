@@ -10,14 +10,22 @@ import org.junit.Test
 /**
  * 统计行（首字时间 / tok/s）的口径与格式。
  *
- * 口径对齐桌面端 `out/main/index.js` 的 perf 结算：
- * `ttftMs = 首字 − 请求发出`、`totalMs = 终态 − 请求发出`、
- * `tps = outputTokens ÷ (total − ttft)`、`endToEndTps = outputTokens ÷ total`。
+ * 口径参照桌面端 `out/main/index.js` 的 perf 结算，但在两处刻意不同：
+ * 首字起点是 **SSE 首帧到达**（不是按下发送），生成速度只算「首字 → 收尾」那段。
  */
 class TurnStatsTest {
 
-    private fun clock(startedAt: Long, firstContentAt: Long, endedAt: Long) =
-        TurnClock(startedAt = startedAt, firstContentAt = firstContentAt, endedAt = endedAt)
+    private fun clock(
+        startedAt: Long,
+        firstContentAt: Long,
+        endedAt: Long,
+        firstFrameAt: Long = 0L,
+    ) = TurnClock(
+        startedAt = startedAt,
+        firstFrameAt = firstFrameAt,
+        firstContentAt = firstContentAt,
+        endedAt = endedAt,
+    )
 
     private fun meta(json: String): JsonObject =
         Json.parseToJsonElement(json) as JsonObject
@@ -34,6 +42,25 @@ class TurnStatsTest {
         assertEquals(1_200, stats.outputTokens)
         assertEquals(300.0, stats.tps!!, 0.001)
         assertEquals(240.0, stats.endToEndTps!!, 0.001)
+    }
+
+    @Test
+    fun `首帧打点把「按下发送」到建连排队那段剔出首字`() {
+        // 按下 1.0s → 首帧 29.0s（建连/排队 28s）→ 首字 30.0s → 收尾 34.0s；400 tok
+        val stats = deriveTurnStats(
+            clock = clock(1_000L, 30_000L, 34_000L, firstFrameAt = 29_000L),
+            outputTokens = 400,
+        )
+        assertEquals("首字只算模型那 1.0s，不含排队", 1_000L, stats.ttftMs)
+        assertEquals("全程仍是你按下的那一刻到结束", 33_000L, stats.totalMs)
+        assertEquals(100.0, stats.tps!!, 0.001)          // 400 ÷ 4.0s
+        assertEquals(12.1212, stats.endToEndTps!!, 0.001) // 400 ÷ 33.0s
+    }
+
+    @Test
+    fun `没有首帧时刻时退回按下发送`() {
+        val stats = deriveTurnStats(clock = clock(1_000L, 4_000L, 6_000L), outputTokens = 100)
+        assertEquals(3_000L, stats.ttftMs)
     }
 
     @Test
