@@ -353,7 +353,12 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   **起点既不能用「按下发送」，也不能用「SSE 首帧到达」**：按下那一刻算进去，手机到宿主的建连/排队
   能吃掉 20s+（0.5.32 最初的坑：桌面 2s / 手机 28s）；改到首帧又反过来少了宿主收下请求后的排队
   （实测 2.4s，同一轮手机 2.7s / 桌面 5.1s）。请求发出时刻才对得上桌面，也让「首字 + 解码 ≈ 全程」闭合。
-  生成速度只取「首字 → 收尾」，别拿 `total − ttft`（会把排队稀释进分母）。
+  生成速度的分母是「**首个任意增量（含思考）** → 收尾」，与桌面 `firstDeltaAt` 同口径；
+  别用正文字（思考先行几百毫秒，同一条回复会比桌面快 5~10%，实测 161 vs 150），也别用
+  `total − ttft`（会把排队稀释进分母）。`TurnClock` 因此同时记 `firstContentAt`（正文，给首字）
+  与 `firstDeltaAt`（任意，给生成速度），`ChatViewModel.markTurnFirstContent()` 两个都打点。
+  桌面那行里的「均速」（`sessionStreamingTps`）是**整段会话**的平均流式速度，不是本轮，
+  别拿它跟手机的「全程」对账。
   跨设备 / 翻历史只能靠 meta 的 `durationMs`，而**只有 pi 后端有**
   （实测：pi = `{usage, durationMs, startedAt, endedAt}`，dsh = 只有 `usage`，acp = `null`）——
   那种情况只报端到端速度，别硬算「生成速度」。渲染在 `ui/chat/ChatScreen.kt` 的 `TurnStatsLine`
