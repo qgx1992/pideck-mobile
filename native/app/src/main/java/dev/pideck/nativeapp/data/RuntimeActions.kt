@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.data
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -60,6 +61,86 @@ object PermissionPresets {
 
     fun hintOf(id: String?): String =
         all.firstOrNull { it.id == id }?.hint ?: "桌面端返回的自定义预设"
+}
+
+/**
+ * 会话「权限位」按后端分发（判据照抄桌面端 `SecurityControl.tsx` + `ComposerComponents.tsx` 的屏蔽分支）：
+ *
+ * - pi（以及草稿会话那种 backend 为空的）→ **安全等级**（PiDeck 安全门，写 SecurityStore）；
+ * - dsh → **权限预设**（read-only / workspace-write / danger-full-access，走 DSH host 的 `/permission`）；
+ * - acp → 都不摆（权限由 agent CLI 自己的 session/request_permission 接管）；
+ * - imagegen / videogen → 都不摆（没有 pi/DSH runtime）。
+ *
+ * 两套机制不能互相顶替：把 DSH 的 `permissionPreset` 写到 pi 会话记录上，主机会在激活时拿这个
+ * 它不认识的预设去 apply，表现就是「调过一次权限之后再也不能继续对话」。
+ */
+enum class PrivilegeControl { SecurityLevel, PermissionPreset, None }
+
+fun privilegeControlFor(backend: String?): PrivilegeControl = when (backend?.lowercase()) {
+    "dsh" -> PrivilegeControl.PermissionPreset
+    "acp", "imagegen", "videogen" -> PrivilegeControl.None
+    else -> PrivilegeControl.SecurityLevel
+}
+
+/** 安全等级的一档（`/api/state` 的 `security.levels[i]`，与桌面端 `WebSecurityState` 同形）。 */
+data class SecurityLevel(
+    val id: String,
+    val name: String,
+    val description: String? = null,
+)
+
+/**
+ * `/api/state` 的 `security` 投影（与桌面端 `WebSecurityState` 同名同义）。
+ *
+ * 只保留选择器要的东西：工具规则 / 目录边界属于主进程与扩展的执行契约，客户端既不展示也不改。
+ * [sessionOverrides] 是「会话级覆盖」，没有条目就是跟随 [defaultLevelId]。
+ */
+data class SecurityState(
+    val enabled: Boolean = true,
+    val defaultLevelId: String? = null,
+    val levels: List<SecurityLevel> = emptyList(),
+    val sessionOverrides: Map<String, String> = emptyMap(),
+) {
+    fun levelOf(levelId: String?): SecurityLevel? = levels.firstOrNull { it.id == levelId }
+
+    /** 本会话的覆盖等级；null = 没有覆盖（跟随全局默认）。 */
+    fun overrideOf(sessionId: String?): String? = sessionId?.let { sessionOverrides[it] }
+
+    fun effectiveId(sessionId: String?): String? = overrideOf(sessionId) ?: defaultLevelId
+
+    fun labelOf(levelId: String?): String =
+        levelOf(levelId)?.name ?: (levelId ?: "未设置")
+}
+
+/**
+ * 解析 `security` 投影；拿不到等级表就返回 null（老主机的 `/api/state` 没有这个字段）。
+ *
+ * 宁可显示「主机没提供」，也不要拿一组假的内置等级去顶替 —— 点了会以 400 收场。
+ */
+fun parseSecurityState(root: JsonElement?): SecurityState? {
+    val obj = root as? JsonObject ?: return null
+    val levels = (obj["levels"] as? JsonArray).orEmpty().mapNotNull { element ->
+        val item = element as? JsonObject ?: return@mapNotNull null
+        val id = (item["id"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+            ?: return@mapNotNull null
+        SecurityLevel(
+            id = id,
+            name = (item["name"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() } ?: id,
+            description = (item["description"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() },
+        )
+    }
+    if (levels.isEmpty()) return null
+    val overrides = (obj["sessionOverrides"] as? JsonObject).orEmpty().mapNotNull { (key, value) ->
+        val levelId = (value as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+            ?: return@mapNotNull null
+        key to levelId
+    }.toMap()
+    return SecurityState(
+        enabled = (obj["enabled"] as? JsonPrimitive)?.booleanOrNull ?: true,
+        defaultLevelId = (obj["defaultLevelId"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() },
+        levels = levels,
+        sessionOverrides = overrides,
+    )
 }
 
 /** 把 `runtime/state` 的返回体解析成 [ContextUsage]；字段缺失就当没有。 */

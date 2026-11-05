@@ -119,6 +119,19 @@ interface PideckApi {
      */
     suspend fun updateSession(device: Device, token: String?, sessionId: String, patch: JsonObject)
 
+    /**
+     * 切 pi 会话的安全等级（`POST /api/sessions/:id/security-level`，`levelId = null` = 清除会话覆盖、跟随全局默认）。
+     *
+     * 与 DSH 权限预设是两套机制：服务端校验会话/后端/等级后写策略快照，返回最新投影；
+     * 不是 pi 会话会被拒（所以调用前先看 [privilegeControlFor]）。
+     */
+    suspend fun setSessionSecurityLevel(
+        device: Device,
+        token: String?,
+        sessionId: String,
+        levelId: String?,
+    ): SecurityState
+
     /** 回答 AI 的提问卡（`POST /api/ui-response`，body 由 [AskUi.body] 组装）。 */
     suspend fun respondUi(device: Device, token: String?, body: JsonObject)
 
@@ -465,6 +478,21 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
                 patch,
             )
         }
+    }
+
+    override suspend fun setSessionSecurityLevel(
+        device: Device,
+        token: String?,
+        sessionId: String,
+        levelId: String?,
+    ): SecurityState = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("levelId", levelId?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull)
+        }
+        val text = postJson(device, token, "/api/sessions/${encode(sessionId)}/security-level", body)
+        val root = runCatching { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
+        parseSecurityState(root?.get("security"))
+            ?: throw PideckException("security-level: 返回体里没有 security")
     }
 
 

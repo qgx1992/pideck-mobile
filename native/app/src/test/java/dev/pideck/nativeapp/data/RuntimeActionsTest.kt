@@ -104,6 +104,60 @@ class RuntimeActionsTest {
     }
 
     @Test
+    fun `privilege slot is dispatched by backend`() {
+        // pi（以及草稿会话那种 backend 空着的）→ 安全等级；dsh → 权限预设；其余不摆位。
+        assertEquals(PrivilegeControl.SecurityLevel, privilegeControlFor("pi"))
+        assertEquals(PrivilegeControl.SecurityLevel, privilegeControlFor(null))
+        assertEquals(PrivilegeControl.SecurityLevel, privilegeControlFor(""))
+        assertEquals(PrivilegeControl.PermissionPreset, privilegeControlFor("dsh"))
+        assertEquals(PrivilegeControl.PermissionPreset, privilegeControlFor("DSH"))
+        assertEquals(PrivilegeControl.None, privilegeControlFor("acp"))
+        assertEquals(PrivilegeControl.None, privilegeControlFor("imagegen"))
+        assertEquals(PrivilegeControl.None, privilegeControlFor("videogen"))
+    }
+
+    @Test
+    fun `security projection parses levels and the session override`() {
+        val raw = json.parseToJsonElement(
+            """
+            {"enabled":true,"defaultLevelId":"standard","levels":[
+              {"id":"off","name":"关闭","description":"完全放行","builtin":true},
+              {"id":"standard","name":"标准","builtin":true},
+              {"id":"strict","name":"严格","builtin":true}
+            ],"sessionOverrides":{"s1":"strict"}}
+            """.trimIndent(),
+        )
+        val security = parseSecurityState(raw)!!
+        assertTrue(security.enabled)
+        assertEquals(3, security.levels.size)
+        assertEquals("完全放行", security.levels.first().description)
+        assertEquals("standard", security.defaultLevelId)
+        assertEquals("strict", security.overrideOf("s1"))
+        assertNull(security.overrideOf("s2"))
+        assertEquals("strict", security.effectiveId("s1"))
+        assertEquals("standard", security.effectiveId("s2"))
+        assertEquals("标准", security.labelOf("standard"))
+    }
+
+    @Test
+    fun `security projection without levels is unavailable, not empty`() {
+        // 老主机的 /api/state 没有 security；宁可显示「没提供」也不要摆一套假等级去点出 400
+        assertNull(parseSecurityState(null))
+        assertNull(parseSecurityState(json.parseToJsonElement("""{"enabled":true}""")))
+        assertNull(parseSecurityState(json.parseToJsonElement("""{"levels":[]}""")))
+    }
+
+    @Test
+    fun `security projection keeps the switch off state`() {
+        val security = parseSecurityState(
+            json.parseToJsonElement("""{"enabled":false,"defaultLevelId":"off","levels":[{"id":"off"}]}"""),
+        )!!
+        assertFalse(security.enabled)
+        // name 缺省时用 id 顶位，不能显示空白行
+        assertEquals("off", security.levelOf("off")!!.name)
+    }
+
+    @Test
     fun `permission presets match the desktop ids`() {
         assertEquals(listOf("read-only", "workspace-write", "danger-full-access"), PermissionPresets.all.map { it.id })
         assertEquals("只读", PermissionPresets.labelOf("read-only"))

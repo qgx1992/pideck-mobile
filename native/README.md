@@ -53,12 +53,23 @@ cd native
 | 位置 | 做什么 | 走哪个接口 |
 |---|---|---|
 | 顶栏溢出菜单 | 导出会话 HTML，存到「下载/PiDeck」（Android 10+ 走 MediaStore，不需要存储权限） | `GET /api/sessions/:id/export-html` |
-| 顶栏溢出菜单 | 权限预设（桌面端的「计划模式」那组）：只读 / 工作区可写 / 完全访问 | `POST runtime/permission` + 写回会话记录 |
+| 顶栏溢出菜单 | **权限位按后端分发**：pi 会话显示「安全等级」（关闭 / 标准 / 严格 + 自定义等级，可切「跟随全局默认」）；dsh 会话显示「权限预设」：只读 / 工作区可写 / 完全访问 | pi：`POST /api/sessions/:id/security-level`；dsh：`POST runtime/permission` + 写回会话记录 |
 | 顶栏溢出菜单 / 顶栏胶囊 | 上下文用量（百分比环的等价物）+ 立即压缩，可带「保留什么」的提示词 | `POST runtime/state`、`POST runtime/compact` |
 | 输入框打 `@` | 递归扫工作区后补全路径（跳过 .git / node_modules / build 等，上限 90 个目录、3000 个文件），支持子序列模糊匹配；目录补尾斜杠 `@src/`，含空格写成 `@"my file.kt"` | `GET /api/files?dir=` 逐目录广度优先 |
 | 输入框打 `/` | 客户端内置 `/new`、`/compact [提示词]`，其后是本机真实存在的全部宿主命令（扩展 / 模板 / 技能），技能按 `/skill:名称` 插入 | `POST runtime/commands`（`/new`、`/compact` 由客户端拦截） |
 
 这几项都需要 `target`（`agentId + runtimeGeneration`），所以运行时没起来时菜单会说明原因而不是静默失败。
+
+安全等级与权限预设是**两套机制**，别看成一个东西：
+
+- `permissionPreset` 是 DSH 的后端字段（`read-only` / `workspace-write` / `danger-full-access`）。pi 那边没有这个概念，
+  往 pi 会话记录里写它会让会话在激活时对不上后端预设，表现就是「调完之后这个会话再也发不出消息」。
+- pi 的安全等级走 `SecurityStore`：服务端校验后端与等级后落盘并返回最新投影，客户端**不本地猜结果**；
+  `levelId: null` 是清除会话级覆盖、跟随全局默认。`/api/state` 的 `security` 里没有 `levels` 时（老主机），
+  面板显示「主机没返回安全等级配置」而不是摆一排假等级。
+- 后端分发在 `data/RuntimeActions.kt` 的 `privilegeControlFor`：`dsh` → 权限预设；`acp` / `imagegen` / `videogen` → 不摆位；
+  其余（含空值与草稿会话）→ 安全等级。开一个 pi 会话时如果记录里还残留 `permissionPreset`，`ChatViewModel`
+  会静默 `PATCH {"permissionPreset": null}` 清掉，修好已经被写坏的会话。
 
 ## 包名（0.5.0 起）
 

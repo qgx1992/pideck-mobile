@@ -20,6 +20,11 @@ import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.data.ChatPayloads
 import dev.pideck.nativeapp.data.PendingUiRequest
 import dev.pideck.nativeapp.data.PideckJson
+import dev.pideck.nativeapp.data.PideckState
+import dev.pideck.nativeapp.data.PrivilegeControl
+import dev.pideck.nativeapp.data.SecurityState
+import dev.pideck.nativeapp.data.parseSecurityState
+import dev.pideck.nativeapp.data.privilegeControlFor
 import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.ReplyMerger
@@ -147,7 +152,9 @@ class ChatViewModel @Inject constructor(
             title = cached?.title?.ifBlank { null } ?: "会话"
             sessionModel = cached?.model.toSessionModel()
             thinkingLevel = cached?.thinkingLevel
+            backend = cached?.backend
             permissionPreset = cached?.permissionPreset
+            StateCache.get(deviceId)?.security?.let { security = parseSecurityState(it) }
             // 从冷启动 / 历史跳进来时缓存里没有这条会话：模型与思考档位就都显示不出来。
             // 拉一次 /api/state 把记录补上（只在缺记录时才发这一趟）。
             if (cached == null && found != null) {
@@ -155,10 +162,13 @@ class ChatViewModel @Inject constructor(
                     .onSuccess { result ->
                         if (result is StateFetch.Fresh) {
                             StateCache.put(deviceId, result.state)
-                            adoptSession(result.state.sessions.firstOrNull { it.id == sessionId })
+                            adoptState(result.state)
                         }
                     }
             }
+            // 旧版本把 DSH 的权限预设写进了 pi 会话记录，那一份会让主机在激活时 apply 一个
+            // 它不认识的预设（用户反馈「调过权限就不能继续对话」）。看到就清掉，让会话自己恢复。
+            clearStalePermissionPreset(cached)
             refreshHistory()
             startWatching()
             startStatePolling()
@@ -175,8 +185,53 @@ class ChatViewModel @Inject constructor(
         if (record == null) return
         record.model.toSessionModel()?.let { sessionModel = it }
         record.thinkingLevel?.takeIf { it.isNotBlank() }?.let { thinkingLevel = it }
-        record.permissionPreset?.takeIf { it.isNotBlank() }?.let { permissionPreset = it }
+        record.backend?.takeIf { it.isNotBlank() }?.let { backend = it }
+        // 权限预设是 DSH 的东西，pi 会话上出现就是旧客户端留下的脏值（见 clearStalePermissionPreset）
+        if (securityControl == PrivilegeControl.PermissionPreset) {
+            record.permissionPreset?.takeIf { it.isNotBlank() }?.let { permissionPreset = it }
+        }
         record.title?.takeIf { it.isNotBlank() }?.let { if (title == "会话") title = it }
+        clearStalePermissionPreset(record)
+    }
+
+    /** 一次 `/api/state` 的结果：本会话的会话记录与安全等级投影都从这一份里对齐。 */
+    private fun adoptState(state: PideckState) {
+        state.security?.let { security = parseSecurityState(it) }
+        adoptSession(state.sessions.firstOrNull { it.id == sessionId })
+    }
+
+    /**
+     * 清掉旧版本写到 pi 会话上的 DSH 权限预设。
+     *
+     * 只在「后端确定不是 dsh」且有值时发一次；传 null 就是清空（服务端 `permissionPreset?: string | null`）。
+     * 失败就算了：会话能不能继续以主机为准，这里只是帮它把脏值擦干。
+     */
+    private var stalePermissionCleared = false
+
+    private fun clearStalePermissionPreset(record: Session?) {
+        if (stalePermissionCleared) return
+        if (record == null) return
+        val target = device ?: return
+        // 后端未知时别动手：DSH 会话的记录里本来就有预设，误清等于把用户的选择删了
+        val known = backend?.takeIf { it.isNotBlank() } ?: return
+        if (known.equals("dsh", ignoreCase = true)) return
+        if (securityControl != PrivilegeControl.SecurityLevel) return
+        if (record.permissionPreset.isNullOrBlank()) {
+            stalePermissionCleared = true
+            return
+        }
+        stalePermissionCleared = true
+        permissionPreset = null
+        viewModelScope.launch {
+            runCatching {
+                api.updateSession(
+                    target,
+                    token,
+                    sessionId,
+                    buildJsonObject { put("permissionPreset", kotlinx.serialization.json.JsonNull) },
+                )
+            }
+        }
     }
 
     // ---- 运行时动作：权限预设 / 上下文用量 / 压缩 / 导出 HTML ----
@@ -197,6 +252,84 @@ class ChatViewModel @Inject constructor(
 
     var presetBusy by mutableStateOf(false)
         private set
+
+    /**
+     * 本会话的后端（pi / dsh / acp …）；草稿会话与旧缓存里可能没有，null 按 pi 处理。
+     *
+     * 权限位摆哪个控件全靠它（见 [PrivilegeControl]）：pi 是安全等级，dsh 是权限预设。
+     */
+    var backend by mutableStateOf<String?>(null)
+        private set
+
+    val securityControl: PrivilegeControl get() = privilegeControlFor(backend)
+
+    /** pi 会话的安全等级投影（`/api/state` 的 `security`）；没拿到就是 null。 */
+    var security by mutableStateOf<SecurityState?>(null)
+        private set
+
+    var securityBusy by mutableStateOf(false)
+        private set
+
+    /** 本会话当前生效的等级 id（会话覆盖 > 全局默认）。 */
+    val securityLevelId: String? get() = security?.effectiveId(sessionId)
+
+    val securityOverrideId: String? get() = security?.overrideOf(sessionId)
+
+    /** 头部/菜单上那一行文字：等级名 + （覆盖时）「仅本会话」。 */
+    val securityLevelLabel: String
+        get() {
+            val state = security ?: return "主机未提供"
+            val id = state.effectiveId(sessionId)
+            val name = state.labelOf(id)
+            return if (state.overrideOf(sessionId) != null) "$name（仅本会话）" else name
+        }
+
+    /**
+     * 重读安全等级投影（`/api/state`）。
+     *
+     * 只为了 `security` 这一块：点开安全等级面板时现拉一次，不必等到 5s 轮询。
+     */
+    fun refreshSecurity() {
+        val target = device ?: return
+        viewModelScope.launch {
+            runCatching { api.state(target, token, null) }
+                .onSuccess { result ->
+                    if (result is StateFetch.Fresh) {
+                        StateCache.put(deviceId, result.state)
+                        adoptState(result.state)
+                    }
+                }
+                .onFailure { error = describeConnectionError(it) }
+        }
+    }
+
+    /**
+     * 切 pi 会话的安全等级；`levelId = null` 清除会话覆盖、跟随全局默认。
+     *
+     * 不本地猜结果：服务端会校验后端与等级，返回最新投影；失败就停在真实等级上。
+     */
+    fun chooseSecurityLevel(levelId: String?) {
+        val target = device ?: return
+        if (securityControl != PrivilegeControl.SecurityLevel) return
+        viewModelScope.launch {
+            securityBusy = true
+            try {
+                val fresh = api.setSessionSecurityLevel(target, token, sessionId, levelId)
+                security = fresh
+                actionNote = if (levelId == null) {
+                    "安全等级已跟随全局默认（${fresh.labelOf(fresh.defaultLevelId)}）"
+                } else {
+                    "安全等级已切到「${fresh.labelOf(levelId)}」"
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                error = describeConnectionError(e)
+            } finally {
+                securityBusy = false
+            }
+        }
+    }
 
     var exportBusy by mutableStateOf(false)
         private set
@@ -241,7 +374,10 @@ class ChatViewModel @Inject constructor(
                 }
                 val usage = api.runtimeState(target, token, runtime)
                 contextUsage = usage
-                usage.permissionPreset?.takeIf { it.isNotBlank() }?.let { permissionPreset = it }
+                // runtime 的 permissionPreset 只属于 DSH；pi 会话读它等于把没用的字段摊到界面上
+                if (securityControl == PrivilegeControl.PermissionPreset) {
+                    usage.permissionPreset?.takeIf { it.isNotBlank() }?.let { permissionPreset = it }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -254,9 +390,15 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** 切换权限预设（桌面端叫「计划模式」的那组：只读 / 工作区可写 / 完全访问）。 */
+    /**
+     * 切换 DSH 权限预设（read-only / workspace-write / danger-full-access）。
+     *
+     * **只给 dsh 会话用**：pi 会话的权限位是安全等级（[chooseSecurityLevel]），把预设写到
+     * pi 记录上会让主机下次激活拿它不认识的预�去 apply，直接卡死后续对话。
+     */
     fun choosePermission(preset: String) {
         val target = device ?: return
+        if (securityControl != PrivilegeControl.PermissionPreset) return
         viewModelScope.launch {
             presetBusy = true
             try {
@@ -402,9 +544,7 @@ class ChatViewModel @Inject constructor(
                                     .firstOrNull { it.sessionId == sessionId }
                                 if (next?.requestId != pendingAsk?.requestId) askError = null
                                 pendingAsk = next
-                                adoptSession(
-                                    result.state.sessions.firstOrNull { it.id == sessionId },
-                                )
+                                adoptState(result.state)
                             }
                         }
                 }

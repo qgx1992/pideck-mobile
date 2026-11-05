@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -121,6 +122,7 @@ import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.ui.theme.ControlShape
 import dev.pideck.nativeapp.ui.theme.softPress
 import dev.pideck.nativeapp.data.ImagePrep
+import dev.pideck.nativeapp.data.PrivilegeControl
 import dev.pideck.nativeapp.data.FileNode
 import dev.pideck.nativeapp.data.HostCommand
 import dev.pideck.nativeapp.data.PendingImage
@@ -239,6 +241,7 @@ fun ChatScreen(
     // 顶栏溢出口：导出 HTML / 权限预设 / 上下文用量
     var showMore by remember { mutableStateOf(false) }
     var showPermission by remember { mutableStateOf(false) }
+    var showSecurity by remember { mutableStateOf(false) }
     var showContext by remember { mutableStateOf(false) }
     // 图片附件：系统相册多选；粘贴走剪贴板
     val imagePicker = rememberLauncherForActivityResult(
@@ -363,23 +366,46 @@ fun ChatScreen(
                                     viewModel.exportHtml()
                                 },
                             )
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text("权限预设")
-                                        Text(
-                                            dev.pideck.nativeapp.data.PermissionPresets.labelOf(viewModel.permissionPreset),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                },
-                                leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
-                                onClick = {
-                                    showMore = false
-                                    showPermission = true
-                                },
-                            )
+                            // 权限位按后端分发：pi → 安全等级（安全门），dsh → 权限预设，acp / 生图生视频 → 不摆。
+                            // 以前这里不分后端一律摆「权限预设」，调到 pi 会话上会写坏记录，后续对话起不来。
+                            when (viewModel.securityControl) {
+                                PrivilegeControl.SecurityLevel -> DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text("安全等级")
+                                            Text(
+                                                viewModel.securityLevelLabel,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Shield, contentDescription = null) },
+                                    onClick = {
+                                        showMore = false
+                                        viewModel.refreshSecurity()
+                                        showSecurity = true
+                                    },
+                                )
+                                PrivilegeControl.PermissionPreset -> DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text("权限预设")
+                                            Text(
+                                                dev.pideck.nativeapp.data.PermissionPresets.labelOf(viewModel.permissionPreset),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                                    onClick = {
+                                        showMore = false
+                                        showPermission = true
+                                    },
+                                )
+                                PrivilegeControl.None -> Unit
+                            }
                             DropdownMenuItem(
                                 text = {
                                     Column {
@@ -752,6 +778,19 @@ fun ChatScreen(
             },
         )
     }
+    if (showSecurity) {
+        SecurityLevelSheet(
+            security = viewModel.security,
+            sessionId = viewModel.sessionId,
+            busy = viewModel.securityBusy,
+            onPick = { levelId ->
+                viewModel.chooseSecurityLevel(levelId)
+                showSecurity = false
+            },
+            onRefresh = { viewModel.refreshSecurity() },
+            onDismiss = { showSecurity = false },
+        )
+    }
     if (showPermission) {
         PermissionSheet(
             current = viewModel.permissionPreset,
@@ -768,6 +807,9 @@ fun ChatScreen(
             usage = viewModel.contextUsage,
             busy = viewModel.contextBusy,
             compactBusy = viewModel.compactBusy,
+            control = viewModel.securityControl,
+            securityLevelLabel = viewModel.securityLevelLabel,
+            permissionLabel = dev.pideck.nativeapp.data.PermissionPresets.labelOf(viewModel.permissionPreset),
             onRefresh = { viewModel.refreshContext() },
             onCompact = { prompt -> viewModel.compact(prompt) },
             onDismiss = { showContext = false },

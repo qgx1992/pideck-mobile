@@ -73,6 +73,18 @@ class StateDecodeTest {
     }
 
     @Test
+    fun `security projection decodes from the state payload`() {
+        val state = PideckJson.decodeFromString(PideckState.serializer(), sample())
+        val security = parseSecurityState(state.security)
+        assertTrue(security != null)
+        assertEquals("off", security!!.defaultLevelId)
+        assertTrue(security.levelOf("off") != null)
+        // 草稿会话没有会话级覆盖，取全局默认
+        assertEquals("off", security.effectiveId("sess-1"))
+        assertEquals("off", security.labelOf("off"))
+    }
+
+    @Test
     fun `decode failure is reported as a format problem`() {
         val text = describeConnectionError(SerializationException("boom"))
         assertTrue(text.contains("格式"))
