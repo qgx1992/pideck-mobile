@@ -342,13 +342,17 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
     答案只能从流里取；关面板要 `runtime/stop`，否则匿名运行时一直挂着。
   - `prompt` 的 body 没有 images 字段：运行中的消息一律不带图片，带图就明确提示，别悄悄丢。
 
-- **回合统计行（首字 / tok/s）是壳自己打点的**（`native/app/src/main/java/dev/pideck/nativeapp/data/TurnStats.kt`）：
-  桌面端那一行数是主进程现测的（`out/main/index.js` 的 perf：`ttftMs = 首字 − 请求发出`、
-  `tps = outputTokens ÷ (total − ttft)`、`endToEndTps = outputTokens ÷ total`），走 `agentsRuntimeState`
-  边沿推送，**不在消息 meta 里**，手机订不到。所以本端自己开秒表：`ChatViewModel.send()` 里
-  `resetTurnClock()`，流里首个增量 `markTurnFirstContent()`（正文优先、reasoning 兜底，对应桌面
-  `firstTextAt → firstDeltaAt`），收尾记 `turnEndedAt`，落盘后 `settleTurnStats()` 用
-  `meta.usage.outputTokens` 结算。跨设备 / 翻历史只能靠 meta 的 `durationMs`，而**只有 pi 后端有**
+- **回合统计行（首字 / tok/s）是本端自己打点的**（`native/app/src/main/java/dev/pideck/nativeapp/data/TurnStats.kt`）：
+  桌面端那一行数是主进程现测的（`out/main/index.js` 的 perf：起点 `requestedAt` 是宿主**收到** prompt 的时刻，
+  `firstDeltaAt`/`firstTextAt` 由 agent 事件流打点），走 `agentsRuntimeState` 边沿推送，
+  **不在消息 meta 里**，手机订不到。所以本端自己开秒表：`ChatViewModel.send()` 里 `resetTurnClock()`（记按下发送），
+  `/api/chat` 的**首个 SSE 帧**到达时 `markTurnFirstFrame()`（这是首字的起点），流里首个增量
+  `markTurnFirstContent()`（正文优先、reasoning 兜底，对应桌面 `firstTextAt → firstDeltaAt`），
+  收尾记 `turnEndedAt`，落盘后 `settleTurnStats()` 用 `meta.usage.outputTokens` 结算。
+  **起点不能用「按下发送」**：手机到宿主的建连/排队能吃掉 20s+（0.5.32 就是被这个坑出来的，
+  用户看到「桌面 2s / 手机 28s」），那段时间与模型无关，算进首字就永远对不上账。
+  生成速度同样只取「首字 → 收尾」，别拿 `total − ttft`（会把排队稀释进分母）。
+  跨设备 / 翻历史只能靠 meta 的 `durationMs`，而**只有 pi 后端有**
   （实测：pi = `{usage, durationMs, startedAt, endedAt}`，dsh = 只有 `usage`，acp = `null`）——
   那种情况只报端到端速度，别硬算「生成速度」。渲染在 `ui/chat/ChatScreen.kt` 的 `TurnStatsLine`
   （输入条上方一行 `labelSmall`；没有可显示的数时整行不渲染，别留空行把输入条顶下去）。
