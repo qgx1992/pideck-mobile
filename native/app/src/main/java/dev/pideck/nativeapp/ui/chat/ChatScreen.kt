@@ -139,7 +139,10 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     // 侧栏开着时返回键先收侧栏，而不是直接退出去
     BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
-    var draft by remember { mutableStateOf("") }
+    // 草稿按会话各自保存：换会话再回来，写了一半的内容还在
+    var draft by remember(viewModel.sessionId) {
+        mutableStateOf(ChatDrafts.get(viewModel.sessionId))
+    }
 
     // 拍平成「行」：连续的过程条目（思考 / 工具）合成一个过程组，正文回答单独成行。
     val rows = remember(viewModel.items, viewModel.live, viewModel.streaming) {
@@ -370,7 +373,10 @@ fun ChatScreen(
                 }
                 Composer(
                 value = draft,
-                onValueChange = { draft = it },
+                onValueChange = { text ->
+                    draft = text
+                    ChatDrafts.put(viewModel.sessionId, text)
+                },
                 sending = viewModel.streaming,
                 images = viewModel.images,
                 imageError = viewModel.imageError,
@@ -380,6 +386,7 @@ fun ChatScreen(
                 onSend = {
                     val text = draft
                     draft = ""
+                    ChatDrafts.clear(viewModel.sessionId)
                     atBottom = true
                     viewModel.send(text)
                 },
@@ -514,6 +521,7 @@ fun ChatScreen(
         onInsertMention = { path ->
             val needsSpace = draft.isNotEmpty() && !draft.endsWith(" ")
             draft = draft + (if (needsSpace) " " else "") + "@" + path + " "
+            ChatDrafts.put(viewModel.sessionId, draft)
             showWorkspace = false
             atBottom = true
         },

@@ -187,7 +187,6 @@ fun SessionDrawer(
                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f),
                                 shape = RoundedCornerShape(12.dp),
                             )
-                            .padding(vertical = 2.dp),
                     ) {
                         DrawerGroupHeader(
                             name = group.projectName.ifBlank { "未命名项目" },
@@ -267,7 +266,8 @@ private fun DrawerGroupHeader(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onToggle, onLongClick = onLongPress)
-            .padding(start = 12.dp, end = 20.dp, top = 14.dp, bottom = 4.dp),
+            // 上下留白取同一值：卡片顶边到名称、名称到第一条会话看起来是等距的
+            .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -309,7 +309,8 @@ private fun DrawerSessionRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-                .padding(start = 34.dp, end = 20.dp, top = 9.dp, bottom = 9.dp),
+                // 左 34dp = 卡片 12 + 箭头 18 + 间距 4，和组名左缘对齐
+                .padding(start = 34.dp, end = 12.dp, top = 9.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
