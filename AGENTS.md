@@ -303,9 +303,11 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   记成本地默认（0.5.25 记过，0.5.26 撤了：猜「上次用的」比跟 pi 对齐更容易让人困惑）。
   列表行与聊天页顶栏的后端标记统一走 `AgentBackend.badgeOf(backend, acpToolName)`，别各写一份；
   渲染用共用的 `ui/theme/Controls.kt` 的 `BackendBadge`。
-  注意**会话列表有两份行布局**：`ui/sessions/SessionsScreen.kt` 的 `SessionRow`（全部会话）与
-  `ui/home/HomeScreen.kt` 的 `RecentSessionRow`（首页「最近的会话」）—— 0.5.26 只改了前者，
-  用户装完在首页什么也看不到。加任何行级元素都要两处一起改。
+  注意**会话行有三份布局**：`ui/sessions/SessionsScreen.kt` 的 `SessionRow`（全部会话）、
+  `ui/home/HomeScreen.kt` 的 `RecentSessionRow`（首页「最近的会话」）、
+  `ui/chat/SessionDrawer.kt` 的 `DrawerSessionRow`（聊天页左侧抽屉）—— 0.5.26 改了第一处，
+  0.5.27 补了第二处，用户又发现抽屉里没有（0.5.28 补齐）。加任何行级元素都要三处一起改，
+  改完在三个入口各看一眼，别只测「全部会话」。
 - **live 联调测试别拿 idle 运行时当判据**：`RuntimeStateLiveTest` 曾经挑 `runtimes.firstOrNull { !it.isRunning }`，
   而 idle 的 runtime 上下文窗口已经卸载（`contextWindow = 0`）→ 必红。挑正在跑的那个，
   没有在跑的才 `assumeTrue` 跳过。

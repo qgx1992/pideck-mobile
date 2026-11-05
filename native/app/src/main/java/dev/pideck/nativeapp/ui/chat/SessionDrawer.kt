@@ -3,6 +3,7 @@ package dev.pideck.nativeapp.ui.chat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.clip
+import dev.pideck.nativeapp.ui.theme.BackendBadge
 import dev.pideck.nativeapp.ui.theme.softPress
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.saveable.rememberSaveable
+import dev.pideck.nativeapp.data.AgentBackend
 import dev.pideck.nativeapp.data.SessionActivity
 import dev.pideck.nativeapp.ui.common.SearchField
 import androidx.compose.material.icons.filled.Settings
@@ -227,6 +229,9 @@ fun SessionDrawer(
                                     session = session,
                                     status = SessionActivity.statusOf(session.id),
                                     current = session.id == currentSessionId,
+                                    acpToolName = state?.acpTools
+                                        ?.firstOrNull { it.id == session.acpToolId }
+                                        ?.name,
                                     onClick = {
                                         if (session.id != currentSessionId) onPickSession(session.id)
                                     },
@@ -324,6 +329,7 @@ private fun DrawerSessionRow(
     session: Session,
     status: SessionActivity.Status,
     current: Boolean,
+    acpToolName: String? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -355,11 +361,21 @@ private fun DrawerSessionRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    relativeTime(session.updatedAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        relativeTime(session.updatedAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // 后端标记：和列表页 / 首页「最近的会话」同一枚（ui/theme/Controls.kt 的 BackendBadge）。
+                    // 这一栏最窄（390dp 机器上抽屉 300dp 左右），所以只留 3dp 间距、不给长名字换行。
+                    BackendBadge(
+                        label = AgentBackend.badgeOf(session.backend, acpToolName),
+                        muted = session.backend.isNullOrBlank() || session.backend == "pi",
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
             }
         }
     }

@@ -12,6 +12,22 @@ PiDeck 手机客户端（Android，Kotlin + Jetpack Compose）。
 
 ---
 
+## 0.5.28 — 2026-11-05
+
+**后端标记补齐第三处：聊天页左侧抽屉的会话行。**
+
+0.5.27 只覆盖了首页「最近的会话」与「全部会话」两处，聊天页左上角抽屉里的会话行
+（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/SessionDrawer.kt` 的 `DrawerSessionRow`）
+还是只有一个时间。现在三处列表同一枚 `BackendBadge`：
+
+- 抽屉行的时间右侧加标记，ACP 工具名从 `state.acpTools` 按 `acpToolId` 查。
+- 抽屉最窄（390dp 机器上约 300dp），所以时间文本用 `weight(1f, fill = false)` 让位，
+  标记只留 6dp 间距、单行不换行。
+- `AgentBackend.badgeOf` 的返回类型从 `String?` 收紧为 `String`（每个分支都有值），
+  调用处不必再写 `?: "Pi"`。
+
+单测仍 180 条。
+
 ## 0.5.27 — 2026-11-05
 
 **后端标记补到首页「最近的会话」。**
