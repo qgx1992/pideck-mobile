@@ -305,15 +305,23 @@ private fun DrawerSessionRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
+    // 选中态按「卡片里的一条」来做：缩进 + 圆角，不是通栏的方块。
+    // 通栏方块会贴到工作区卡片的直边和圆角上，看着像贴了块不同材质的胶带。
     val background =
-        if (current) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
-    Surface(color = background) {
+        if (current) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f) else Color.Transparent
+    Surface(
+        color = background,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .softPress(RoundedCornerShape(8.dp), onClick = onClick, onLongClick = onLongClick)
-                // 左 34dp = 卡片 12 + 箭头 18 + 间距 4，和组名左缘对齐
-                .padding(start = 34.dp, end = 12.dp, top = 9.dp, bottom = 9.dp),
+                // 左 29dp + 外面 5dp 缩进 = 34dp：卡片 12 + 箭头 18 + 间距 4，和组名左缘对齐
+                .padding(start = 29.dp, end = 7.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
