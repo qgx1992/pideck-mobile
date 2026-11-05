@@ -375,6 +375,19 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   （输入条上方一行 `labelSmall`）——**这一行常驻**，缺项用 `—` 占位（`formatTurnStats` 永远返回
   非空串，`stats` 为 null 也照样给占位）。用户明确要的（0.5.32）：忽隐忽现会把输入条顶来顶去，
   宁可显示一排破折号。
+- **缓存命中率放在上下文弹层里，不是统计行**（`native/app/src/main/java/dev/pideck/nativeapp/data/CacheStat.kt`）：
+  口径与桌面端 `getSessionCacheHitStats` / pi CLI footer 的 `latestCacheHitRate` 一致 ——
+  `cacheRead / (input + cacheRead + cacheWrite) × 100`。**分母三个字段都要算**：`inputTokens` 只是未命中部分，
+  只除 input 会算出 >100% 的怪数。数据在每条 assistant 消息已落盘的 `meta.usage` 里
+  （`cacheReadTokens` / `cacheWriteTokens` / `inputTokens`），不需要运行时活着、也不需要流式数据。
+  两条展示口径：`latestPercent` = **最新一页**里最后一条带 usage 的 assistant（历史接口从新到旧翻页，
+  把各页拼成数组后末尾其实是最早那条，所以用 `CacheStatBuilder.addPage()` 逐页喂，见注释）；
+  `averagePercent` = 全部 assistant 的**简单平均**（与桌面 `average` 同口径，不按 token 加权）。
+  **不要**放进统计行：那一行是速度（首字 / tok/s），缓存率是成本；也不要放进会话列表 ——
+  不同会话的命中率不可比（新开会话必然低）。
+  刷新时机只有「打开上下文弹层 / 点重新读取」，不跟着每轮跑：翻完一个会话最多 10 页请求，
+  而命中率一轮才变一次。字段全缺（acp 的 meta 是 null）时显示 `—`，**有输入但没 cacheRead 是真 0%**，
+  两者要分开（`cacheHitOf()` 返回 null vs 0.0）。
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
   不做「有一张卡但不知道在问什么」。展开内容走 `AnimatedVisibility`，选项列仍是 `heightIn(max = 320.dp)` 内部滚动。

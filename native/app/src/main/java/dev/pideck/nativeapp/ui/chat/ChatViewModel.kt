@@ -20,6 +20,8 @@ import dev.pideck.nativeapp.data.MessageImage
 import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.data.BusySendMode
 import dev.pideck.nativeapp.data.ChatMessage
+import dev.pideck.nativeapp.data.CacheStat
+import dev.pideck.nativeapp.data.CacheStatBuilder
 import dev.pideck.nativeapp.data.ChatPayloads
 import dev.pideck.nativeapp.data.PendingUiRequest
 import dev.pideck.nativeapp.data.PideckJson
@@ -316,6 +318,18 @@ class ChatViewModel @Inject constructor(
     var compactBusy by mutableStateOf(false)
         private set
 
+    /**
+     * 缓存命中率（最近一轮 + 会话平均）。
+     *
+     * 与上下文用量不同，它不需要运行时活着 —— 数据在每条 assistant 消息的 `meta.usage` 里，
+     * 翻一遍历史就能算。所以它跟着上下文弹层刷新（打开弹层时拉，不额外定时轮询）。
+     */
+    var cacheStat by mutableStateOf<CacheStat?>(null)
+        private set
+
+    var cacheBusy by mutableStateOf(false)
+        private set
+
     var permissionPreset by mutableStateOf<String?>(null)
         private set
 
@@ -505,6 +519,40 @@ class ChatViewModel @Inject constructor(
                 actionNote = "读取上下文用量失败：${describeConnectionError(e)}"
             } finally {
                 contextBusy = false
+            }
+        }
+    }
+
+    /**
+     * 拉缓存命中率：翻历史累加每轮 assistant 的 `meta.usage`。
+     *
+     * 只在打开上下文弹层时调（[refreshContext] 的伴生动作），不做定时轮询：
+     * 命中率一轮才变一次，而翻完整个会话最多 10 页请求，没必要跟着每轮跑。
+     */
+    fun refreshCacheStat() {
+        val target = device ?: return
+        viewModelScope.launch {
+            cacheBusy = true
+            try {
+                val builder = CacheStatBuilder()
+                var cursor: Long? = null
+                var pages = 0
+                while (pages < 10) {
+                    val page = api.messagesPage(target, token, sessionId, pageSize = 200, before = cursor)
+                    builder.addPage(page.messages)
+                    val next = page.nextBefore
+                    if (next == null || page.messages.isEmpty()) break
+                    cursor = next
+                    pages += 1
+                }
+                cacheStat = builder.build()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // 命中率只是辅助信息：拉不到就当没有，别用一条报错挡住上下文用量
+                cacheStat = null
+            } finally {
+                cacheBusy = false
             }
         }
     }

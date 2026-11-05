@@ -8,12 +8,12 @@
 > 这个仓库只是手机端。Agent 行为、模型调用、会话读写全部由电脑上的 pi 负责，
 > 手机只是一个「连着它的遥控器 + 阅读器」。
 
-当前版本 **0.5.32**（`versionCode 532`），包名 `top.caoayu.pideck`，
+当前版本 **0.5.33**（`versionCode 533`），包名 `top.caoayu.pideck`，
 Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
 ```bash
 cd native
-./gradlew :app:testDebugUnitTest    # 198 条 JVM 单测
+./gradlew :app:testDebugUnitTest    # 212 条 JVM 单测
 ./gradlew :app:assembleRelease      # app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -23,7 +23,7 @@ cd native
 
 ---
 
-## 它现在能做什么（0.5.32）
+## 它现在能做什么（0.5.33）
 
 | 能力 | 说明 |
 |---|---|
@@ -37,6 +37,7 @@ cd native
 | **历史** | 顶栏「历史记录」列出该会话每一轮的提问，点一条滚到那句提问本身并闪三下高亮 |
 | **节奏** | 输入条上方常驻一行：首字等待（从本端发出请求那一刻起算）· 输出 tokens · 生成 tok/s（分母从首个增量含思考起算）· 全程 tok/s，均与桌面端同口径，缺项显示 `—`；**流式期间每 2 秒刷新**，tokens 是估算值（带 `≈`），收尾后换真值 |
 | **问答卡** | AI 提问卡可折叠，默认展开；收起时仍显示一行题干 |
+| **缓存命中** | 点顶栏「上下文 37%」→ 弹层里多一行：最近一轮命中率 + 本会话平均（逐轮平均），口径与桌面端 `cacheRead/(input+cacheRead+cacheWrite)` 一致 |
 | **后台** | 有会话在跑就拉起 `dataSync` 前台服务，跑完发通知（可在设置里关）；回到前台自动续上 |
 | **外观** | 深 / 浅 / 跟随系统；系统栏颜色跟随主题（Android 15 强制 edge-to-edge 后按窗口背景取色） |
 

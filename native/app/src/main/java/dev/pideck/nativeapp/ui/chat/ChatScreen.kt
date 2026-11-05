@@ -443,6 +443,7 @@ fun ChatScreen(
                                 onClick = {
                                     showMore = false
                                     viewModel.refreshContext()
+                                    viewModel.refreshCacheStat()
                                     showContext = true
                                 },
                             )
@@ -514,6 +515,7 @@ fun ChatScreen(
                         text = "上下文 ${usage.percentLabel}",
                         onClick = {
                             viewModel.refreshContext()
+                            viewModel.refreshCacheStat()
                             showContext = true
                         },
                         accent = usage.overflow || usage.contextPercent >= 85,
@@ -897,10 +899,15 @@ fun ChatScreen(
             usage = viewModel.contextUsage,
             busy = viewModel.contextBusy,
             compactBusy = viewModel.compactBusy,
+            cache = viewModel.cacheStat,
+            cacheBusy = viewModel.cacheBusy,
             control = viewModel.securityControl,
             securityLevelLabel = viewModel.securityLevelLabel,
             permissionLabel = dev.pideck.nativeapp.data.PermissionPresets.labelOf(viewModel.permissionPreset),
-            onRefresh = { viewModel.refreshContext() },
+            onRefresh = {
+                viewModel.refreshContext()
+                viewModel.refreshCacheStat()
+            },
             onCompact = { prompt -> viewModel.compact(prompt) },
             onDismiss = { showContext = false },
         )

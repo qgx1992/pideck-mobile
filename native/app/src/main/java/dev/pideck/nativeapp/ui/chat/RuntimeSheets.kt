@@ -29,6 +29,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import dev.pideck.nativeapp.data.CacheStat
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -249,6 +250,8 @@ fun ContextSheet(
     usage: ContextUsage?,
     busy: Boolean,
     compactBusy: Boolean,
+    cache: CacheStat? = null,
+    cacheBusy: Boolean = false,
     control: PrivilegeControl = PrivilegeControl.SecurityLevel,
     securityLevelLabel: String = "未设置",
     permissionLabel: String = "未设置",
@@ -317,6 +320,7 @@ fun ContextSheet(
             Spacer(Modifier.height(14.dp))
             UsageRow("本轮输入", formatTokens(usage.inputTokens))
             UsageRow("本轮输出", formatTokens(usage.outputTokens))
+            UsageRow("缓存命中", cacheHitLine(cache, cacheBusy))
             // 权限位按后端：pi 报安全等级（`runtime/state` 里根本没有 permissionPreset，
             // 以前这里对 pi 永远显示「未设置」），dsh 才报权限预设。
             when (control) {
@@ -355,6 +359,22 @@ fun ContextSheet(
                 modifier = Modifier.padding(top = 10.dp, bottom = 22.dp),
             )
         }
+    }
+}
+
+/**
+ * 缓存命中率一行。
+ *
+ * 口径与桌面一致：`cacheRead / (input + cacheRead + cacheWrite)`。写「最近一轮」而不是「本轮」，
+ * 因为翻历史看旧会话时它是最后一条回复的值，不是此刻正在跑的这一轮。
+ */
+private fun cacheHitLine(cache: CacheStat?, busy: Boolean): String {
+    if (cache == null || !cache.known) return if (busy) "读取中…" else "—"
+    val latest = cache.latestPercent?.let { "$it%" } ?: "—"
+    return buildString {
+        append("最近 ").append(latest)
+        cache.averagePercent?.let { append(" · 平均 ").append(it).append('%') }
+        if (cache.samples > 1) append("（").append(cache.samples).append(" 轮）")
     }
 }
 
