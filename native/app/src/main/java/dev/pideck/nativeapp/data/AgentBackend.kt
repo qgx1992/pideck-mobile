@@ -64,6 +64,22 @@ sealed class AgentBackend {
             return Pi
         }
 
+        /**
+         * 会话记录上的后端标记（列表行、顶栏共用）：`null` = 认不出来、不显示。
+         *
+         * pi 也返回 "Pi"：列表里绝大多数会话是 pi，留白会被读成「没数据」，
+         * 一个淡淡的 Pi 反而能把 dsh / acp 的会话区分出来。
+         */
+        fun badgeOf(backend: String?, acpToolName: String? = null): String? = when (backend?.lowercase()) {
+            null, "" -> "Pi"
+            "pi" -> "Pi"
+            "dsh" -> "DSH"
+            "acp" -> acpToolName?.takeIf { it.isNotBlank() } ?: "ACP"
+            "imagegen" -> "图像生成"
+            "videogen" -> "视频生成"
+            else -> backend
+        }
+
         fun idOf(backend: AgentBackend): String = when (backend) {
             Pi -> ""
             Dsh -> "dsh"

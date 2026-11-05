@@ -306,16 +306,9 @@ class ChatViewModel @Inject constructor(
      */
     val isPiBackend: Boolean get() = securityControl == PrivilegeControl.SecurityLevel
 
-    /** 顶栏上的后端标记：pi 不显示，其余给一个人能读的名字。 */
+    /** 顶栏上的后端标记：pi 不显示（默认后端不值得占位置），其余给一个人能读的名字。 */
     val backendLabel: String?
-        get() = when (backend?.lowercase()) {
-            null, "", "pi" -> null
-            "dsh" -> "DSH"
-            "acp" -> acpToolName ?: "ACP"
-            "imagegen" -> "图像生成"
-            "videogen" -> "视频生成"
-            else -> backend
-        }
+        get() = if (isPiBackend) null else dev.pideck.nativeapp.data.AgentBackend.badgeOf(backend, acpToolName)
 
     /** ACP 工具显示名（`/api/state` 的 `acpTools` 里按 `acpToolId` 查）。 */
     var acpToolName by mutableStateOf<String?>(null)

@@ -8,12 +8,12 @@
 > 这个仓库只是手机端。Agent 行为、模型调用、会话读写全部由电脑上的 pi 负责，
 > 手机只是一个「连着它的遥控器 + 阅读器」。
 
-当前版本 **0.5.25**（`versionCode 525`），包名 `top.caoayu.pideck`，
+当前版本 **0.5.26**（`versionCode 526`），包名 `top.caoayu.pideck`，
 Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
 ```bash
 cd native
-./gradlew :app:testDebugUnitTest    # 178 条 JVM 单测
+./gradlew :app:testDebugUnitTest    # 180 条 JVM 单测
 ./gradlew :app:assembleRelease      # app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -23,7 +23,7 @@ cd native
 
 ---
 
-## 它现在能做什么（0.5.25）
+## 它现在能做什么（0.5.26）
 
 | 能力 | 说明 |
 |---|---|

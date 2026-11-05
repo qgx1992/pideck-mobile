@@ -3,18 +3,15 @@ package dev.pideck.nativeapp.ui.home
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.pideck.nativeapp.data.AcpTool
 import dev.pideck.nativeapp.data.AgentBackend
 import dev.pideck.nativeapp.data.Device
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
-import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.Project
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.StateCache
@@ -36,7 +33,6 @@ class HomeViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: DeviceRepository,
     private val api: PideckApi,
-    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     val deviceId: String = savedStateHandle["deviceId"] ?: error("缺少 deviceId")
@@ -71,23 +67,22 @@ class HomeViewModel @Inject constructor(
     var acpTools by mutableStateOf<List<AcpTool>>(emptyList())
         private set
 
-    /** 本地记住的上次选择（`""` / `dsh` / `acp:<toolId>`），见 [AgentBackend.parse]。 */
-    private var storedBackendId by mutableStateOf("")
-    private var backendTouched = false
-
     /** 可选项：pi + DSH + 每个 ACP 工具。 */
     val backendOptions: List<AgentBackend>
         get() = AgentBackend.options(acpTools)
 
-    /** 当前选中的后端（ACP 工具没加载出来时会退回 pi，不会建出个空后端）。 */
-    val backend: AgentBackend
-        get() = AgentBackend.parse(storedBackendId, acpTools)
+    /**
+     * 当前选中的后端，**每次进首页都是 pi**。
+     *
+     * 不记上次选择：桌面端的默认后端（`defaultAgentBackend`）不经 HTTP 暴露，我们没法知道它填什么，
+     * 与其猜一个「上次用的」当默认，不如老老实实跟 pi 对齐 —— 想换的人自然会去点。
+     */
+    var backend by mutableStateOf<AgentBackend>(AgentBackend.Pi)
+        private set
 
     /** 换后端：只影响「下一次新建」，不碰已有会话。 */
     fun selectBackend(next: AgentBackend) {
-        storedBackendId = AgentBackend.idOf(next)
-        backendTouched = true
-        viewModelScope.launch { runCatching { Prefs.setAgentBackendId(context, storedBackendId) } }
+        backend = next
     }
 
     val selectedProject: Project?
@@ -105,7 +100,6 @@ class HomeViewModel @Inject constructor(
                 token = repository.tokenOf(found.id)
                 deviceName = found.name
             }
-            storedBackendId = Prefs.agentBackendId
             // 列表页刚拉过的状态先垫上，首页不至于空着等网络
             StateCache.get(deviceId)?.let { apply(it.projects, it.sessions, it.acpTools) }
             load()
@@ -175,8 +169,10 @@ class HomeViewModel @Inject constructor(
 
     private fun apply(nextProjects: List<Project>, nextSessions: List<Session>, tools: List<AcpTool>) {
         acpTools = tools
-        // 首次拿到状态前 Prefs 可能还没读完盘，这里补一次；用户已经点过就不再覆盖
-        if (!backendTouched) storedBackendId = Prefs.agentBackendId
+        // 选中的 ACP 工具在桌面端被删了：退回 pi，别留着建一个宿主不认识的会话
+        if (backend is AgentBackend.Acp && tools.none { it.id == (backend as AgentBackend.Acp).toolId }) {
+            backend = AgentBackend.Pi
+        }
         projects = nextProjects.sortedWith(
             compareByDescending<Project> { it.kind == "chat" }
                 .thenByDescending { it.pinned }

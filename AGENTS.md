@@ -299,8 +299,12 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   **pi 是「不写」，写 `imagegen` / `videogen` / 拼错的值都建成 pi**（实测记录 `backend` 为空）。
   ACP 还要带 `acpToolId`（`/api/state` 的 `acpTools[i].id`）。会话页对非 pi 后端要收掉模型与思考胶囊：
   宿主对 acp 会话**不落** `model` / `thinkingLevel`，DSH 用它自己的模型体系。
-  `defaultAgentBackend` / `hiddenModules` / `acpEnabled` 都不经 HTTP 暴露，所以「默认后端」只能记本地
-  （`Prefs.agentBackendId`），DSH 也无法按桌面端的隐藏设置隐藏。
+  `defaultAgentBackend` / `hiddenModules` / `acpEnabled` 都不经 HTTP 暴露 —— 所以**不要**把上次的选择
+  记成本地默认（0.5.25 记过，0.5.26 撤了：猜「上次用的」比跟 pi 对齐更容易让人困惑）。
+  列表行与聊天页顶栏的后端标记统一走 `AgentBackend.badgeOf(backend, acpToolName)`，别各写一份。
+- **live 联调测试别拿 idle 运行时当判据**：`RuntimeStateLiveTest` 曾经挑 `runtimes.firstOrNull { !it.isRunning }`，
+  而 idle 的 runtime 上下文窗口已经卸载（`contextWindow = 0`）→ 必红。挑正在跑的那个，
+  没有在跑的才 `assumeTrue` 跳过。
 
 - **运行中发送有三条通道，别混成一条**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt`
   的 `sendWhileBusy`）：

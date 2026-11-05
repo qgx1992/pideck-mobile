@@ -31,8 +31,6 @@ object Prefs {
     private val KEY_COLLAPSE_RESTORE = booleanPreferencesKey("collapse_restore")
     private val KEY_BUSY_MODE = stringPreferencesKey("busy_send_mode")
 
-    /** 新建会话时选的 Agent 后端：`""` = pi、`"dsh"`、`"acp:<toolId>"`（见 [AgentBackend]）。 */
-    private val KEY_AGENT_BACKEND = stringPreferencesKey("agent_backend")
 
     /** 主题变化用 StateFlow 播出去，MainActivity 直接 collect。 */
     val themeFlow = MutableStateFlow(ThemeMode.SYSTEM)
@@ -70,14 +68,6 @@ object Prefs {
     var busySendMode: BusySendMode = BusySendMode.STEER
         private set
 
-    /**
-     * 上次新建会话选的后端（[AgentBackend] 的 id 形式）。桌面端的 `defaultAgentBackend`
-     * 不经 HTTP 暴露，所以「默认选项」只能记自己上次选的。
-     */
-    @Volatile
-    var agentBackendId: String = ""
-        private set
-
     private var loaded = false
 
     /** 首次从磁盘读完就置 true —— 折叠状态要等这个，否则读到的是默认值。 */
@@ -100,7 +90,6 @@ object Prefs {
                 collapsedGroups = data[KEY_COLLAPSED] ?: emptySet()
                 collapseRestore = data[KEY_COLLAPSE_RESTORE] ?: true
                 busySendMode = BusySendMode.parse(data[KEY_BUSY_MODE])
-                agentBackendId = data[KEY_AGENT_BACKEND] ?: ""
                 loadedFlow.value = true
             }
         }
@@ -152,11 +141,6 @@ object Prefs {
     suspend fun setBusySendMode(context: Context, mode: BusySendMode) {
         busySendMode = mode
         context.prefsStore.edit { it[KEY_BUSY_MODE] = mode.id }
-    }
-
-    suspend fun setAgentBackendId(context: Context, id: String) {
-        agentBackendId = id
-        context.prefsStore.edit { it[KEY_AGENT_BACKEND] = id }
     }
 
     suspend fun setNotifyDone(context: Context, enabled: Boolean) {

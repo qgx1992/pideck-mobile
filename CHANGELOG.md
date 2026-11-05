@@ -12,6 +12,25 @@ PiDeck 手机客户端（Android，Kotlin + Jetpack Compose）。
 
 ---
 
+## 0.5.26 — 2026-11-05
+
+**新建会话默认回到 pi；会话列表能看出这一条是哪个后端。**
+
+- 后端选择器不再「记住上次选的后端」：每次进首页都是 `Pi`。桌面端的 `defaultAgentBackend`
+  不经 HTTP 暴露，与其猜一个「上次用的」当默认，不如跟 pi 对齐。
+  选的 ACP 工具在桌面端被删掉时自动退回 `Pi`（不会建出宿主不认识的会话）。
+- 会话列表每行的时间后面加了后端小标签（`AgentBackend.badgeOf`）：
+  `Pi`（弱色）/ `DSH` / ACP 工具名 / `图像生成` / `视频生成`。
+  桌面端库里 dsh 与 pi 混着放，同名会话并列时靠它区分。
+- 顺手修了 `RuntimeStateLiveTest` 的误报：它挑的是「第一个 idle 运行时」，
+  而 idle 的 runtime 上下文窗口已经卸载（`contextWindow = 0`）→ 现在挑正在跑的那个，
+  没有在跑的运行时才跳过。
+
+### 测试
+
+`data/AgentBackendTest.kt` 补 2 条（`badgeOf` 各后端文案 + 工具名缺失时退回 `ACP`；默认选项是 pi），
+合计 180 条 JVM 单测。
+
 ## 0.5.25 — 2026-11-05
 
 **新建会话可以选 Agent 后端了（Pi / DSH / ACP 工具）。**

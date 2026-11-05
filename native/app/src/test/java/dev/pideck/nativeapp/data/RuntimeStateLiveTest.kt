@@ -21,8 +21,10 @@ class RuntimeStateLiveTest {
         val fresh = runCatching { api.state(device, token, null) }.getOrNull()
         assumeTrue("桌面端连不上，跳过", fresh is StateFetch.Fresh)
         val state = (fresh as StateFetch.Fresh).state
-        val runtime = state.runtimes.firstOrNull { !it.isRunning } ?: state.runtimes.firstOrNull()
-        assumeTrue("这台机器上没有运行时，跳过", runtime != null)
+        // 只对「活着」的运行时断言：idle 的 runtime 已经卸载了上下文窗口，
+        // `contextWindow` 读回来是 0，拿它当回归判据会误报（0.5.26 踩过）。
+        val runtime = state.runtimes.firstOrNull { it.isRunning }
+        assumeTrue("这台机器上没有在跑的运行时，跳过", runtime != null)
 
         val usage = api.runtimeState(
             device,

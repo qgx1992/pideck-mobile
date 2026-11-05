@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import dev.pideck.nativeapp.data.AgentBackend
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.ui.chat.StatusDot
 import dev.pideck.nativeapp.ui.theme.AppButton
@@ -203,6 +205,8 @@ fun SessionsScreen(
                             SessionRow(
                                 session = session,
                                 running = viewModel.isRunning(session.id),
+                                acpToolName = viewModel.state?.acpTools
+                                    ?.firstOrNull { it.id == session.acpToolId }?.name,
                                 onClick = { onOpenSession(session.id) },
                                 onLongClick = { actions.menuSession = session },
                             )
@@ -279,6 +283,7 @@ private fun SessionRow(
     running: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    acpToolName: String? = null,
 ) {
     Surface(color = Color.Transparent) {
         Row(
@@ -298,17 +303,25 @@ private fun SessionRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(2.dp))
-                Text(
-                    buildString {
-                        append(relativeTime(session.updatedAt))
-                        session.model?.modelId?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Default,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        buildString {
+                            append(relativeTime(session.updatedAt))
+                            session.model?.modelId?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Default,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // 后端标记：同名会话并列时靠它区分（桌面端库里 dsh / acp / pi 混着放）
+                    AgentBackend.badgeOf(session.backend, acpToolName)?.let { label ->
+                        Spacer(Modifier.width(6.dp))
+                        BackendBadge(label, muted = session.backend.isNullOrBlank() || session.backend == "pi")
+                    }
+                }
             }
         }
     }
@@ -349,5 +362,23 @@ internal fun relativeTime(epochMillis: Long): String {
             val days = diff / 86_400_000
             "${days} 天前"
         }
+    }
+}
+
+/** 会话行上的后端小标签：pi 用弱色（大多数会话都是它），其余用主题色描一下。 */
+@Composable
+private fun BackendBadge(label: String, muted: Boolean) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        color = if (muted) scheme.surfaceContainerHigh else scheme.primary.copy(alpha = 0.14f),
+        shape = RoundedCornerShape(5.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (muted) scheme.onSurfaceVariant else scheme.primary,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+        )
     }
 }

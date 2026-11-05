@@ -71,4 +71,23 @@ class AgentBackendTest {
         val acp = AgentBackend.parse("acp:acp-tool-9", listOf(AcpTool(id = "acp-tool-9", name = ""))) as AgentBackend.Acp
         assertEquals("acp-tool-9", acp.label)
     }
+
+    @Test
+    fun `badge names every backend and falls back to the tool name`() {
+        assertEquals("Pi", AgentBackend.badgeOf(null))
+        assertEquals("Pi", AgentBackend.badgeOf(""))
+        assertEquals("Pi", AgentBackend.badgeOf("pi"))
+        assertEquals("DSH", AgentBackend.badgeOf("DSH"))
+        assertEquals("CodeBuddy", AgentBackend.badgeOf("acp", "CodeBuddy"))
+        // 工具名还没加载出来时别显示成空白
+        assertEquals("ACP", AgentBackend.badgeOf("acp", null))
+        assertEquals("图像生成", AgentBackend.badgeOf("imagegen"))
+        assertEquals("视频生成", AgentBackend.badgeOf("videogen"))
+    }
+
+    @Test
+    fun `new session defaults to pi`() {
+        // 首页每次打开都是 pi：不记上次选择（桌面端的 defaultAgentBackend 拿不到）
+        assertEquals(AgentBackend.Pi, AgentBackend.options(emptyList()).first())
+    }
 }
