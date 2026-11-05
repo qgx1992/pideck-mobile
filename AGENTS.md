@@ -293,6 +293,15 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   Kotlin 按文本顺序初始化属性，`init` 里给「声明在后面」的 `by mutableStateOf(...)` 赋值
   会命中还没初始化的委托字段 → NPE，整个 ViewModel 构造失败（表现：会话页进不去，编译期看不出来）。
   0.5.22 出过一次，0.5.23 修；守门测试 `native/app/src/test/java/dev/pideck/nativeapp/ui/chat/ChatViewModelInitOrderTest.kt`。
+- **新建会话选的后端只认 `dsh` / `acp`**（`native/app/src/main/java/dev/pideck/nativeapp/data/AgentBackend.kt`）：
+  宿主 `POST /api/sessions` 的路由只校验 `projectId`，其余 body 整个透传给 `createSessionDraft`，
+  而它里面是 `const backend = input.backend === "dsh" ? "dsh" : input.backend === "acp" ? "acp" : void 0` ——
+  **pi 是「不写」，写 `imagegen` / `videogen` / 拼错的值都建成 pi**（实测记录 `backend` 为空）。
+  ACP 还要带 `acpToolId`（`/api/state` 的 `acpTools[i].id`）。会话页对非 pi 后端要收掉模型与思考胶囊：
+  宿主对 acp 会话**不落** `model` / `thinkingLevel`，DSH 用它自己的模型体系。
+  `defaultAgentBackend` / `hiddenModules` / `acpEnabled` 都不经 HTTP 暴露，所以「默认后端」只能记本地
+  （`Prefs.agentBackendId`），DSH 也无法按桌面端的隐藏设置隐藏。
+
 - **运行中发送有三条通道，别混成一条**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt`
   的 `sendWhileBusy`）：
   - 加入当前回合 → `POST /api/sessions/:id/prompt` + `streamingBehavior:"steer"`，

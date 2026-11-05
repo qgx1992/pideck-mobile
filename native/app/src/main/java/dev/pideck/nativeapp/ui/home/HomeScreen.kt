@@ -21,9 +21,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -49,10 +53,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import dev.pideck.nativeapp.data.AgentBackend
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.ui.theme.AppButton
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import dev.pideck.nativeapp.ui.theme.AppIconButton
+import dev.pideck.nativeapp.ui.theme.SelectChip
 import dev.pideck.nativeapp.ui.sessions.relativeTime
 
 /**
@@ -136,6 +142,12 @@ fun HomeScreen(
 
             item {
                 WorkspacePicker(viewModel = viewModel)
+            }
+
+            // 后端选择：桌面端在 composer 里选，手机上放在第一句输入框上面。
+            // 拿不到桌面端的 defaultAgentBackend（不走 HTTP），所以默认值 = 本地上次的选择。
+            item {
+                BackendPicker(viewModel = viewModel)
             }
 
             item {
@@ -351,6 +363,49 @@ private fun InfoCard(title: String, body: String) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/**
+ * 「用哪个 Agent 后端开这个会话」：Pi / DSH / 每个 ACP 工具。
+ *
+ * 值直接进 `POST /api/sessions` 的 body（宿主全量透传），所以选项表就是
+ * 「pi + DSH + `/api/state` 的 `acpTools`」—— imagegen / videogen 走不通这条路由，不列。
+ */
+@Composable
+private fun BackendPicker(viewModel: HomeViewModel) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val selected = viewModel.backend
+    val options = viewModel.backendOptions
+    Box {
+        SelectChip(
+            text = "后端 ${selected.label}",
+            onClick = { expanded = true },
+            icon = Icons.Default.Hub,
+            trailing = Icons.Filled.KeyboardArrowDown,
+            enabled = !viewModel.creating,
+            accent = selected != AgentBackend.Pi,
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(option.label, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                option.hint,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    onClick = {
+                        viewModel.selectBackend(option)
+                        expanded = false
+                    },
+                )
+            }
         }
     }
 }

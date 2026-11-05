@@ -54,8 +54,19 @@ interface PideckApi {
     /** `/api/chat`：发一条用户消息，响应本身也是一条 SSE 流。 */
     fun chat(device: Device, token: String?, body: JsonObject): Flow<SseFrame>
 
-    /** `POST /api/sessions`：按项目新建草稿会话，返回新会话 id。 */
-    suspend fun createSession(device: Device, token: String?, projectId: String): String
+    /**
+     * `POST /api/sessions`：按项目新建草稿会话，返回新会话 id。
+     *
+     * [backend] / [acpToolId] 原样放进 body —— 宿主的路由只校验 `projectId`，其余字段整个透传给
+     * `createSessionDraft`（它只认 `dsh` / `acp`，写别的会退回 pi）。见 [AgentBackend]。
+     */
+    suspend fun createSession(
+        device: Device,
+        token: String?,
+        projectId: String,
+        backend: String? = null,
+        acpToolId: String? = null,
+    ): String
 
     /**
      * `POST /api/sessions/:id/prompt`：投递一条 prompt，返回回执（不是回复流）。
@@ -343,9 +354,20 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             }
         }
 
-    override suspend fun createSession(device: Device, token: String?, projectId: String): String =
+    override suspend fun createSession(
+        device: Device,
+        token: String?,
+        projectId: String,
+        backend: String?,
+        acpToolId: String?,
+    ): String =
         withContext(Dispatchers.IO) {
-            val body = buildJsonObject { put("projectId", projectId) }
+            val body = buildJsonObject {
+                put("projectId", projectId)
+                // pi 是「不写」，不是写 "pi"：宿主只认 dsh / acp
+                backend?.takeIf { it.isNotBlank() }?.let { put("backend", it) }
+                acpToolId?.takeIf { it.isNotBlank() }?.let { put("acpToolId", it) }
+            }
             val text = postJson(device, token, "/api/sessions", body)
             val parsed = runCatching {
                 PideckJson.parseToJsonElement(text).jsonObject["session"]?.jsonObject?.get("id")?.jsonPrimitive?.content

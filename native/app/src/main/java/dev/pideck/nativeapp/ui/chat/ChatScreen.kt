@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Memory
@@ -452,6 +453,21 @@ fun ChatScreen(
                 // 模型胶囊吃掉剩余的宽度（内部封顶 188dp），而不是固定宽度占位：
                 // 上下文胶囊一出现，固定宽度的 Row 就没位置给后面的历史按钮，
                 // 会被整块挤出屏幕（实测「查了上下文，历史按钮不见了」）。
+                if (!viewModel.isPiBackend) {
+                    // 非 pi 后端（DSH / ACP / 图像视频）：模型与思考档位不归这里管 ——
+                    // 宿主对 acp 会话根本不落 model/thinkingLevel，DSH 走它自己的模型体系。
+                    // 摆一个点了不生效的选择器比不摆更误导，所以只留一个后端标记。
+                    viewModel.backendLabel?.let { label ->
+                        SelectChip(
+                            text = label,
+                            onClick = {},
+                            icon = Icons.Default.Hub,
+                            accent = true,
+                            enabled = false,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                } else {
                 Box(
                     modifier = Modifier.weight(1f),
                     contentAlignment = Alignment.CenterStart,
@@ -479,6 +495,7 @@ fun ChatScreen(
                         trailing = Icons.Filled.KeyboardArrowDown,
                         accent = level in setOf("high", "xhigh", "max"),
                     )
+                }
                 }
                 // 上下文占用：只在使用量拿得到时出现，点开看明细并压缩
                 val usage = viewModel.contextUsage

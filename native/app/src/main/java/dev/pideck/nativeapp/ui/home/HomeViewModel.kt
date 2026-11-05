@@ -3,13 +3,18 @@ package dev.pideck.nativeapp.ui.home
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.pideck.nativeapp.data.AcpTool
+import dev.pideck.nativeapp.data.AgentBackend
 import dev.pideck.nativeapp.data.Device
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
+import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.Project
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.StateCache
@@ -31,6 +36,7 @@ class HomeViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: DeviceRepository,
     private val api: PideckApi,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     val deviceId: String = savedStateHandle["deviceId"] ?: error("缺少 deviceId")
@@ -61,6 +67,29 @@ class HomeViewModel @Inject constructor(
     var creating by mutableStateOf(false)
         private set
 
+    /** `/api/state` 里的 ACP 工具表：能选的 ACP 后端就是它。 */
+    var acpTools by mutableStateOf<List<AcpTool>>(emptyList())
+        private set
+
+    /** 本地记住的上次选择（`""` / `dsh` / `acp:<toolId>`），见 [AgentBackend.parse]。 */
+    private var storedBackendId by mutableStateOf("")
+    private var backendTouched = false
+
+    /** 可选项：pi + DSH + 每个 ACP 工具。 */
+    val backendOptions: List<AgentBackend>
+        get() = AgentBackend.options(acpTools)
+
+    /** 当前选中的后端（ACP 工具没加载出来时会退回 pi，不会建出个空后端）。 */
+    val backend: AgentBackend
+        get() = AgentBackend.parse(storedBackendId, acpTools)
+
+    /** 换后端：只影响「下一次新建」，不碰已有会话。 */
+    fun selectBackend(next: AgentBackend) {
+        storedBackendId = AgentBackend.idOf(next)
+        backendTouched = true
+        viewModelScope.launch { runCatching { Prefs.setAgentBackendId(context, storedBackendId) } }
+    }
+
     val selectedProject: Project?
         get() = projects.firstOrNull { it.id == selectedProjectId }
 
@@ -76,8 +105,9 @@ class HomeViewModel @Inject constructor(
                 token = repository.tokenOf(found.id)
                 deviceName = found.name
             }
+            storedBackendId = Prefs.agentBackendId
             // 列表页刚拉过的状态先垫上，首页不至于空着等网络
-            StateCache.get(deviceId)?.let { apply(it.projects, it.sessions) }
+            StateCache.get(deviceId)?.let { apply(it.projects, it.sessions, it.acpTools) }
             load()
         }
     }
@@ -96,7 +126,7 @@ class HomeViewModel @Inject constructor(
                     is StateFetch.Fresh -> {
                         etag = fetched.etag
                         StateCache.put(deviceId, fetched.state)
-                        apply(fetched.state.projects, fetched.state.sessions)
+                        apply(fetched.state.projects, fetched.state.sessions, fetched.state.acpTools)
                     }
 
                     StateFetch.NotModified -> Unit
@@ -115,6 +145,8 @@ class HomeViewModel @Inject constructor(
 
     /**
      * 在 [projectId] 下开一个空会话，成功后把 id 交回 UI（UI 负责跳转）。
+     *
+     * 选的后端一并写进记录：pi 不写 `backend`，DSH 写 `"dsh"`，ACP 写 `"acp"` + `acpToolId`。
      * 失败走 [error]，不抛异常 —— 首页的失败提示是常驻的一行红字，不用弹窗。
      */
     fun startSession(projectId: String, onCreated: (String) -> Unit) {
@@ -124,7 +156,14 @@ class HomeViewModel @Inject constructor(
             creating = true
             error = null
             try {
-                val id = api.createSession(target, token, projectId)
+                val chosen = backend
+                val id = api.createSession(
+                    target,
+                    token,
+                    projectId,
+                    backend = chosen.wire,
+                    acpToolId = (chosen as? AgentBackend.Acp)?.toolId,
+                )
                 onCreated(id)
             } catch (e: Exception) {
                 error = describeConnectionError(e)
@@ -134,7 +173,10 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun apply(nextProjects: List<Project>, nextSessions: List<Session>) {
+    private fun apply(nextProjects: List<Project>, nextSessions: List<Session>, tools: List<AcpTool>) {
+        acpTools = tools
+        // 首次拿到状态前 Prefs 可能还没读完盘，这里补一次；用户已经点过就不再覆盖
+        if (!backendTouched) storedBackendId = Prefs.agentBackendId
         projects = nextProjects.sortedWith(
             compareByDescending<Project> { it.kind == "chat" }
                 .thenByDescending { it.pinned }

@@ -214,6 +214,10 @@ class ChatViewModel @Inject constructor(
         record.model.toSessionModel()?.let { sessionModel = it }
         record.thinkingLevel?.takeIf { it.isNotBlank() }?.let { thinkingLevel = it }
         record.backend?.takeIf { it.isNotBlank() }?.let { backend = it }
+        val toolId = record.acpToolId
+        if (!toolId.isNullOrBlank()) {
+            acpTools.firstOrNull { it.id == toolId }?.name?.takeIf { it.isNotBlank() }?.let { acpToolName = it }
+        }
         // 权限预设是 DSH 的东西，pi 会话上出现就是旧客户端留下的脏值（见 clearStalePermissionPreset）
         if (securityControl == PrivilegeControl.PermissionPreset) {
             record.permissionPreset?.takeIf { it.isNotBlank() }?.let { permissionPreset = it }
@@ -225,8 +229,12 @@ class ChatViewModel @Inject constructor(
     /** 一次 `/api/state` 的结果：本会话的会话记录与安全等级投影都从这一份里对齐。 */
     private fun adoptState(state: PideckState) {
         state.security?.let { security = parseSecurityState(it) }
+        if (state.acpTools.isNotEmpty()) acpTools = state.acpTools
         adoptSession(state.sessions.firstOrNull { it.id == sessionId })
     }
+
+    /** `/api/state` 的 ACP 工具表：只为了把 `acpToolId` 翻成显示名。 */
+    private var acpTools: List<dev.pideck.nativeapp.data.AcpTool> = emptyList()
 
     /**
      * 清掉旧版本写到 pi 会话上的 DSH 权限预设。
@@ -290,6 +298,28 @@ class ChatViewModel @Inject constructor(
         private set
 
     val securityControl: PrivilegeControl get() = privilegeControlFor(backend)
+
+    /**
+     * 记录里没有 `backend` 的（pi 草稿、老缓存）按 pi 处理 —— 模型与思考档位只对 pi 有意义：
+     * 宿主对 acp 会话根本不落这两项（`createSessionDraft` 里 `acp ? void 0 : …`），
+     * DSH 用自己的模型体系，摆一个不生效的选择器比不摆更误导。
+     */
+    val isPiBackend: Boolean get() = securityControl == PrivilegeControl.SecurityLevel
+
+    /** 顶栏上的后端标记：pi 不显示，其余给一个人能读的名字。 */
+    val backendLabel: String?
+        get() = when (backend?.lowercase()) {
+            null, "", "pi" -> null
+            "dsh" -> "DSH"
+            "acp" -> acpToolName ?: "ACP"
+            "imagegen" -> "图像生成"
+            "videogen" -> "视频生成"
+            else -> backend
+        }
+
+    /** ACP 工具显示名（`/api/state` 的 `acpTools` 里按 `acpToolId` 查）。 */
+    var acpToolName by mutableStateOf<String?>(null)
+        private set
 
     /** pi 会话的安全等级投影（`/api/state` 的 `security`）；没拿到就是 null。 */
     var security by mutableStateOf<SecurityState?>(null)

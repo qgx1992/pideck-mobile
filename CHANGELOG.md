@@ -12,6 +12,40 @@ PiDeck 手机客户端（Android，Kotlin + Jetpack Compose）。
 
 ---
 
+## 0.5.25 — 2026-11-05
+
+**新建会话可以选 Agent 后端了（Pi / DSH / ACP 工具）。**
+
+桌面端 composer 里一直有后端选择器，但它读的是主进程 `createSessionDraft(body)` 的入参；
+手机端只发 `{ projectId }`，所以新建出来的永远是默认后端。这次补上：
+
+- 首页第一句输入框上方多了一行「后端 Pi / DSH / CodeBuddy」胶囊（下拉里带一句说明）。
+  选项 = 内置 pi + DSH + `/api/state` 的 `acpTools`（桌面端把禁用的工具过滤掉了，这里直接用）。
+- 选择随 `POST /api/sessions` 一起发：pi 不写 `backend`（宿主只认 `dsh` / `acp`，写别的会退回 pi），
+  DSH 写 `"dsh"`，ACP 写 `"acp"` + `acpToolId`。
+- 选择记在本地（`Prefs.agentBackendId`，`""` / `dsh` / `acp:<toolId>`）。桌面端的
+  `defaultAgentBackend` 不走 HTTP，所以「默认项」只能是上次自己选的；
+  工具被删掉时自动退回 pi，不会建出宿主不认识的会话。
+- 会话页按后端收口：非 pi 会话不再摆模型与思考档位 —— 宿主对 acp 会话根本不落
+  `model` / `thinkingLevel`（`createSessionDraft` 里 `acp ? void 0 : …`），DSH 走它自己的
+  模型体系 —— 改为只显示一个后端标记。安全等级原本就只对 pi 生效（`privilegeControlFor`）。
+
+### 限制
+
+- `imagegen` / `videogen` 走不通这条路由（实测 `backend` 写它们，宿主创建出来的记录是空的），
+  所以不列在选项里。
+- 桌面端的 `defaultAgentBackend`、`hiddenModules`、`acpEnabled` 都不经 HTTP 暴露，
+  手机端既读不到「默认后端」，也没法把 DSH 在后端列表里藏起来；要根治得宿主加一个
+  `GET /api/launch-defaults`。
+- DSH 模块在桌面端不可用时，发送会回 `dshUnavailable`（落在 `session.backendUnavailable`），
+  手机上会显示宿主给的原文错误。
+
+### 测试
+
+`data/AgentBackendTest.kt`（7 条）：选项顺序（pi → dsh → 各 ACP 工具）、空 id 跳过、
+pi 不发 `backend`、`dsh` / `acp` 的 wire 值、`idOf` ↔ `parse` 往返、工具被删后退回 pi、
+工具名空时退回 id。合计 178 条 JVM 单测。
+
 ## 0.5.24 — 2026-11-05
 
 **手机发的图片在会话页里能看见了，表格也按表格画了。**
