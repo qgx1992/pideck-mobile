@@ -19,6 +19,7 @@ import dev.pideck.nativeapp.data.LineDiff
 import dev.pideck.nativeapp.data.MessageImage
 import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.data.BusySendMode
+import dev.pideck.nativeapp.data.ChatMessage
 import dev.pideck.nativeapp.data.ChatPayloads
 import dev.pideck.nativeapp.data.PendingUiRequest
 import dev.pideck.nativeapp.data.PideckJson
@@ -41,6 +42,10 @@ import dev.pideck.nativeapp.data.SubagentEntry
 import dev.pideck.nativeapp.data.toSessionModel
 import dev.pideck.nativeapp.data.FileNode
 import dev.pideck.nativeapp.data.TimelineItem
+import dev.pideck.nativeapp.data.TurnClock
+import dev.pideck.nativeapp.data.TurnStats
+import dev.pideck.nativeapp.data.deriveTurnStats
+import dev.pideck.nativeapp.data.turnStatsFromMeta
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
 import dev.pideck.nativeapp.data.describeConnectionError
@@ -129,6 +134,23 @@ class ChatViewModel @Inject constructor(
 
     var hasOlder by mutableStateOf(false)
         private set
+
+    // ---- 一轮回复的节奏（首字时间 / tok/s）----
+    //
+    // 桌面端这组数是主进程在流式过程中现测的（`ttftMs` / `totalMs` / `tps` / `endToEndTps`），
+    // 走 `agentsRuntimeState` 边沿推送，**不落在消息 meta 里**。手机上没法订阅那条通道，
+    // 就由本端自己打点：按发送时刻 → 首个增量到达 → 收尾三段计时；tokens 数在落盘后
+    // 从 `meta.usage.outputTokens` 取（流里没有 usage）。口径与桌面端一致，见 `data/TurnStats.kt`。
+
+    /** 已结算的那一轮；null 表示没有可显示的数（acp / 没耗时字段的后端）。 */
+    var turnStats by mutableStateOf<TurnStats?>(null)
+
+    /** 已经算过统计的那条 assistant 消息（id），避免每次重拉历史都把秒表重算一遍。 */
+    private var statsForMessageId: String? = null
+    private var turnStartedAt = 0L
+    private var turnFirstTextAt = 0L
+    private var turnFirstAnyAt = 0L
+    private var turnEndedAt = 0L
 
     var sending by mutableStateOf(false)
         private set
@@ -1082,6 +1104,60 @@ class ChatViewModel @Inject constructor(
         SessionActivity.markTurnResult(sessionId, failed = !last.errorText.isNullOrBlank())
     }
 
+    // ---- 统计行的打点与结算（首字时间 / tok/s，口径见 data/TurnStats.kt）----
+
+    private fun resetTurnClock(now: Long = System.currentTimeMillis()) {
+        turnStartedAt = now
+        turnFirstTextAt = 0L
+        turnFirstAnyAt = 0L
+        turnEndedAt = 0L
+        turnStats = null
+    }
+
+    /**
+     * 首个增量到达。正文优先，思考阶段只有 reasoning 时先记下作兜底
+     * （对应桌面端 `firstTextAt > 0 ? firstTextAt : firstDeltaAt`）。
+     */
+    private fun markTurnFirstContent(snapshot: ReplySnapshot) {
+        if (turnStartedAt <= 0L) return
+        val now = System.currentTimeMillis()
+        when {
+            snapshot.text.isNotEmpty() && turnFirstTextAt == 0L -> turnFirstTextAt = now
+            snapshot.reasoning.isNotEmpty() && turnFirstAnyAt == 0L -> turnFirstAnyAt = now
+            else -> return
+        }
+        val first = if (turnFirstTextAt > 0L) turnFirstTextAt else turnFirstAnyAt
+        // 流式期间先上「首字 x.xs · 生成中…」，tok/s 要等落盘后拿到 usage 才算得出来。
+        turnStats = TurnStats(ttftMs = (first - turnStartedAt).coerceAtLeast(0L))
+    }
+
+    /**
+     * 收尾后结算统计行。
+     *
+     * 本机发的回合用秒表（任何后端都有）；翻历史 / 换设备看的回合只能靠 meta 里的
+     * `durationMs`（只有 pi 后端有）算端到端速度，首字无从得知。
+     */
+    private fun settleTurnStats(messages: List<ChatMessage>) {
+        val last = messages.lastOrNull { it.role == "assistant" } ?: return
+        if (last.id == statsForMessageId) return
+        val clock = if (turnStartedAt > 0L && turnEndedAt > 0L) {
+            TurnClock(
+                startedAt = turnStartedAt,
+                firstContentAt = if (turnFirstTextAt > 0L) turnFirstTextAt else turnFirstAnyAt,
+                endedAt = turnEndedAt,
+            )
+        } else {
+            null
+        }
+        statsForMessageId = last.id
+        turnStats = turnStatsFromMeta(last.meta, clock).takeIf { !it.isEmpty }
+        // 秒表只能用一次：下次重拉历史不能拿旧起点再算一遍。
+        turnStartedAt = 0L
+        turnFirstTextAt = 0L
+        turnFirstAnyAt = 0L
+        turnEndedAt = 0L
+    }
+
     fun refreshHistory() {
         val target = device ?: return
         viewModelScope.launch {
@@ -1092,6 +1168,7 @@ class ChatViewModel @Inject constructor(
                 unavailable = page.unavailable
                 items = page.messages.toTimelineItems()
                 markLastTurnResult()
+                settleTurnStats(page.messages)
                 reconcileQueue()
                 before = page.nextBefore
                 hasOlder = page.nextBefore != null && page.messages.isNotEmpty()
@@ -1187,6 +1264,8 @@ class ChatViewModel @Inject constructor(
         sending = true
         error = null
         images = emptyList()
+        // 秒表从「按下发送」开始（含排队与建连），与桌面端「请求发出」的口径一致。
+        resetTurnClock()
         // 前台起服务是稳的（后台启动会被系统拒），run 一结束服务自己退出。
         RunWatcher.start(context)
         merger = ReplyMerger()
@@ -1226,6 +1305,7 @@ class ChatViewModel @Inject constructor(
                         }
                     }
                     live = snapshot
+                    if (snapshot != null) markTurnFirstContent(snapshot)
                     if (snapshot?.errorText != null) error = snapshot.errorText
                 }
             } catch (e: CancellationException) {
@@ -1235,7 +1315,14 @@ class ChatViewModel @Inject constructor(
             } finally {
                 sending = false
                 live = null
+                if (turnEndedAt == 0L) turnEndedAt = System.currentTimeMillis()
                 refreshHistory()
+                // 落盘比收尾帧略晚：第一次重拉可能还没这条 assistant 消息，
+                // 补一次把统计行的 tokens 补上（已经结算过就什么都不做）。
+                if (turnStartedAt > 0L) {
+                    delay(600)
+                    if (turnStartedAt > 0L) refreshHistory()
+                }
             }
         }
     }

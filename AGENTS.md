@@ -342,6 +342,20 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
     答案只能从流里取；关面板要 `runtime/stop`，否则匿名运行时一直挂着。
   - `prompt` 的 body 没有 images 字段：运行中的消息一律不带图片，带图就明确提示，别悄悄丢。
 
+- **回合统计行（首字 / tok/s）是壳自己打点的**（`native/app/src/main/java/dev/pideck/nativeapp/data/TurnStats.kt`）：
+  桌面端那一行数是主进程现测的（`out/main/index.js` 的 perf：`ttftMs = 首字 − 请求发出`、
+  `tps = outputTokens ÷ (total − ttft)`、`endToEndTps = outputTokens ÷ total`），走 `agentsRuntimeState`
+  边沿推送，**不在消息 meta 里**，手机订不到。所以本端自己开秒表：`ChatViewModel.send()` 里
+  `resetTurnClock()`，流里首个增量 `markTurnFirstContent()`（正文优先、reasoning 兜底，对应桌面
+  `firstTextAt → firstDeltaAt`），收尾记 `turnEndedAt`，落盘后 `settleTurnStats()` 用
+  `meta.usage.outputTokens` 结算。跨设备 / 翻历史只能靠 meta 的 `durationMs`，而**只有 pi 后端有**
+  （实测：pi = `{usage, durationMs, startedAt, endedAt}`，dsh = 只有 `usage`，acp = `null`）——
+  那种情况只报端到端速度，别硬算「生成速度」。渲染在 `ui/chat/ChatScreen.kt` 的 `TurnStatsLine`
+  （输入条上方一行 `labelSmall`；没有可显示的数时整行不渲染，别留空行把输入条顶下去）。
+- **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
+  标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
+  不做「有一张卡但不知道在问什么」。展开内容走 `AnimatedVisibility`，选项列仍是 `heightIn(max = 320.dp)` 内部滚动。
+
 验证：`cd native && ./gradlew --offline -q :app:testDebugUnitTest`，出包
 `./gradlew :app:assembleRelease`，产物在 `native/app/build/outputs/apk/release/app-release.apk`，
 拷成 `apk/PiDeck-native-<版本>-release.apk` 后更新 `apk/SHA256SUMS.txt` 与 `apk/index.html`

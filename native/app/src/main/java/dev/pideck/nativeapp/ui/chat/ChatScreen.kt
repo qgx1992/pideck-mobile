@@ -118,6 +118,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.data.BusySendMode
+import dev.pideck.nativeapp.data.TurnStats
+import dev.pideck.nativeapp.data.formatTurnStats
 import dev.pideck.nativeapp.data.TimelineItem
 import dev.pideck.nativeapp.data.ToolView
 import dev.pideck.nativeapp.data.SessionModel
@@ -550,6 +552,7 @@ fun ChatScreen(
                         onClose = { viewModel.closeParallelAsk() },
                     )
                 }
+                TurnStatsLine(stats = viewModel.turnStats, streaming = viewModel.streaming)
                 Composer(
                 value = draft,
                 onValueChange = { text ->
@@ -1552,6 +1555,27 @@ private fun BusySendPicker(mode: BusySendMode, onChange: (BusySendMode) -> Unit)
             }
         }
     }
+}
+
+/**
+ * 一轮回复的统计行（桌面端 `ComposerStatsLine` 的移动版）：首字等待 · 输出 tokens · 两档 tok/s。
+ *
+ * 数据由壳自己打点（见 `data/TurnStats.kt`）：桌面端那组数是主进程现测的，
+ * 不在消息 meta 里，手机拿不到。没有可显示的数时整行不渲染（否则会把输入条往下顶）。
+ */
+@Composable
+private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean) {
+    val text = stats?.let { formatTurnStats(it, streaming = streaming) } ?: return
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 2.dp),
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 /** 排队到下一轮的那几条：宿主不回传队列内容，这里只报数 + 头几个字。 */
