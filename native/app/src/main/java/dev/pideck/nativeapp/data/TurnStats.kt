@@ -6,6 +6,7 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 /**
@@ -28,6 +29,8 @@ data class TurnStats(
     val outputTokens: Int? = null,
     val tps: Double? = null,
     val endToEndTps: Double? = null,
+    /** 流式直播中的估算值（宿主只在落盘后的 meta 里给真实 usage，流里没有）。 */
+    val estimated: Boolean = false,
 ) {
     val isEmpty: Boolean get() = ttftMs == null && totalMs == null && outputTokens == null
 }
@@ -131,12 +134,53 @@ fun turnStatsFromMeta(meta: JsonObject?, clock: TurnClock?): TurnStats {
  * 位置和高度都不再变。
  */
 fun formatTurnStats(stats: TurnStats?, streaming: Boolean = false): String {
-    if (streaming) return "首字 ${stats?.ttftMs?.let(::formatMs) ?: "—"} · 生成中…"
+    if (streaming) {
+        val ttft = stats?.ttftMs?.let(::formatMs) ?: "—"
+        val tokens = stats?.outputTokens
+        val tps = stats?.tps?.let(::formatTps)
+        if (tokens == null || tps == null) return "首字 $ttft · 生成中…"
+        // 直播：这里的 tokens 是按字数估的（宿主只在落盘后才给真 usage），所以标 ≈。
+        val e2e = stats.endToEndTps?.let(::formatTps) ?: "—"
+        return "首字 $ttft · ≈$tokens tok · 生成 $tps tok/s · 全程 $e2e tok/s"
+    }
     val ttft = stats?.ttftMs?.let(::formatMs) ?: "—"
     val tokens = stats?.outputTokens?.toString() ?: "—"
     val tps = stats?.tps?.let(::formatTps) ?: "—"
     val e2e = stats?.endToEndTps?.let(::formatTps) ?: "—"
     return "首字 $ttft · $tokens tok · 生成 $tps tok/s · 全程 $e2e tok/s"
+}
+
+/**
+ * 流式期间的 tokens 估算。
+ *
+ * 流里只有 text/thinking/tool 增量，**没有 usage**（`webExternalStream` 的帧不带），
+ * 真值要等落盘后的 `meta.usage.outputTokens`。所以直播期间按字符估：
+ * 系数来自本会话 66 条 assistant 消息的最小二乘拟合（CJK ≈0.9 token/字，其余 ≈0.17），
+ * 工具调用的入参也是模型自己生成的输出，一并计入。
+ *
+ * 中位误差约 15%（长英文块、代码块偏差大），所以直播时文案带 `≈`，收尾后换成真值。
+ */
+fun estimateOutputTokens(parts: List<ReplyPart>): Int {
+    var total = 0.0
+    for (part in parts) {
+        total += when (part) {
+            is ReplyPart.Text -> estimateChars(part.text)
+            is ReplyPart.Reasoning -> estimateChars(part.text)
+            is ReplyPart.Tool -> estimateChars(part.input?.toString().orEmpty())
+        }
+    }
+    return total.roundToInt()
+}
+
+private const val CJK_TOKENS_PER_CHAR = 0.9
+private const val OTHER_TOKENS_PER_CHAR = 0.17
+
+private fun estimateChars(text: String): Double {
+    if (text.isEmpty()) return 0.0
+    var cjk = 0
+    for (ch in text) if (ch.code in 0x4E00..0x9FFF) cjk++
+    val other = text.length - cjk
+    return cjk * CJK_TOKENS_PER_CHAR + other * OTHER_TOKENS_PER_CHAR
 }
 
 private fun formatMs(ms: Long): String = when {

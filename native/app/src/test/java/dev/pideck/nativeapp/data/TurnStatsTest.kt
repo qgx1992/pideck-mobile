@@ -105,6 +105,47 @@ class TurnStatsTest {
     }
 
     @Test
+    fun `直播估算：中文按 0_9 token 每字、其余按 0_17`() {
+        // 2 个汉字 = 1.8，10 个半角 = 1.7，合计 3.5 → 四舍五入 4
+        assertEquals(4, estimateOutputTokens(listOf(ReplyPart.Text("你好abcdefghij"))))
+        // 空内容不报数（否则直播里会出现 ≈0 tok）
+        assertEquals(0, estimateOutputTokens(listOf(ReplyPart.Text(""))))
+        assertEquals(0, estimateOutputTokens(emptyList()))
+    }
+
+    @Test
+    fun `直播估算：思考与工具入参也算输出 tokens`() {
+        val parts = listOf(
+            ReplyPart.Reasoning("先想一下", done = true),
+            ReplyPart.Text("答案"),
+            ReplyPart.Tool("t1", "bash", "input-available", input = kotlinx.serialization.json.JsonPrimitive("abcdefghij")),
+        )
+        val estimated = estimateOutputTokens(parts)
+        // 4 汉字≈3.6 + 2 汉字≈1.8 + 12 个带引号的半角字符≈2.04 → 7.44 → 7
+        assertEquals(7, estimated)
+    }
+
+    @Test
+    fun `直播文案：带 ≈ 且四段都出，无估算值时退回生成中`() {
+        val live = TurnStats(
+            ttftMs = 2_800L,
+            totalMs = 6_000L,
+            outputTokens = 640,
+            tps = 152.0,
+            endToEndTps = 96.0,
+            estimated = true,
+        )
+        assertEquals(
+            "首字 2.8s · ≈640 tok · 生成 152 tok/s · 全程 96 tok/s",
+            formatTurnStats(live, streaming = true),
+        )
+        assertEquals(
+            "首字 2.8s · 生成中…",
+            formatTurnStats(TurnStats(ttftMs = 2_800L, totalMs = 6_000L), streaming = true),
+        )
+    }
+
+    @Test
     fun `翻历史：没有秒表就用 meta 的 durationMs，只报端到端`() {
         val stats = deriveTurnStats(clock = null, outputTokens = 500, metaTotalMs = 10_000L)
         assertNull(stats.ttftMs)

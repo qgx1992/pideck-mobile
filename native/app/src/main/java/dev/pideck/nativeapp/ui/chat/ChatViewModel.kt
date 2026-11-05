@@ -45,6 +45,7 @@ import dev.pideck.nativeapp.data.TimelineItem
 import dev.pideck.nativeapp.data.TurnClock
 import dev.pideck.nativeapp.data.TurnStats
 import dev.pideck.nativeapp.data.deriveTurnStats
+import dev.pideck.nativeapp.data.estimateOutputTokens
 import dev.pideck.nativeapp.data.turnStatsFromMeta
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
@@ -67,6 +68,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -152,6 +154,14 @@ class ChatViewModel @Inject constructor(
     private var turnFirstTextAt = 0L
     private var turnFirstAnyAt = 0L
     private var turnEndedAt = 0L
+
+    /** 流式直播节拍器（每 2s 刷一次统计行）；收尾/取消时停。 */
+    private var liveStatsJob: Job? = null
+
+    private companion object {
+        /** 直播节拍：2s 一次（用户 0.5.33 要求）。 */
+        const val LIVE_STATS_INTERVAL_MS = 2_000L
+    }
 
     var sending by mutableStateOf(false)
         private set
@@ -1105,6 +1115,51 @@ class ChatViewModel @Inject constructor(
         SessionActivity.markTurnResult(sessionId, failed = !last.errorText.isNullOrBlank())
     }
 
+    /**
+     * 流式直播的节拍器：每 [LIVE_STATS_INTERVAL_MS] 重算一次统计行。
+     *
+     * **全程**是真实的墙钟（请求发出 → 现在），**tokens 是估的**（流里没有 usage），
+     * 所以直播文案带 `≈`；收尾后 `settleTurnStats()` 用 `meta.usage` 换成真值。
+     */
+    private fun publishLiveStats() {
+        val base = turnRequestSentAt
+        if (turnStartedAt <= 0L || base <= 0L) return
+        val now = System.currentTimeMillis()
+        val total = (now - base).coerceAtLeast(0L)
+        val firstText = turnFirstTextAt
+        val firstAny = turnFirstAnyAt
+        val first = if (firstText > 0L) firstText else firstAny
+        val tokens = live?.let { estimateOutputTokens(it.parts) }?.takeIf { it > 0 }
+        val decodeStart = if (firstAny > 0L) firstAny else first
+        turnStats = TurnStats(
+            ttftMs = if (first > 0L) first - base else null,
+            totalMs = total,
+            outputTokens = tokens,
+            tps = if (tokens != null && decodeStart > 0L && now - decodeStart >= 100L) {
+                tokens / ((now - decodeStart) / 1000.0)
+            } else {
+                null
+            },
+            endToEndTps = if (tokens != null && total >= 100L) tokens / (total / 1000.0) else null,
+            estimated = true,
+        )
+    }
+
+    private fun startLiveStats() {
+        liveStatsJob?.cancel()
+        liveStatsJob = viewModelScope.launch {
+            while (isActive) {
+                delay(LIVE_STATS_INTERVAL_MS)
+                publishLiveStats()
+            }
+        }
+    }
+
+    private fun stopLiveStats() {
+        liveStatsJob?.cancel()
+        liveStatsJob = null
+    }
+
     // ---- 统计行的打点与结算（首字时间 / tok/s，口径见 data/TurnStats.kt）----
 
     private fun resetTurnClock(now: Long = System.currentTimeMillis()) {
@@ -1150,6 +1205,7 @@ class ChatViewModel @Inject constructor(
      * `durationMs`（只有 pi 后端有）算端到端速度，首字无从得知。
      */
     private fun settleTurnStats(messages: List<ChatMessage>) {
+        stopLiveStats()
         val last = messages.lastOrNull { it.role == "assistant" } ?: return
         if (last.id == statsForMessageId) return
         val clock = if (turnStartedAt > 0L && turnEndedAt > 0L) {
@@ -1281,6 +1337,7 @@ class ChatViewModel @Inject constructor(
         images = emptyList()
         // 秒表从「按下发送」开始（含排队与建连），与桌面端「请求发出」的口径一致。
         resetTurnClock()
+        startLiveStats()
         // 前台起服务是稳的（后台启动会被系统拒），run 一结束服务自己退出。
         RunWatcher.start(context)
         merger = ReplyMerger()
@@ -1332,6 +1389,7 @@ class ChatViewModel @Inject constructor(
             } finally {
                 sending = false
                 live = null
+                stopLiveStats()
                 if (turnEndedAt == 0L) turnEndedAt = System.currentTimeMillis()
                 refreshHistory()
                 // 落盘比收尾帧略晚：第一次重拉可能还没这条 assistant 消息，
