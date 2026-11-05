@@ -1565,9 +1565,9 @@ private fun BusySendPicker(mode: BusySendMode, onChange: (BusySendMode) -> Unit)
  */
 @Composable
 private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean) {
-    val text = stats?.let { formatTurnStats(it, streaming = streaming) } ?: return
+    // 常驻一行：没有数就显示破折号，别让它忽隐忽现把输入条顶来顶去。
     Text(
-        text = text,
+        text = formatTurnStats(stats, streaming = streaming),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier

@@ -111,25 +111,23 @@ fun turnStatsFromMeta(meta: JsonObject?, clock: TurnClock?): TurnStats {
 }
 
 /**
- * 统计行文案；没有可说的数就返回 null（空行会把输入条往下顶）。
+ * 统计行文案。
  *
  * 示例：`首字 1.2s · 483 tok · 生成 104 tok/s · 全程 24 tok/s`
+ *
+ * 统计行常驻：缺项用破折号占位，不隐藏。
+ *
+ * 之前是「没有数就整行不渲染」，代价是这一行忽隐忽现 —— 聊到 acp / 没耗时的回合时它消失，
+ * 输入条跟着往上跳一格。现在固定占一行（全空就是 `首字 — · — tok · 生成 — tok/s · 全程 — tok/s`），
+ * 位置和高度都不再变。
  */
-fun formatTurnStats(stats: TurnStats, streaming: Boolean = false): String? {
-    if (streaming) {
-        val ttft = stats.ttftMs ?: return null
-        return "首字 ${formatMs(ttft)} · 生成中…"
-    }
-    val parts = mutableListOf<String>()
-    stats.ttftMs?.let { parts += "首字 ${formatMs(it)}" }
-    stats.outputTokens?.let { parts += "$it tok" }
-    stats.tps?.let { parts += "生成 ${formatTps(it)} tok/s" }
-    // 已经报了生成速度时，端到端只作补充（两者大小关系反直觉：全程一定更低）。
-    stats.endToEndTps?.let {
-        parts += if (stats.tps == null) "端到端 ${formatTps(it)} tok/s" else "全程 ${formatTps(it)} tok/s"
-    }
-    if (parts.isEmpty()) stats.totalMs?.let { parts += formatMs(it) }
-    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+fun formatTurnStats(stats: TurnStats?, streaming: Boolean = false): String {
+    if (streaming) return "首字 ${stats?.ttftMs?.let(::formatMs) ?: "—"} · 生成中…"
+    val ttft = stats?.ttftMs?.let(::formatMs) ?: "—"
+    val tokens = stats?.outputTokens?.toString() ?: "—"
+    val tps = stats?.tps?.let(::formatTps) ?: "—"
+    val e2e = stats?.endToEndTps?.let(::formatTps) ?: "—"
+    return "首字 $ttft · $tokens tok · 生成 $tps tok/s · 全程 $e2e tok/s"
 }
 
 private fun formatMs(ms: Long): String = when {

@@ -73,10 +73,11 @@ class TurnStatsTest {
     }
 
     @Test
-    fun `acp 那种什么都不报的回合整行不渲染`() {
+    fun `acp 那种什么都没有的回合也留一行占位，不隐藏`() {
         val stats = turnStatsFromMeta(meta = null, clock = null)
         assertTrue(stats.isEmpty)
-        assertNull(formatTurnStats(stats))
+        assertEquals("首字 — · — tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(stats))
+        assertEquals("统计行本身为空也不该消失", "首字 — · — tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(null))
     }
 
     @Test
@@ -102,15 +103,17 @@ class TurnStatsTest {
         assertEquals(90, stats.outputTokens)
         assertNull(stats.totalMs)
         assertNull(stats.tps)
-        assertEquals("90 tok", formatTurnStats(stats))
+        assertEquals("首字 — · 90 tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(stats))
     }
 
     @Test
     fun `流式期间只报首字等待`() {
         val stats = TurnStats(ttftMs = 1_240L)
         assertEquals("首字 1.2s · 生成中…", formatTurnStats(stats, streaming = true))
-        // 收尾式调用时没有 tokens / 速度，只报首字
-        assertEquals("首字 1.2s", formatTurnStats(stats))
+        // 收尾式调用时没有 tokens / 速度，缺项用破折号占位
+        assertEquals("首字 1.2s · — tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(stats))
+        // 还没收到首帧（ttft 为空）时也在流式态，不能把整行抹掉
+        assertEquals("首字 — · 生成中…", formatTurnStats(null, streaming = true))
     }
 
     @Test
@@ -130,11 +133,11 @@ class TurnStatsTest {
 
     @Test
     fun `毫秒与长耗时各用各的单位`() {
-        assertEquals("首字 640 ms", formatTurnStats(TurnStats(ttftMs = 640L)))
-        assertEquals("首字 12s", formatTurnStats(TurnStats(ttftMs = 12_300L)))
+        assertEquals("首字 640 ms · — tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(TurnStats(ttftMs = 640L)))
+        assertEquals("首字 12s · — tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(TurnStats(ttftMs = 12_300L)))
         // 一位小数的速度
         assertEquals(
-            "96 tok · 生成 9.6 tok/s",
+            "首字 — · 96 tok · 生成 9.6 tok/s · 全程 — tok/s",
             formatTurnStats(TurnStats(outputTokens = 96, tps = 9.55)),
         )
     }
