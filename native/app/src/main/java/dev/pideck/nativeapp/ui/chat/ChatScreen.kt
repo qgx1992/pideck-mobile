@@ -441,18 +441,23 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 SelectChip(
-                    text = viewModel.sessionModel?.shortLabel ?: "选择模型",
+                    // 记录里没模型时不要把用户的选择误读成「未选」：手机新建的会话
+                    // 记录本来就不带模型，实际跑的是电脑端的默认模型（运行时起来后会换成
+                    // 真实名字，见 ChatViewModel.displayModel）
+                    text = viewModel.displayModel?.shortLabel ?: "默认模型",
                     onClick = { showModelSheet = true },
                     icon = Icons.Default.Memory,
                     trailing = Icons.Filled.KeyboardArrowDown,
-                    accent = viewModel.sessionModel == null,
+                    accent = viewModel.displayModel == null,
                     modifier = Modifier.widthIn(max = 188.dp),
                 )
                 val levels = viewModel.thinkingLevels
                 if (levels.isNotEmpty()) {
-                    val level = viewModel.thinkingLevel?.takeIf { it in levels } ?: levels.first()
+                    // 没选过档位就是跟随电脑端默认：别再显示成「不思考」—— 那是档位表的第一项，
+                    // 与 pi 实际用的 high 差得远
+                    val level = viewModel.displayThinking?.takeIf { it in levels }
                     SelectChip(
-                        text = "思考 ${thinkingLabel(level)}",
+                        text = "思考 ${level?.let(::thinkingLabel) ?: "默认"}",
                         onClick = { showThinkingSheet = true },
                         trailing = Icons.Filled.KeyboardArrowDown,
                         accent = level in setOf("high", "xhigh", "max"),
@@ -719,7 +724,7 @@ fun ChatScreen(
     if (showModelSheet) {
         ModelSheet(
             models = viewModel.availableModels,
-            current = viewModel.sessionModel,
+            current = viewModel.displayModel,
             busy = viewModel.modelsBusy,
             onRefresh = { viewModel.loadModels(force = true) },
             onPick = { model ->
@@ -734,8 +739,8 @@ fun ChatScreen(
     if (showThinkingSheet) {
         ThinkingSheet(
             levels = viewModel.thinkingLevels,
-            current = viewModel.thinkingLevel,
-            modelLabel = viewModel.sessionModel?.shortLabel,
+            current = viewModel.displayThinking,
+            modelLabel = viewModel.displayModel?.shortLabel,
             onPick = { level ->
                 showThinkingSheet = false
                 viewModel.applyThinking(level)

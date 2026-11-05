@@ -28,7 +28,7 @@ class RuntimeStateLiveTest {
             device,
             token,
             RuntimeTarget(runtime!!.sessionId, runtime.agentId, runtime.runtimeGeneration.toLong()),
-        )
+        ).usage
         println("live context: ${usage.detail} (${usage.percentLabel}) tokens=${usage.contextTokens} in=${usage.inputTokens} out=${usage.outputTokens} provider=${usage.provider}")
         assertTrue("上下文窗口应该读得到", usage.known)
         assertTrue("窗口大小应该大于 0", usage.contextWindow > 0)

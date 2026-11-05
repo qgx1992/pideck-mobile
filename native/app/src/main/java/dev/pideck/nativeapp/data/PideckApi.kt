@@ -142,8 +142,9 @@ interface PideckApi {
      * 运行时状态投影（`POST /api/sessions/:id/runtime/state`）：上下文用量与权限预设都从这里取。
      *
      * 桌面端头部那个圆环就是它；运行时没起来时服务端返回空对象，这里也就给 [ContextUsage] 默认值。
+     * 同一份回包里还带着当前真正生效的模型与思考档位（[RuntimeSnapshot.model] / [RuntimeSnapshot.thinkingLevel]）。
      */
-    suspend fun runtimeState(device: Device, token: String?, target: RuntimeTarget): ContextUsage
+    suspend fun runtimeState(device: Device, token: String?, target: RuntimeTarget): RuntimeSnapshot
 
     /** 通用运行时动作（`runtime/permission`、`runtime/compact` …），body 里自动带上 target。 */
     suspend fun runtimeCommand(
@@ -427,14 +428,14 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         device: Device,
         token: String?,
         target: RuntimeTarget,
-    ): ContextUsage = withContext(Dispatchers.IO) {
+    ): RuntimeSnapshot = withContext(Dispatchers.IO) {
         val text = postJson(
             device,
             token,
             "/api/sessions/${encode(target.sessionId)}/runtime/state",
             runtimeTargetBody(target),
         )
-        parseContextUsage(unwrapRuntimeState(runCatching {
+        parseRuntimeSnapshot(unwrapRuntimeState(runCatching {
             PideckJson.parseToJsonElement(text)
         }.getOrNull()))
     }

@@ -67,7 +67,12 @@ fun ModelSheet(
                 )
             }
             Text(
-                "改的是这个会话的记录，下一轮对话生效",
+                if (current == null) {
+                    // 没选过：手机上新建的会话记录本来就不带模型，真正生效的是电脑端的默认模型
+                    "现在跟随电脑端的默认模型；选一个只改这个会话，下一轮对话生效"
+                } else {
+                    "改的是这个会话的记录，下一轮对话生效"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
@@ -164,7 +169,11 @@ fun ThinkingSheet(
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Text("思考程度", style = MaterialTheme.typography.titleMedium)
             Text(
-                modelLabel?.let { "$it · 下一轮对话生效" } ?: "下一轮对话生效",
+                listOfNotNull(
+                    modelLabel,
+                    if (current == null) "跟随电脑端默认档位" else null,
+                    "下一轮对话生效",
+                ).joinToString(" · "),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),

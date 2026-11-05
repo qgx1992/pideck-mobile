@@ -37,6 +37,43 @@ data class ContextUsage(
         get() = if (!known) "上下文窗口未知" else "${formatTokens(contextTokens)} / ${formatTokens(contextWindow)}"
 }
 
+/**
+ * `runtime/state` 的两个用途：上下文用量（辅助信息）＋「运行时真正在跑的模型与思考档位」。
+ *
+ * 后者的存在理由：宿主**不会**把启动默认值写进 web 端新建的会话记录（默认值解析器只在
+ * Electron IPC 的 createDraft 里跑），所以「记录里没有模型」时手机上唯一能拿到的真值
+ * 就是运行时状态这一份 —— 它和 pi 实际用的模型/档位同源。
+ */
+data class RuntimeSnapshot(
+    val usage: ContextUsage = ContextUsage(),
+    val model: SessionModel? = null,
+    val thinkingLevel: String? = null,
+)
+
+/** 运行时状态 → [RuntimeSnapshot]；任何字段缺失都当没有，不猜。 */
+fun parseRuntimeSnapshot(root: JsonElement?): RuntimeSnapshot = RuntimeSnapshot(
+    usage = parseContextUsage(root),
+    model = parseRuntimeModel(root),
+    thinkingLevel = (root as? JsonObject)?.let { obj ->
+        (obj["thinkingLevel"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+    },
+)
+
+/** `runtime/state` 里的 `provider` / `modelId` / `modelName` 就是 pi 当前真正在跑的模型。 */
+fun parseRuntimeModel(root: JsonElement?): SessionModel? {
+    val obj = root as? JsonObject ?: return null
+    fun str(key: String): String? = (obj[key] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+    val provider = str("provider")
+    val modelId = str("modelId")
+    // 两个都给不出来就是个空壳（运行时还没起来时宿主返回 `{}`），别造一个假模型出来
+    if (provider == null && modelId == null) return null
+    return SessionModel(
+        provider = provider.orEmpty(),
+        modelId = modelId.orEmpty(),
+        modelName = str("modelName").orEmpty(),
+    )
+}
+
 /** `1.4k` 这种紧凑写法，头部空间紧。 */
 fun formatTokens(value: Long): String = when {
     value >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fm", value / 1_000_000.0)

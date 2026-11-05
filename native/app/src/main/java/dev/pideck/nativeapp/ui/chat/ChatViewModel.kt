@@ -343,6 +343,37 @@ class ChatViewModel @Inject constructor(
         return RuntimeTarget(sessionId, runtime.agentId, runtime.runtimeGeneration.toLong())
     }
 
+    /** 已经为哪一代运行时拉过真值（`agentId#generation`）。失败也记，避免 5s 轮询里反复打。 */
+    private var livePrefsKey: String? = null
+
+    /**
+     * 会话记录里没有模型 / 思考（手机新建的会话都是这样）时，从 `runtime/state` 把 pi
+     * 实际在用的那一份取回来当**展示**值。运行时没起来就直接返回 —— 没有真值就不编。
+     *
+     * 每代运行时只拉一次：模型/档位在运行时生命周期内不会自己变（用户改的话记录也会跟着变）。
+     */
+    private fun syncLivePrefs() {
+        if (sessionModel != null && thinkingLevel != null) return
+        val host = device ?: return
+        val runtime = StateCache.runtime(deviceId, sessionId) ?: return
+        val key = "${runtime.agentId}#${runtime.runtimeGeneration}"
+        if (key == livePrefsKey) return
+        livePrefsKey = key
+        viewModelScope.launch {
+            runCatching {
+                api.runtimeState(
+                    host,
+                    token,
+                    RuntimeTarget(sessionId, runtime.agentId, runtime.runtimeGeneration.toLong()),
+                )
+            }.onSuccess { snap ->
+                // 只补空位：用户刚选的值（sessionModel / thinkingLevel）不被运行时旧值冲掉
+                if (sessionModel == null) snap.model?.let { liveModel = it }
+                if (thinkingLevel == null) snap.thinkingLevel?.takeIf { it.isNotBlank() }?.let { liveThinking = it }
+            }
+        }
+    }
+
     fun dismissActionNote() {
         actionNote = null
     }
@@ -372,11 +403,15 @@ class ChatViewModel @Inject constructor(
                     actionNote = "这个会话的运行时还没起来 —— 先发一句话再来读上下文"
                     return@launch
                 }
-                val usage = api.runtimeState(target, token, runtime)
-                contextUsage = usage
+                val snap = api.runtimeState(target, token, runtime)
+                contextUsage = snap.usage
+                // 顺手把运行时真值记下来（同一份回包，不额外发请求）
+                livePrefsKey = "${runtime.agentId}#${runtime.runtimeGeneration}"
+                if (sessionModel == null) snap.model?.let { liveModel = it }
+                if (thinkingLevel == null) snap.thinkingLevel?.takeIf { it.isNotBlank() }?.let { liveThinking = it }
                 // runtime 的 permissionPreset 只属于 DSH；pi 会话读它等于把没用的字段摊到界面上
                 if (securityControl == PrivilegeControl.PermissionPreset) {
-                    usage.permissionPreset?.takeIf { it.isNotBlank() }?.let { permissionPreset = it }
+                    snap.usage.permissionPreset?.takeIf { it.isNotBlank() }?.let { permissionPreset = it }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -498,6 +533,28 @@ class ChatViewModel @Inject constructor(
     var thinkingLevel by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * 运行时**真实生效**的模型 / 思考档位。
+     *
+     * 宿主只在 Electron 的 createDraft 里套用启动默认值（`resolveLaunchDefaultOptions`），
+     * web 端（手机）新建的会话记录里 model / thinkingLevel 是空的 —— 光看记录就是「选择模型 /
+     * 不思考」。运行时起来后 `runtime/state` 会报出 pi 实际用的那一个，这里存下来当**展示**来源：
+     * 只改显示，不回写会话记录（写回去等于把手选的默认变成硬绑定，宿主以后改默认就不跟着走了）。
+     */
+    var liveModel by mutableStateOf<SessionModel?>(null)
+        private set
+
+    var liveThinking by mutableStateOf<String?>(null)
+        private set
+
+    /** 顶栏展示用的模型：会话记录优先（用户显式选过），否则用运行时真值。 */
+    val displayModel: SessionModel?
+        get() = sessionModel ?: liveModel
+
+    /** 顶栏展示用的思考档位：同上。两个都为空就是「跟随电脑端默认」。 */
+    val displayThinking: String?
+        get() = thinkingLevel ?: liveThinking
+
     var availableModels by mutableStateOf<List<AvailableModel>>(emptyList())
         private set
 
@@ -545,6 +602,8 @@ class ChatViewModel @Inject constructor(
                                 if (next?.requestId != pendingAsk?.requestId) askError = null
                                 pendingAsk = next
                                 adoptState(result.state)
+                                // 运行时刚起来时把 pi 真实生效的模型/档位补上（记录里通常没有）
+                                syncLivePrefs()
                             }
                         }
                 }
@@ -597,7 +656,8 @@ class ChatViewModel @Inject constructor(
 
     /** 当前模型在 /api/models 里的条目：先精确对，再按 id 尾部宽松对。 */
     private fun modelEntry(): AvailableModel? {
-        val current = sessionModel ?: return null
+        // 记录里没选过时用运行时真值：手机新建的会话只有这一份，档位表得按它查
+        val current = displayModel ?: return null
         availableModels.firstOrNull {
             it.provider == current.provider && it.id == current.modelId
         }?.let { return it }

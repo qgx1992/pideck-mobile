@@ -200,4 +200,42 @@ class RuntimeActionsTest {
         assertTrue(usage.known)
         assertEquals("10%", usage.percentLabel)
     }
+
+    @Test
+    fun `runtime snapshot carries the model that is actually running`() {
+        // 主机真实回包（已摘掉无关字段）：记录里没有模型时，手机上就靠这一份显示顶栏
+        val raw = Json.parseToJsonElement(
+            """
+            {"result":{"ok":true,"value":{"target":{"sessionId":"s"},"value":{
+              "modelName":"DeepSeek V4.1 Flash 1017 · 多元","provider":"magpie",
+              "modelId":"tokenrhythm/deepseek-v4.1-flash-1017","thinkingLevel":"high",
+              "contextTokens":82227,"contextWindow":1000000,"contextPercent":8.2227
+            }}}}
+            """.trimIndent(),
+        )
+        val snap = parseRuntimeSnapshot(unwrapRuntimeState(raw))
+        assertEquals("magpie", snap.model?.provider)
+        assertEquals("tokenrhythm/deepseek-v4.1-flash-1017", snap.model?.modelId)
+        assertEquals("high", snap.thinkingLevel)
+        assertTrue(snap.usage.known)
+    }
+
+    @Test
+    fun `runtime snapshot without a runtime reports nothing instead of faking a model`() {
+        // 运行时没起来时宿主回 `{}`：不能编一个空壳模型出来，否则顶栏显示一个没名字的 pill
+        val snap = parseRuntimeSnapshot(json.parseToJsonElement("{}"))
+        assertNull(snap.model)
+        assertNull(snap.thinkingLevel)
+        assertFalse(snap.usage.known)
+    }
+
+    @Test
+    fun `runtime model keeps the name even when only the id is reported`() {
+        val snap = parseRuntimeSnapshot(
+            json.parseToJsonElement("""{"provider":"magpie","modelId":"tokenrhythm/x"}"""),
+        )
+        // 没有名字时退回 id（完整 id，不截掉 provider 前缀）
+        assertEquals("tokenrhythm/x", snap.model?.shortLabel)
+        assertNull(snap.thinkingLevel)
+    }
 }
