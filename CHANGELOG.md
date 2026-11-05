@@ -12,6 +12,18 @@ PiDeck 手机客户端（Android，Kotlin + Jetpack Compose）。
 
 ---
 
+## 0.5.27 — 2026-11-05
+
+**后端标记补到首页「最近的会话」。**
+
+0.5.26 只把标记加在「全部会话」列表的行上（`ui/sessions/SessionsScreen.kt` 的 `SessionRow`），
+而首页落地页那份「最近的会话」走的是另一个 composable（`ui/home/HomeScreen.kt` 的 `RecentSessionRow`），
+于是用户装完打开首页看不到任何标记。
+
+- 标签抽成共用控件 `ui/theme/Controls.kt` 的 `BackendBadge(label, muted)`，两个列表都用它。
+- 首页「最近的会话」的时间行改成 `Row`：`项目 · 时间` 在左，后端标签在右。
+- 文案仍由 `AgentBackend.badgeOf(backend, acpToolName)` 统一给，别在 UI 里各拼一份。
+
 ## 0.5.26 — 2026-11-05
 
 **新建会话默认回到 pi；会话列表能看出这一条是哪个后端。**

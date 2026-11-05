@@ -62,6 +62,7 @@ import dev.pideck.nativeapp.data.AgentBackend
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.ui.chat.StatusDot
 import dev.pideck.nativeapp.ui.theme.AppButton
+import dev.pideck.nativeapp.ui.theme.BackendBadge
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import dev.pideck.nativeapp.ui.theme.AppIconButton
 
@@ -319,7 +320,10 @@ private fun SessionRow(
                     // 后端标记：同名会话并列时靠它区分（桌面端库里 dsh / acp / pi 混着放）
                     AgentBackend.badgeOf(session.backend, acpToolName)?.let { label ->
                         Spacer(Modifier.width(6.dp))
-                        BackendBadge(label, muted = session.backend.isNullOrBlank() || session.backend == "pi")
+                        BackendBadge(
+                            label,
+                            muted = session.backend.isNullOrBlank() || session.backend == "pi",
+                        )
                     }
                 }
             }
@@ -362,23 +366,5 @@ internal fun relativeTime(epochMillis: Long): String {
             val days = diff / 86_400_000
             "${days} 天前"
         }
-    }
-}
-
-/** 会话行上的后端小标签：pi 用弱色（大多数会话都是它），其余用主题色描一下。 */
-@Composable
-private fun BackendBadge(label: String, muted: Boolean) {
-    val scheme = MaterialTheme.colorScheme
-    Surface(
-        color = if (muted) scheme.surfaceContainerHigh else scheme.primary.copy(alpha = 0.14f),
-        shape = RoundedCornerShape(5.dp),
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (muted) scheme.onSurfaceVariant else scheme.primary,
-            maxLines = 1,
-            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-        )
     }
 }

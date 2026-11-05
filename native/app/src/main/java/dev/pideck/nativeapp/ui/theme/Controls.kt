@@ -195,6 +195,30 @@ fun SelectChip(
 }
 
 /**
+ * 后端小标签：会话行里跟在时间后面，告诉人这条是 pi / DSH / 哪个 ACP 工具。
+ *
+ * pi 用弱色（绝大多数会话都是它，别抢眼），其余用主题色描一下。
+ * 文案不在这里拼 —— 统一由 `AgentBackend.badgeOf(backend, acpToolName)` 给。
+ */
+@Composable
+fun BackendBadge(label: String, muted: Boolean = false, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        color = if (muted) scheme.surfaceContainerHigh else scheme.primary.copy(alpha = 0.16f),
+        shape = RoundedCornerShape(5.dp),
+        modifier = modifier,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (muted) scheme.onSurfaceVariant else scheme.primary,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+        )
+    }
+}
+
+/**
  * 卡片类区域的按压反馈。
  *
  * 不用默认的 ripple：它是一块**直角**的半透明色块，铺在圆角卡片上会从角上溢出来，

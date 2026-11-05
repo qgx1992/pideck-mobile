@@ -58,6 +58,7 @@ import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.ui.theme.AppButton
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import dev.pideck.nativeapp.ui.theme.AppIconButton
+import dev.pideck.nativeapp.ui.theme.BackendBadge
 import dev.pideck.nativeapp.ui.theme.SelectChip
 import dev.pideck.nativeapp.ui.sessions.relativeTime
 
@@ -233,6 +234,8 @@ fun HomeScreen(
                     RecentSessionRow(
                         session = session,
                         projectName = viewModel.projectNameOf(session.projectId),
+                        acpToolName = viewModel.acpTools
+                            .firstOrNull { it.id == session.acpToolId }?.name,
                         onClick = { onOpenChat(session.id, "") },
                     )
                 }
@@ -308,7 +311,12 @@ private fun SendButton(enabled: Boolean, busy: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun RecentSessionRow(session: Session, projectName: String, onClick: () -> Unit) {
+private fun RecentSessionRow(
+    session: Session,
+    projectName: String,
+    onClick: () -> Unit,
+    acpToolName: String? = null,
+) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(14.dp),
@@ -326,13 +334,23 @@ private fun RecentSessionRow(session: Session, projectName: String, onClick: () 
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    "$projectName · ${relativeTime(session.updatedAt)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "$projectName · ${relativeTime(session.updatedAt)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    AgentBackend.badgeOf(session.backend, acpToolName)?.let { label ->
+                        Spacer(Modifier.width(6.dp))
+                        BackendBadge(
+                            label,
+                            muted = session.backend.isNullOrBlank() || session.backend == "pi",
+                        )
+                    }
+                }
             }
             Spacer(Modifier.width(8.dp))
             Box(
