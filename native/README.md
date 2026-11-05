@@ -55,8 +55,8 @@ cd native
 | 顶栏溢出菜单 | 导出会话 HTML，存到「下载/PiDeck」（Android 10+ 走 MediaStore，不需要存储权限） | `GET /api/sessions/:id/export-html` |
 | 顶栏溢出菜单 | 权限预设（桌面端的「计划模式」那组）：只读 / 工作区可写 / 完全访问 | `POST runtime/permission` + 写回会话记录 |
 | 顶栏溢出菜单 / 顶栏胶囊 | 上下文用量（百分比环的等价物）+ 立即压缩，可带「保留什么」的提示词 | `POST runtime/state`、`POST runtime/compact` |
-| 输入框打 `@` | 按当前目录补全路径，选中后插入 `@相对路径 ` | `GET /api/files?dir=` |
-| 输入框打 `/` | `/new`（回首页选工作区）、`/compact [提示词]` —— 只列客户端接管的，其余直接发给 pi | 本地拦截 |
+| 输入框打 `@` | 递归扫工作区后补全路径（跳过 .git / node_modules / build 等，上限 90 个目录、3000 个文件），支持子序列模糊匹配；目录补尾斜杠 `@src/`，含空格写成 `@"my file.kt"` | `GET /api/files?dir=` 逐目录广度优先 |
+| 输入框打 `/` | 客户端内置 `/new`、`/compact [提示词]`，其后是本机真实存在的全部宿主命令（扩展 / 模板 / 技能），技能按 `/skill:名称` 插入 | `POST runtime/commands`（`/new`、`/compact` 由客户端拦截） |
 
 这几项都需要 `target`（`agentId + runtimeGeneration`），所以运行时没起来时菜单会说明原因而不是静默失败。
 
