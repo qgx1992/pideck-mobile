@@ -279,6 +279,10 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   `MainActivity` 在 `onCreate`/`onNewIntent` 里 `post()` 并摘掉 extras（转屏重建会拿同一份
   Intent 再走一遍 `onCreate`），`AppNav` 冷启动用 `take()` 直接把它当起点、热启动靠 `flow` 就地跳。
 
+- **state 要声明在 `init` 之前**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt`）：
+  Kotlin 按文本顺序初始化属性，`init` 里给「声明在后面」的 `by mutableStateOf(...)` 赋值
+  会命中还没初始化的委托字段 → NPE，整个 ViewModel 构造失败（表现：会话页进不去，编译期看不出来）。
+  0.5.22 出过一次，0.5.23 修；守门测试 `native/app/src/test/java/dev/pideck/nativeapp/ui/chat/ChatViewModelInitOrderTest.kt`。
 - **运行中发送有三条通道，别混成一条**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt`
   的 `sendWhileBusy`）：
   - 加入当前回合 → `POST /api/sessions/:id/prompt` + `streamingBehavior:"steer"`，

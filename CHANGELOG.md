@@ -12,6 +12,18 @@ PiDeck 手机客户端（Android，Kotlin + Jetpack Compose）。
 
 ---
 
+## 0.5.23 — 2026-11-05
+
+**修 0.5.22 的「进不了会话页」**（0.5.22 装完点会话就闪回，功能一个都没法用）。
+
+- 原因：聊天页 ViewModel 的 `init` 里读了一次本地偏好（上次选的发送档位），
+  而被赋值的 state 声明在文件更靠后的位置。Kotlin 按文本顺序初始化属性，`init` 先执行时
+  那个 `by mutableStateOf(...)` 的委托字段还是 `null` —— 一赋值就 `NullPointerException`，
+  ViewModel 构造失败，会话页根本进不去。编译期完全看不出来。
+- 修法：把「运行中发送」那组 state 挪到 `init` 之前，并加了一条守门测试
+  （`ChatViewModelInitOrderTest`：init 里要赋值的 state 必须声明在 init 前面）。
+- 功能与 0.5.22 一致，没有其他改动。
+
 ## 0.5.22 — 2026-11-05
 
 **运行中的消息可以选「怎么发」了**，并补上这份更新日志。

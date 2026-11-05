@@ -139,6 +139,31 @@ class ChatViewModel @Inject constructor(
     var unavailable by mutableStateOf<String?>(null)
         private set
 
+    /** 上次用的投递方式，只当默认值。 */
+    var busySendMode by mutableStateOf(BusySendMode.STEER)
+        private set
+
+    /**
+     * 排队到下一轮、还没被 pi 取走的那些文本。
+     *
+     * 宿主不回传队列内容（桌面端走 Electron IPC 的 queued messages，HTTP 侧没有这个接口），
+     * 所以这边只留自己发过的那几条，等它们出现在历史里就自动删掉 —— 对账而不是缓存。
+     */
+    var queuedTexts by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** 并行问询面板的状态；null = 面板关着。 */
+    var parallelAsk by mutableStateOf<ParallelAsk?>(null)
+        private set
+
+    /** 「插入输入框」交接：面板点插入就写这里，界面取走塞进草稿。 */
+    var parallelInsert by mutableStateOf<String?>(null)
+        private set
+
+    private var askJob: Job? = null
+    private var askTarget: RuntimeTarget? = null
+    private var askMerger = ReplyMerger()
+
     init {
         restoreBusySendMode()
         viewModelScope.launch {
@@ -1210,30 +1235,10 @@ class ChatViewModel @Inject constructor(
     // steer / followUp），「并行发送」是另一个入口（并行问询：另开匿名会话去问，答案单独看）。
     // 手机上不设独立设置页，只记上次用哪一档，每次发还能临时换。
 
-    /** 上次用的投递方式，只当默认值。 */
-    var busySendMode by mutableStateOf(BusySendMode.STEER)
-        private set
-
-    /**
-     * 排队到下一轮、还没被 pi 取走的那些文本。
-     *
-     * 宿主不回传队列内容（桌面端走 Electron IPC 的 queued messages，HTTP 侧没有这个接口），
-     * 所以这边只留自己发过的那几条，等它们出现在历史里就自动删掉 —— 对账而不是缓存。
-     */
-    var queuedTexts by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    /** 并行问询面板的状态；null = 面板关着。 */
-    var parallelAsk by mutableStateOf<ParallelAsk?>(null)
-        private set
-
-    /** 「插入输入框」交接：面板点插入就写这里，界面取走塞进草稿。 */
-    var parallelInsert by mutableStateOf<String?>(null)
-        private set
-
-    private var askJob: Job? = null
-    private var askTarget: RuntimeTarget? = null
-    private var askMerger = ReplyMerger()
+    // 运行中发送的状态（busySendMode / queuedTexts / parallelAsk / parallelInsert）
+    // **故意声明在 init 之前**：init 里要读 Prefs 补默认档位，而 Kotlin 按文本顺序初始化属性，
+    // 声明在 init 之后的话委托字段还是 null，赋值就是 NPE —— 表现是「会话页进不去」。
+    // （0.5.22 踩过一次，见 AGENTS.md）
 
     /** Prefs 的镜像在 App 启动时就装好了，这里只是把上次的选择拿过来。 */
     private fun restoreBusySendMode() {
