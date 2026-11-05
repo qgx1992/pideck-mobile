@@ -1,285 +1,100 @@
-# pideck-mobile
+# PiDeck 手机客户端
 
-把 [PiDeck](https://pideck.caoayu.top/) 桌面端的「Web 服务」变成一个**可独立发 App 的客户端**：配对、状态同步、发消息、流式渲染、运行时控制、ask 卡片应答。
+把 [PiDeck](https://pideck.caoayu.top/) 桌面端的「局域网 Web 服务」变成手机上的原生 App：
+配对、会话列表、聊天（流式 / 思考 / 工具卡）、右侧工作区、问答卡、后台跑完提醒。
 
 > **桌面端**：<https://pideck.caoayu.top/> · 源码 <https://github.com/ayuayue/PiDeck>
-> 这个仓库只是手机客户端，Agent 行为、模型调用、会话读写都由 pi 原生负责。
+>
+> 这个仓库只是手机端。Agent 行为、模型调用、会话读写全部由电脑上的 pi 负责，
+> 手机只是一个「连着它的遥控器 + 阅读器」。
 
-**发出去的 App 是 `native/`**：Kotlin + Jetpack Compose 原生客户端（当前 **0.5.4**，`versionCode 504`，
-包名 `top.caoayu.pideck`，与桌面端 Web 服务直连，不经 WebView）。它从 0.5.0 起接管原来的包名，
-手机会只留一个 PiDeck 图标。
+当前版本 **0.5.14**（`versionCode 514`），包名 `top.caoayu.pideck`，
+Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
-仓库里其余部分是历史与参考：`app/`（Capacitor + 桌面端 vendored 界面，最后发布 0.4.12）已停止发布，
-`src/` 是框架无关的协议核心与探针 CLI。
+```bash
+cd native
+./gradlew :app:testDebugUnitTest    # 99 条 JVM 单测
+./gradlew :app:assembleRelease      # app/build/outputs/apk/release/app-release.apk
+```
 
-已对照 **PiDeck 0.9.9（Windows）** 的实机行为核验，`docs/web-api.md` 是整理出的接口契约。
-
-## 当前产物（0.5.4）
-
-| 目录 | 是什么 | 怎么跑 |
-|---|---|---|
-| `native/` | **原生客户端（唯一在发的）**：Kotlin 2.0 / Compose / Hilt，7 个界面（配对、会话列表、聊天、首页、启动、设置、扫码），88 条单测 | `cd native && ./gradlew :app:testDebugUnitTest` / `:app:assembleRelease` |
-| `src/` | 协议核心 + 探针 CLI | `npm test` / `npm run probe -- health --pair "<链接>"` |
-| `app/` | 历史：Capacitor 壳 + 桌面端 vendored 界面（0.4.12 为最后一版） | 仅供参考，不再出包 |
+需要 JDK 21 + Android SDK（`native/local.properties` 写 `sdk.dir`，不入库）。
 
 ---
 
-## 两个可运行产物
+## 它现在能做什么（0.5.14）
 
-| 目录 | 是什么 | 怎么跑 |
-|---|---|---|
-| `src/` | 协议与状态核心 + 探针 CLI（**69 条测试**，独立于客户端） | `npm test` · `npm run probe -- health --pair "<链接>"` |
-| `app/` | 历史客户端（vendor 桌面端 Web 客户端 + Capacitor 7 壳，**16 条测试**）—— 0.4.12 后不再发布 | `cd app && npm run dev` |
+| 能力 | 说明 |
+|---|---|
+| **配对** | 扫相机里的二维码（CameraX + zxing，不依赖 GMS）或粘贴桌面端「设置 → 连接面板」的链接；令牌进 `EncryptedSharedPreferences`（Keystore），不是明文 |
+| **多设备** | 设备清单存 DataStore，可改名（长按）、可切换、可删除 |
+| **首页** | 直接选工作区说第一句话；最近会话列表；两处入口（侧栏 / 顶栏）都能进设置 |
+| **会话列表** | 按工作区分组卡片，展开默认 5 条（其余折叠）、组内折叠状态落盘（重启可选「恢复上次 / 一律收起」）、按标题搜索、长按弹出操作菜单 |
+| **聊天** | Markdown 渲染 + 代码高亮（50+ 语言）与 diff、思考块逐段单行（点开看正文）、过程组（连续工具调用收成一组，组头给类别摘要）、工具卡（入参 / 结果 / 错误）、图片附件（相册或剪贴板，≤4 张）、@ 文件引用、草稿按会话保留 |
+| **右侧工作区** | 待办进度、git 改动列表（点开看逐行 diff）、文件树（进二级目录、@ 插入路径、只读预览）、子任务面板 |
+| **问答卡** | 桌面端 Agent 问问题时在手机上行内作答：单选 / 多选 / 自定义输入 / 是-否 / 批量信封 |
+| **历史** | 顶栏「历史记录」列出该会话每一轮的提问，点一条跳到那一条 |
+| **后台** | 有会话在跑就拉起 `dataSync` 前台服务，跑完发通知（可在设置里关）；回到前台自动续上 |
+| **外观** | 深 / 浅 / 跟随系统；系统栏颜色跟随主题（Android 15 强制 edge-to-edge 后按窗口背景取色） |
 
-0.4.0 起 `app/` **不再引用** `src/`：界面与协议都用桌面端自己的那一份（vendor 进来的
-`src/renderer/src/web/` + `src/shared/`），`src/` 只作为独立探针 / 契约参考保留。
-
-## 目录结构
+## 代码怎么分层
 
 ```
-src/                        协议核心 + 探针 CLI（与 UI 无关；现在只有探针和测试在用）
-├─ api/                     SSE 解析、帧 → ChatBlock[]、PiDeckClient、错误分类、退避
-├─ state/store.ts           全局状态仓（SSE 优先，退化 ETag 轮询）
-├─ session.ts               SessionChannel：常驻流 + 发送 + 断线重连 + 静默断流看门狗
-└─ cli/probe.ts             零依赖探针 CLI
-
-app/                        手机客户端：桌面端界面 + 原生壳
-├─ vendor/pideck/           桌面端 0.9.9 的 src/renderer/src + src/shared（原样 vendor，不改）
-│  └─ src/renderer/src/web/ 这就是手机上的界面本身（8,603 行，桌面端同一份代码）
-├─ shell/                   Capacitor 壳
-│  ├─ device.ts             设备注册表 + 配对链接解析 + 令牌键（`pideck-web-token`）
-│  ├─ boot.ts               进聊天页前：写令牌 → 装 fetch/EventSource 桥 → 禁 SW → 起看护
-│  ├─ fetch-bridge.ts       相对 `/api/*` → 设备地址；SSE 走原生插件，其余走 CapacitorHttp
-│  ├─ native-sse.ts         SsePlugin 的 fetch 适配（POST 也能流式）+ EventSource 适配
-│  ├─ launcher.html/.ts     配对与设备管理页（= `dist/index.html`）
-│  ├─ run-watch.ts          有会话在跑就拉起前台服务，跑完发通知
-│  └─ downloads.ts / external-links.ts   blob 下载转原生保存 / 外链交给系统浏览器
-├─ android/                 SsePlugin（GET/POST 流式）、RunWatchService、FileSaver、NavigationBar
-├─ scripts/                 构建、发布、二维码、jsdom 冒烟
-└─ assets-src/              图标源图（1024 / 512 / 192）
-
-docs/web-api.md             接口契约（0.9.7 时整理，端点仍一致）
+native/                       唯一在发的产物
+├─ app/src/main/java/dev/pideck/nativeapp/
+│  ├─ data/                  协议层：Models · OkHttpPideckApi · SSE 帧合并 · 时间线 · 工作区解析
+│  ├─ ui/chat/               聊天页、过程组、工作区面板、历史、问答卡、代码高亮
+│  ├─ ui/home · sessions · devices · settings · pairing · splash
+│  ├─ watch/                 RunWatchService（前台服务）+ 通知
+│  └─ di/                    Hilt
+└─ app/src/test/             99 条单测（含真桌面端联调的 Live* 用例，无设置时自动跳过）
 ```
 
----
+设计上的三条约定：
 
-## 0.4.0：为什么又走回「用桌面端的界面」
+1. **不自己造协议**。所有数据都来自桌面端 HTTP 接口，字段照着 `app/vendor/pideck`（桌面端 Web 客户端源码
+   快照）实现；接口有坑的地方记在 `native/README.md` 的「桌面端接口的坑」表里。
+2. **流式只有两条路**：本端发送走 `POST /api/chat` 的 SSE，别处发起的回复走
+   `GET /api/sessions/:id/stream` 订阅（服务端在订阅时回放本轮帧）。两者互斥，不重复渲染。
+3. **进程内状态不落盘**：草稿、折叠状态这类界面状态留在内存或 DataStore 里，
+   真正的数据永远以桌面端为准，重新进入就重拉。
 
-前三次都是「在手机上再实现一份」：自研 UI + 自研协议（0.1–0.2）、Flutter add-to-app（0.3.0）、
-借桌面端网页版做本地转发（0.3.1–0.3.11）。代价很清楚：界面的每一个细节都要在两边各写一遍，
-桌面端修好的问题手机端不知道；而借网页版那条路要补的东西（系统栏、返回键、文件选择、外链）
-全在页面边上，补丁越叠越脆。
+## 仓库里的其它东西
 
-这次换了个方向：桌面端本身带一个给浏览器用的 Web 客户端（`src/renderer/src/web/`），它只通过
-HTTP 接口工作（`Authorization: Bearer`），根本不依赖 Electron。于是把它整套 vendor 进来直接跑，
-壳只补 WebView 做不到的四件事。
-
-- **界面 100% 复用**：会话流、工具卡、Todo、模型 / 思考 / 计划切换、导出会话都是同一份代码。
-- **协议 0 重复**：不存在「手机端实现的协议与桌面端不一致」这类问题。
-- **壳只做四件事**：原生 SSE（`POST /api/chat` 的流式响应）、后台跑完发通知、外链走系统浏览器、
-  blob 下载转原生保存。再加一个配对页（多设备切换、连通测试、扫码）。
-- **代价**：仓库里多了 17 MB vendor 源码；同步上游要手动做一次 3-way diff（`app/VENDORED.md`）。
-
-## App 现在能做什么
-
-- **配对**：启动页扫码（Google code scanner，无 GMS 机型退到 App 内取景框）或粘贴链接；
-  多台设备存本地注册表，列表里能看在线 / 鉴权失败、能改名、能一键切换。
-- **聊天**：桌面端那一套界面 —— 会话流（文本 / 思考 / 工具卡 / Todo / 提问卡）、模型与思考档位、
-  计划模式、上下文用量与压缩、斜杠命令、@ 文件引用、图片、导出会话 HTML。
-- **后台**：会话在跑就拉起前台服务，跑完弹通知；切回前台立刻续上。
-- **落盘 / 外链**：导出与下载走原生保存（「下载/PiDeck」）；回答里的链接交给系统浏览器。
-- 不做 iOS 原生壳（前台服务在 iOS 上没有等价物，得另做一套设计）。
+| 目录 | 是什么 |
+|---|---|
+| `src/` | 框架无关的协议核心 + 探针 CLI（69 条测试）。手机端正走原生后它只用于「接口契约的可执行版本」和排障，但仍是升级桌面端后最快的自检工具 |
+| `app/` | 历史：Capacitor 7 壳 + vendor 进来的桌面端网页版界面，最后一版 0.4.12 后停止发布，仅作参考 |
+| `docs/web-api.md` | 接口契约整理（端点、帧类型、鉴权、坑） |
+| `docs/native-android-evaluation.md` | 为什么要从 WebView 壳迁到全原生（含模块划分与工作量） |
+| `apk/` | 局域网下载页与最新 APK（`python app/scripts/serve-apk.py --port 8080`） |
 
 ## 快速开始
 
-### 1. 装依赖
+1. 电脑上打开桌面端 → 设置 → Web 服务 → 启用「局域网 Web 服务」，建议保持「访问令牌」开启。
+2. 手机装 APK（[Releases](https://github.com/qgx1992/pideck-mobile/releases) 或局域网页面），
+   首次安装允许「未知来源」。
+3. 打开后进「添加设备」：扫码，或粘贴桌面端「设置 → 连接面板」里带 `?token=` 的完整链接。
+4. 首页选一个工作区，直接说第一句话；顶栏可以切模型与思考档位。
 
-```bash
-npm install          # 协议核心
-cd app && npm install # 客户端
-```
-
-### 2. 电脑上准备好入口
-
-桌面端 → 设置 → Web 服务 → 打开「局域网 Web 服务」，建议保持「启用访问令牌」开启。
-然后用「扫码访问」的二维码/链接（里面已带 token），或走 Tailscale 拿到 `https://xxx.ts.net` 再自己拼 `?token=`。
-
-### 3. 用探针验证（不写代码就能确认链路通）
+排障先试探针（不写代码就能确认链路）：
 
 ```bash
 node src/cli/probe.ts health --pair "http://192.168.1.20:8765/?token=<令牌>"
-node src/cli/probe.ts state --pair "..."
-node src/cli/probe.ts send --pair "..." --session <sessionId> "帮我看下 CI 为什么挂"
-node src/cli/probe.ts tail --pair "..." --session <sessionId>
-node src/cli/probe.ts stop --pair "..." --session <sessionId>
+node src/cli/probe.ts state  --pair "..."
+node src/cli/probe.ts tail   --pair "..." --session <sessionId>
 ```
-
-也支持 `--base`/`--token` 或环境变量 `PIDECK_BASE` / `PIDECK_TOKEN`。
-
-### 4. 测试与类型检查
-
-```bash
-npm test && npm run typecheck                 # 核心：69 条
-cd app && npm run verify                      # 客户端：16 条 + typecheck + vite build
-cd app && npm run smoke                       # jsdom 里跑 dist，连真桌面端，断言界面起得来
-```
-
-### 5. 打包 APK
-
-```bash
-cd app
-npm run apk:release            # build web → cap sync → gradlew assembleRelease
-npm run publish:apk -- --release   # 复制到项目根下的 apk/ 并刷新 SHA256SUMS.txt
-```
-
-需要 JDK 21 + Android SDK。`app/README.md` 里记了本机环境路径、镜像配置与踩过的坑。
-
----
-
-## 在 App 里怎么接（`src/` 协议层，0.4.0 起客户端不再用它）
-
-> 下面这些是 `src/` 的用法，探针 CLI 与自建客户端都靠它。手机端 0.4.0 起直接跑桌面端自己的
-> Web 客户端，不再经过这一层——留在这里是因为它仍是「接口契约的可执行版本」。
-
-```ts
-import { PiDeckClient, StateStore, SessionChannel, parsePairingInput } from "pideck-mobile";
-
-// 1) 扫码拿到链接 → 解析出 baseUrl + token（token 存 Keychain/Keystore，别写日志）
-const { baseUrl, token } = parsePairingInput(qrText);
-
-// 2) 握手：/api/health 免鉴权，用来确认对面是 PiDeck
-const client = new PiDeckClient({ baseUrl, token });
-const health = await client.health();
-if (health.service !== "PiDeck") throw new Error("配对地址不对");
-
-// 3) 全局状态：项目 / 会话 / 运行时 / 待应答卡片
-const store = new StateStore({ client, onStatus: (s) => setConnState(s) });
-store.subscribe((state) => render(state));
-store.start();
-
-// 4) 会话通道：连流 → 发消息 → 边收边渲染
-const channel = new SessionChannel({
-  client,
-  sessionId,
-  onUpdate: (c) => renderBlocks(c.reducer.blocks),
-  onRecovered: () => reloadHistory(), // 重连后补拉一次历史，避免漏帧
-});
-channel.start();
-await channel.send("帮我看下 CI 为什么挂");
-
-// 5) 停止本轮（target 必须从最新状态取）
-const target = store.targetOf(sessionId);
-if (target) await channel.stopRun(target);
-```
-
-### 回答 ask 卡片（两种格式，别弄混）
-
-```ts
-// 单题：value 就是原始值
-await client.respondUi(pending, { value: "允许" });      // select / input / editor
-await client.respondUi(pending, { confirmed: true });     // confirm
-await client.respondUi(pending, { cancelled: true });     // 取消
-
-// batch_ask：必须提交 JSON 字符串，否则扩展 JSON.parse 失败会判为「已取消」
-await client.respondUi(pending, {
-  value: JSON.stringify({
-    answers: [
-      { id: "q1", type: "select", value: "test", label: "测试", wasCustom: false },
-    ],
-  }),
-});
-```
-
-`batch_ask` 的格式来自桌面端 `serializeBatchAnswers`：`value` 是机器值、`label` 是显示名、`wasCustom` 标记用户是否自己输入。
-
-### 只想一次性拿完整输出
-
-```ts
-import { collectRun } from "pideck-mobile";
-const reducer = await collectRun(client, sessionId); // 等到 finish
-console.log(reducer.blocks);
-```
-
----
-
-## 设计决策（为什么不是「照着接口写个 fetch 就行」）
-
-1. **两套 SSE 别混用**：`/api/events` 推整份状态快照；`/api/sessions/:id/stream` 推 UI 消息帧。
-   两者的重连语义完全不同，混在一起会让「状态刷新」和「正文增量」互相打架。
-2. **重连不自己拼文本**：服务端重连会回放当前轮，客户端再拼断线期间的 delta 必然重复。
-   `SessionChannel` 只在 `onRecovered` 提示 UI 重新拉历史。
-3. **target 不缓存**：`runtimeGeneration` 会因会话重启自增，旧 target 一律 409。
-   `StateStore.targetOf()` 每次从最新快照取。
-4. **未知帧不抛错**：PiDeck 有新帧类型时，客户端应该降级而不是白屏。
-5. **错误分五类**：`auth`（重新配对）/ `offline`（重连）/ `runtime`（刷新状态）/ `http`（提示）/ `protocol`（代码 bug），
-   UI 分支才有依据。
-6. **没有 Last-Event-ID**：这是服务端现状，不是省事；所以重连流程里一定有「重新对账」这一步。
-7. **batch_ask 走 JSON**：`ask_question` 工具把整包问题塞进 `ui.input()` 的 title，
-   扩展拿到字符串后直接 `JSON.parse`——提交人类可读文本会被当成「取消」。
-
----
-
-## React Native 注意点（历史记录：0.1 时评估过，没走这条路）
-
-- **默认 `fetch` 不支持流式响应体**（`response.body` 为空）。二选一：
-  - 用 `expo/fetch`（SDK 52+）替换 `fetchImpl`
-  - 或改用 `react-native-sse`，把事件喂给 `SseParser`
-- 判断方式：`streamSse` 会抛 `kind: "protocol"` 的错误，`StateStore` 收到后自动退化为轮询。
-- Hermes 早期版本无 `TextDecoder`：`Utf8StreamDecoder` 已内置纯 JS 回退。
-- 后台（尤其 iOS）会挂起 SSE：回到前台时用 `onRecovered` → 重拉历史 + `store.refresh()`。
-
-## Capacitor 注意点
-
-WebView 是跨域环境，而 PiDeck 的 CORS 有两个限制（已在 `app/src/platform/fetch.ts` 处理）：
-
-1. 预检只放行 `content-type`，不放行 `authorization` → GET 用 `?token=`，POST 走原生栈。
-2. `workspace` 路由（files / prompts / skills / git）**实际响应不带 CORS 头** → 这些请求必须走 `CapacitorHttp`。
-
-分流规则：**SSE 走原生 `SsePlugin`**，其余全部走 `CapacitorHttp`（没有 CORS 概念）。
-
-- `SsePlugin`（`app/android/app/src/main/java/dev/pideck/mobile/SsePlugin.java`）用 `HttpURLConnection` 读流，按 16ms 窗口合并成 `sseOpen / sseData / sseEnd / sseError` 四个桥事件；
-  JS 侧（`app/src/platform/sse-stream.ts`）把事件拼成 `ReadableStream`，交给 `Response`。
-- 上游零改动：`client.streamSse` 只认 `response.ok` / `response.body.getReader()`，字节流还是原来的 `Utf8StreamDecoder`。
-- 拿不到插件（浏览器开发 / 手机装的是老包）时 `isNativeSseAvailable()` 为假，自动退回 WebView 的 `fetch`，不会断流。
-- 原生侧不设读超时（`readTimeoutMs = 0`）：假死交给 `SessionChannel` 的 50s 看门狗，服务端每 15s 一次 `: ping` 喂活它。
-
-另外两处只有在原生侧才能做的事：
-
-- **返回键**：Capacitor 的 `BridgeActivity` 不拦返回键，按下会直接 `finish()` 回桌面。
-  装 `@capacitor/app` 并注册 `backButton` 监听后才会交给 JS。
-- **后台提醒**：`RunWatchService`（`dataSync` 类型前台服务）守 `/api/events`，
-  因为 cached 进程会被冻结。服务必须在 App 仍可见时启动（Android 12+ 禁止后台启动前台服务），
-  所以「发送消息」的那一刻就乐观拉起。
-
----
 
 ## 已知限制
 
-- 多设备是「切换」而不是「合并时间线」：启动页里按设备进入，通知按当前设备聚合。
-- 上游 Web 客户端改版后需要手动同步 vendor（见 `app/VENDORED.md`）。
-
-- `/api/*` 是 PiDeck 的内部接口，**没有版本号也没有兼容承诺**。升级桌面端后请重跑测试与探针。
-- `/api/health` 不返回版本，客户端无法判断对面版本；已向上游提 issue 建议增加 `version`。
-- 服务端没有推送通道。App 切后台会被系统冻结（WebView 里的 SSE 与定时器全停），
-  因此后台提醒由**原生前台服务**守 `/api/events` 实现，代价是运行期间通知栏有一条常驻的
-  「正在等待任务完成…」。深度 Doze 下前台服务也可能被限流。
-- 通过 Web API 删除会话后桌面端列表不会立即刷新（上游缺 IPC 广播，见 `docs/issue-delete-sync.md`）。
-- DSH 会话的历史读取依赖 DSH runtime；runtime 未就绪时该接口返回 500。
+- 只有 Android（前台服务在 iOS 上没有等价物，得另做一套设计）。
+- 待办勾选**不能改**：桌面端只提供读接口，它自己的待办条也只能展开/收起 —— 计划由 pi 那边的扩展写入。
+- 归档会话、项目改名在 HTTP 上还没开放，菜单里对应项是灰的（标注了原因）。
+- 换模型 / 思考档位对**已经跑起来**的那一轮不生效，下一轮才生效（桌面端同样如此）。
+- `/api/*` 是内部接口，没有版本承诺；升级桌面端后先跑一遍探针和单测。
 
 ## 许可证
 
 **PolyForm Noncommercial License 1.0.0** —— 见 [LICENSE.md](./LICENSE.md)。
 
-一句话版：**可以自由用于个人学习、研究、非营利场景，可以修改和分发；不可商用。**
-商业使用（包括公司内部生产环境、付费产品、代客户部署等）需要单独授权。
-
-选这个而不是 MIT：这个项目是和 PiDeck 配套的个人工具，希望代码公开可读可用，
-但不希望被直接包装成商业产品售卖。
-
-## 升级 PiDeck 后的回归清单
-
-1. `node src/cli/probe.ts health` → `service` 仍是 `PiDeck`
-2. `state` → `projects/sessions/runtimes/pendingUiRequests` 四个字段都在
-3. `tail` 一个历史会话 → 帧仍是 `data: {...}` + `[DONE]`
-4. `send` → 文本 delta 正常、`finish` 后状态正确
-5. 两套测试全绿：`npm test` + `cd app && npm test`
+一句话版：个人学习、研究、非营利场景可以自由使用、修改、分发；不可商用。
+商业使用需要单独授权。
