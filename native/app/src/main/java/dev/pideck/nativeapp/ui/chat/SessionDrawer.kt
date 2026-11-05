@@ -179,6 +179,16 @@ fun SessionDrawer(
         ) {
             groups.forEach { group ->
                 val collapsed = group.projectId in viewModel.collapsedGroups
+                // 先算出这一组当前会露哪几条：组头要不要接管「运行中」状态点就靠它判断
+                val showAllGroup = group.projectId in expandedRest
+                val previewShown = if (showAllGroup) {
+                    group.sessions
+                } else {
+                    group.sessions.take(DRAWER_SESSION_PREVIEW)
+                }
+                val runningIds = group.sessions.mapNotNull { s -> if (viewModel.isRunning(s.id)) s.id else null }
+                // 折叠时整组都不露行；展开但运行中的会话被「先露 5 条」截掉时同样看不到 —— 两种情况都由组头显示
+                val headerRunning = runningIds.any { id -> collapsed || previewShown.none { it.id == id } }
                 item(key = "g-${group.projectId}") {
                     Column(
                         modifier = Modifier
@@ -195,16 +205,13 @@ fun SessionDrawer(
                             name = group.projectName.ifBlank { "未命名项目" },
                             count = group.sessions.size,
                             collapsed = collapsed,
+                            running = headerRunning,
                             onToggle = { viewModel.toggleGroup(group.projectId) },
                             onLongPress = { actions.menuProject = group },
                         )
                         if (!collapsed) {
-                            val showAll = group.projectId in expandedRest
-                            val shown = if (showAll) {
-                                group.sessions
-                            } else {
-                                group.sessions.take(DRAWER_SESSION_PREVIEW)
-                            }
+                            val showAll = showAllGroup
+                            val shown = previewShown
                             shown.forEach { session ->
                                 DrawerSessionRow(
                                     session = session,
@@ -262,6 +269,7 @@ private fun DrawerGroupHeader(
     name: String,
     count: Int,
     collapsed: Boolean,
+    running: Boolean,
     onToggle: () -> Unit,
     onLongPress: () -> Unit,
 ) {
@@ -288,10 +296,14 @@ private fun DrawerGroupHeader(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        if (running) {
+            RunningDot(active = true)
+            Spacer(Modifier.width(2.dp))
+        }
         Text(
             if (collapsed) "$count" else "$count",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
+            color = if (running) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline,
         )
     }
 }
@@ -324,15 +336,8 @@ private fun DrawerSessionRow(
                 .padding(start = 29.dp, end = 7.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                Modifier
-                    .size(6.dp)
-                    .background(
-                        if (running) Color(0xFF4ADE80) else MaterialTheme.colorScheme.outlineVariant,
-                        CircleShape,
-                    ),
-            )
-            Spacer(Modifier.width(10.dp))
+            RunningDot(active = running)
+            Spacer(Modifier.width(2.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
                     session.title.ifBlank { "未命名会话" },

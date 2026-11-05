@@ -58,6 +58,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.pideck.nativeapp.data.Session
+import dev.pideck.nativeapp.ui.chat.RunningDot
 import dev.pideck.nativeapp.ui.theme.AppButton
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import dev.pideck.nativeapp.ui.theme.AppIconButton
@@ -287,15 +288,8 @@ private fun SessionRow(
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(7.dp)
-                    .background(
-                        if (running) Color(0xFF4ADE80) else MaterialTheme.colorScheme.outline,
-                        CircleShape,
-                    ),
-            )
-            Spacer(Modifier.width(12.dp))
+            RunningDot(active = running)
+            Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     session.title.ifBlank { "未命名会话" },
