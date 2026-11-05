@@ -678,7 +678,8 @@ private fun AssistantBlock(
     item: TimelineItem.AssistantMessage,
     onLongPress: () -> Unit = {},
 ) {
-    var thinkingOpen by remember(item.key, item.streaming) { mutableStateOf(item.streaming) }
+    // 默认只占一行：思考是过程信息，正文才是这一条的重点（桌面端 ThinkingBlock 同款）
+    var thinkingOpen by remember(item.key) { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -825,14 +826,20 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
                         .verticalScroll(inner)
                         .padding(10.dp),
                 ) {
+                    // 一轮里的思考往往有好几段（每次工具调用前都会想一段），
+                    // 全部展开会把工具行挤到看不见的地方，看着像「思考被置顶、几段糊成一坨」。
+                    // 对齐桌面端 `ThinkingStep`：每段只占一行，点开才看正文。
+                    val thinkingTotal = row.steps.count { !it.thinking.isNullOrBlank() }
+                    var thinkingSeen = 0
                     row.steps.forEach { step ->
                         step.thinking?.let { thinking ->
-                            // 组里默认展开：并进组只是为了把「过程」收成一行，内容不该被藏起来
-                            var thinkingOpen by remember(step.key) { mutableStateOf(true) }
+                            thinkingSeen += 1
+                            var thinkingOpen by remember(step.key) { mutableStateOf(false) }
                             ThinkingCard(
                                 text = thinking,
                                 open = thinkingOpen,
                                 streaming = step.streaming,
+                                title = if (thinkingTotal > 1) "思考 $thinkingSeen/$thinkingTotal" else "思考",
                                 onToggle = { thinkingOpen = !thinkingOpen },
                             )
                             Spacer(Modifier.size(6.dp))
@@ -875,7 +882,13 @@ private fun spanText(ms: Long): String? {
 }
 
 @Composable
-private fun ThinkingCard(text: String, open: Boolean, streaming: Boolean, onToggle: () -> Unit) {
+private fun ThinkingCard(
+    text: String,
+    open: Boolean,
+    streaming: Boolean,
+    onToggle: () -> Unit,
+    title: String = "思考过程",
+) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
         shape = RoundedCornerShape(10.dp),
@@ -886,7 +899,7 @@ private fun ThinkingCard(text: String, open: Boolean, streaming: Boolean, onTogg
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = if (streaming) "正在思考…" else "思考过程",
+                    text = if (streaming) "$title（进行中）" else title,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
