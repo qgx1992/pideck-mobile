@@ -7,8 +7,28 @@ PiDeck 手机客户端（Android，Kotlin + Jetpack Compose）。
 - **0.1.x–0.4.x**：早期阶段（自研协议 → Flutter → 内嵌桌面端网页 → 再回本地 UI），
   相关记录见仓库提交历史，本文件只从 0.5.0 起逐版记录。
 
-版本号规则：`versionName = major.minor.patch`，`versionCode = major*100 + minor*10 + patch`
-（如 `0.5.22` → `522`）。Android 不允许降级安装，所以 versionCode 只增不减。
+版本号规则：`versionName = major.minor.patch`，`versionCode = major*1000 + minor*100 + patch`
+（如 `0.5.22` → `522`，`0.5.29` → `529`）。Android 不允许降级安装，所以 versionCode 只增不减。
+
+---
+
+## 0.5.29 — 2026-11-05
+
+**启动页：工作区选择改成下拉，跟后端选择同一形态。**
+
+原来是一排横向滚动的 `FilterChip`（`ui/home/HomeScreen.kt` 的 `WorkspacePicker`）：
+项目一多就得左右划，划到一半就忘了选的是哪个，而且同名项目根本分不出来。现在：
+
+- 工作区变成一枚胶囊 + `DropdownMenu`，形态与它右边的后端选择完全一致（同样是
+  `SelectChip` + `Icons.Filled.KeyboardArrowDown`）。没选时显示「选择工作区」并走强调色；
+  选好之后显示项目名，超长由胶囊自己省略。
+- 下拉每项两行：项目名 + 完整路径（`labelSmall`），当前项右侧打勾。
+- 工作区与后端并排一行：工作区外套 `Box(Modifier.weight(1f))`，后端那枚按内容定宽 ——
+  与顶栏胶囊同一条约束（可伸缩的那一枚必须存在，否则窄屏上一边会被挤没）。
+- 选中项下面单独补一行完整路径，确认这个「同名项目」到底是哪个目录。
+- 一个工作区都没有时胶囊置灰不可点（空下拉只会让人以为卡住了）。
+
+单测仍 180 条。
 
 ---
 
