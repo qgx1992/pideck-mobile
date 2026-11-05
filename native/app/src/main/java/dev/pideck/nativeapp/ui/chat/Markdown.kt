@@ -1,10 +1,15 @@
 package dev.pideck.nativeapp.ui.chat
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -14,6 +19,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -26,13 +32,15 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * 极简 Markdown：只认 agent 回复里真正常出现的形状 —— 围栏代码块、标题、列表、引用、分隔线，
- * 行内加粗 / 斜体 / 行内代码。表格、脚注、HTML 一律按普通文本渲染（不做半吊子解析）。
+ * 极简 Markdown：只认 agent 回复里真正常出现的形状 —— 围栏代码块、标题、列表、引用、分隔线、
+ * 表格（GFM 的 `| a | b |` + `|---|:--:|`），行内加粗 / 斜体 / 行内代码。
+ * 脚注、HTML 一律按普通文本渲染（不做半吊子解析）。
  */
 sealed interface MdBlock {
     data class Paragraph(val text: String) : MdBlock
@@ -46,7 +54,21 @@ sealed interface MdBlock {
     data class Quote(val text: String) : MdBlock
 
     data object Rule : MdBlock
+
+    /**
+     * GFM 表格。对齐来自分隔行（`:--` 左、`:--:` 中、`--:` 右），列数固定为表头的列数。
+     *
+     * 之前没有这个块，表格会掉进「段落」里：`| 列 | 列 |` 与 `|---|` 原样显示成一堆竖线，
+     * 单元格还会被折行拼成一坨 —— 用户报的「表格显示有点问题」就是这个。
+     */
+    data class Table(
+        val headers: List<String>,
+        val aligns: List<TableCellAlign> = headers.map { TableCellAlign.LEFT },
+        val rows: List<List<String>> = emptyList(),
+    ) : MdBlock
 }
+
+enum class TableCellAlign { LEFT, CENTER, RIGHT }
 
 private val fence = Regex("^\\s*```\\s*([\\w+#.-]*)\\s*$")
 private val heading = Regex("^(#{1,6})\\s+(.*)$")
@@ -54,6 +76,76 @@ private val bullet = Regex("^\\s*[-*+]\\s+(.*)$")
 private val ordered = Regex("^\\s*\\d+[.)]\\s+(.*)$")
 private val quote = Regex("^\\s*>\\s?(.*)$")
 private val rule = Regex("^\\s*([-*_])\\1{2,}\\s*$")
+
+private val delimiterCell = Regex("^:?-{1,}:?$")
+
+/**
+ * 拆一行表格：去掉首尾的竖线、按未转义的 `|` 切单元格。
+ *
+ * `\|` 是单元格里的字面竖线（模型写 `a \| b` 时不要当成列分隔）。
+ */
+internal fun splitTableRow(line: String): List<String> {
+    var text = line.trim()
+    if (text.startsWith("|")) text = text.substring(1)
+    if (text.endsWith("|") && !text.endsWith("\\|")) text = text.dropLast(1)
+    val cells = mutableListOf<String>()
+    val buffer = StringBuilder()
+    var index = 0
+    while (index < text.length) {
+        val char = text[index]
+        if (char == '\\' && index + 1 < text.length && text[index + 1] == '|') {
+            buffer.append('|')
+            index += 2
+            continue
+        }
+        if (char == '|') {
+            cells += buffer.toString().trim()
+            buffer.setLength(0)
+            index += 1
+            continue
+        }
+        buffer.append(char)
+        index += 1
+    }
+    cells += buffer.toString().trim()
+    return cells
+}
+
+private fun alignOf(delimiter: String): TableCellAlign = when {
+    delimiter.startsWith(":") && delimiter.endsWith(":") -> TableCellAlign.CENTER
+    delimiter.endsWith(":") -> TableCellAlign.RIGHT
+    else -> TableCellAlign.LEFT
+}
+
+/**
+ * 读一张表：表头在第 [headerIndex] 行，分隔行在下一行。
+ *
+ * 返回表格块与「表格之后的第一行」下标；不像表格就返回 null（交回普通段落处理）。
+ * 行尾多出来的单元格截掉、少了的补空 —— 模型手写表格经常一列多一列少，
+ * 为这个整块不认，用户看到的就是一堆竖线，不如按最大列数对齐着显示。
+ */
+internal fun readTable(lines: List<String>, headerIndex: Int): Pair<MdBlock.Table, Int>? {
+    if (headerIndex + 1 >= lines.size) return null
+    val headerLine = lines[headerIndex]
+    if (!headerLine.contains('|')) return null
+    val headers = splitTableRow(headerLine)
+    if (headers.isEmpty() || headers.all { it.isBlank() }) return null
+    val delimiters = splitTableRow(lines[headerIndex + 1])
+    if (delimiters.size != headers.size) return null
+    if (!delimiters.all { delimiterCell.matches(it) }) return null
+
+    val rows = mutableListOf<List<String>>()
+    var cursor = headerIndex + 2
+    while (cursor < lines.size) {
+        val line = lines[cursor]
+        if (line.isBlank() || !line.contains('|')) break
+        if (fence.matches(line)) break
+        val cells = splitTableRow(line)
+        rows += List(headers.size) { position -> cells.getOrElse(position) { "" } }
+        cursor += 1
+    }
+    return MdBlock.Table(headers, delimiters.map(::alignOf), rows) to cursor
+}
 
 fun parseMarkdown(source: String): List<MdBlock> {
     if (source.isBlank()) return emptyList()
@@ -96,6 +188,18 @@ fun parseMarkdown(source: String): List<MdBlock> {
             inCode = true
             codeLang = fenceMatch.groupValues[1].ifBlank { null }
             continue
+        }
+
+        // 表格要先于其它块判：`| a | b |` 这一行本身看着就像普通段落，
+        // 判据是「下一行是分隔行且列数一致」（GFM 的定义），只有这时才当表格。
+        if (line.isNotBlank() && line.contains('|')) {
+            val table = readTable(lines, index - 1)
+            if (table != null) {
+                flushParagraph()
+                blocks += table.first
+                index = table.second
+                continue
+            }
         }
 
         when {
@@ -320,6 +424,8 @@ fun MarkdownText(
                     )
                 }
 
+                is MdBlock.Table -> MdTable(block)
+
                 MdBlock.Rule -> HorizontalDivider(
                     color = MaterialTheme.colorScheme.outlineVariant,
                     thickness = 1.dp,
@@ -335,4 +441,95 @@ fun MarkdownText(
             )
         }
     }
+}
+
+/**
+ * 表格：表头底色 + 网格线，列数 ≤ 3 时按等宽撑满屏宽，再多就横向滚动（每列 150dp）。
+ *
+ * 单元格里的文本仍走行内 markdown（`**粗**` / 反引号），所以 `| \`code\` |` 是能正常显示的。
+ * 用 IntrinsicSize.Min + fillMaxHeight 是为了让竖线画到整行高度 —— Row 里没有固定高度时，
+ * 直接 fillMaxHeight 会撑成 0 高度，竖线就整条消失。
+ */
+@Composable
+private fun MdTable(block: MdBlock.Table, modifier: Modifier = Modifier) {
+    val scrollable = block.headers.size >= 4
+    val scroll = rememberScrollState()
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(modifier = if (scrollable) Modifier.horizontalScroll(scroll) else Modifier) {
+            TableRow(block.headers, block.aligns, header = true, scrollable = scrollable)
+            block.rows.forEach { row ->
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    thickness = 1.dp,
+                )
+                TableRow(row, block.aligns, header = false, scrollable = scrollable)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TableRow(
+    cells: List<String>,
+    aligns: List<TableCellAlign>,
+    header: Boolean,
+    scrollable: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .height(IntrinsicSize.Min)
+            .then(
+                if (header) {
+                    Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                } else {
+                    Modifier
+                },
+            ),
+    ) {
+        cells.forEachIndexed { index, cell ->
+            if (index > 0) {
+                VerticalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    modifier = Modifier.fillMaxHeight(),
+                )
+            }
+            TableCell(
+                text = cell,
+                align = aligns.getOrElse(index) { TableCellAlign.LEFT },
+                header = header,
+                cellModifier = if (scrollable) Modifier.width(150.dp) else Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun TableCell(
+    text: String,
+    align: TableCellAlign,
+    header: Boolean,
+    cellModifier: Modifier,
+) {
+    InlineText(
+        text = text,
+        style = (if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall).copy(
+            textAlign = when (align) {
+                TableCellAlign.LEFT -> TextAlign.Start
+                TableCellAlign.CENTER -> TextAlign.Center
+                TableCellAlign.RIGHT -> TextAlign.End
+            },
+            fontWeight = if (header) FontWeight.SemiBold else null,
+        ),
+        color = if (header) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        modifier = cellModifier.padding(horizontal = 10.dp, vertical = 8.dp),
+    )
 }

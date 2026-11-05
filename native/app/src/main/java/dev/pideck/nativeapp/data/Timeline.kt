@@ -25,6 +25,8 @@ sealed interface TimelineItem {
         override val key: String,
         val text: String,
         val timestamp: Long,
+        /** 随消息带的图片（手机/网页发图后宿主会回传 base64）。 */
+        val images: List<MessageImage> = emptyList(),
     ) : TimelineItem
 
     data class AssistantMessage(
@@ -80,6 +82,7 @@ fun List<ChatMessage>.toTimelineItems(): List<TimelineItem> = mapNotNull { messa
             key = "msg-${message.id}",
             text = message.text,
             timestamp = message.timestamp,
+            images = message.images.filter { it.data.isNotBlank() },
         )
 
         // assistant 以及未知角色都按回复渲染：宁可多显示，别让内容凭空消失。

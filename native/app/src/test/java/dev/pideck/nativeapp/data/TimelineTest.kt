@@ -92,4 +92,39 @@ class TimelineTest {
         assertTrue("收尾后不再显示光标", !finished.streaming)
         assertNull(finished.errorText)
     }
+
+    @Test
+    fun `user images survive the mapping`() {
+        val message = ChatMessage(
+            id = "u-img",
+            role = "user",
+            text = "看下这张图",
+            timestamp = 1_700_000_000_000,
+            images = listOf(MessageImage(type = "image", data = "/9j/AAAA", mimeType = "image/jpeg")),
+        )
+        val user = listOf(message).toTimelineItems().single() as TimelineItem.UserMessage
+        assertEquals(1, user.images.size)
+        assertEquals("data:image/jpeg;base64,/9j/AAAA", user.images.single().dataUrl)
+    }
+
+    @Test
+    fun `empty image payloads are dropped`() {
+        val message = ChatMessage(
+            id = "u-empt",
+            role = "user",
+            text = "只有文字",
+            images = listOf(MessageImage(type = "image", data = "")),
+        )
+        assertTrue((listOf(message).toTimelineItems().single() as TimelineItem.UserMessage).images.isEmpty())
+    }
+
+    @Test
+    fun `history json with images decodes`() {
+        val json = """{"messages":[{"id":"m1","role":"user","text":"看下这张图","timestamp":1700000000000,
+            "images":[{"type":"image","data":"/9j/AAAA","mimeType":"image/jpeg"}]}],"total":1}"""
+        val page = PideckJson.decodeFromString(SessionMessagePage.serializer(), json)
+        val images = (page.messages.toTimelineItems().single() as TimelineItem.UserMessage).images
+        assertEquals(1, images.size)
+        assertEquals("image/jpeg", images.single().mimeType)
+    }
 }

@@ -68,6 +68,63 @@ class MarkdownTest {
     }
 
     @Test
+    fun `gfm table becomes a table block with alignment`() {
+        val source = """
+            | 项目 | 版本 | 备注 |
+            |:-----|:----:|-----:|
+            | 桌面端 | 0.9.9 | 已同步 |
+            | 手机端 | 0.5.23 | 待发 |
+        """.trimIndent()
+        val table = parseMarkdown(source).single() as MdBlock.Table
+        assertEquals(listOf("项目", "版本", "备注"), table.headers)
+        assertEquals(
+            listOf(TableCellAlign.LEFT, TableCellAlign.CENTER, TableCellAlign.RIGHT),
+            table.aligns,
+        )
+        assertEquals(2, table.rows.size)
+        assertEquals(listOf("桌面端", "0.9.9", "已同步"), table.rows[0])
+        assertEquals(listOf("手机端", "0.5.23", "待发"), table.rows[1])
+    }
+
+    @Test
+    fun `table stops at blank line and keeps following paragraph`() {
+        val source = "| a | b |\n|---|---|\n| 1 | 2 |\n\n后面这段是正文。"
+        val blocks = parseMarkdown(source)
+        assertEquals(2, blocks.size)
+        assertTrue(blocks[0] is MdBlock.Table)
+        assertEquals("后面这段是正文。", (blocks[1] as MdBlock.Paragraph).text)
+    }
+
+    @Test
+    fun `pipe without delimiter row stays a paragraph`() {
+        val blocks = parseMarkdown("这不是表格 | 只是竖线\n第二行")
+        assertEquals(1, blocks.size)
+        assertTrue(blocks[0] is MdBlock.Paragraph)
+    }
+
+    @Test
+    fun `ragged table rows are padded to the header width`() {
+        val source = "| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 |"
+        val table = parseMarkdown(source).single() as MdBlock.Table
+        assertEquals(listOf("1", "", ""), table.rows[0])
+        assertEquals(listOf("1", "2", "3"), table.rows[1])
+    }
+
+    @Test
+    fun `escaped pipe stays inside a cell`() {
+        val source = "| 命令 | 说明 |\n|---|---|\n| a \\| b | 竖线 |"
+        val table = parseMarkdown(source).single() as MdBlock.Table
+        assertEquals(listOf("a | b", "竖线"), table.rows.single())
+    }
+
+    @Test
+    fun `table inside a fenced block is code`() {
+        val blocks = parseMarkdown("```md\n| a | b |\n|---|---|\n```")
+        assertEquals(1, blocks.size)
+        assertTrue(blocks[0] is MdBlock.Code)
+    }
+
+    @Test
     fun `blank source yields nothing`() {
         assertTrue(parseMarkdown("   ").isEmpty())
     }

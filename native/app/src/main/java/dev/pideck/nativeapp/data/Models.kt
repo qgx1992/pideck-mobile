@@ -174,6 +174,23 @@ data class SessionMessagePage(
     val unavailable: String? = null,
 )
 
+/**
+ * 历史消息里带的图片。
+ *
+ * 宿主（`/api/sessions/:id/messages/page`）对 user 消息会附带 `images: [{type, data, mimeType}]`，
+ * `data` 是**裸 base64**（不含 `data:` 前缀）。网页端把手机发的图当 `file` part 传进去，
+ * 落盘后回读就是这个形状 —— 不解析它，会话页就只剩一行文字，图彻底看不见。
+ */
+@Serializable
+data class MessageImage(
+    val type: String = "image",
+    /** 裸 base64（无 `data:` 前缀）。 */
+    val data: String = "",
+    val mimeType: String = "image/jpeg",
+) {
+    val dataUrl: String get() = "data:$mimeType;base64,$data"
+}
+
 @Serializable
 data class ChatMessage(
     val id: String,
@@ -184,6 +201,8 @@ data class ChatMessage(
     val thinking: String? = null,
     /** 结构随上游变化：耗时、usage、工具名都在里面，用 JsonObject 保真，按需取。 */
     val meta: JsonObject? = null,
+    /** 只有 user 消息会带（手机/网页发图之后回读历史），其余为空。 */
+    val images: List<MessageImage> = emptyList(),
 )
 
 /** `/api/state` 的一次抓取结果：`NotModified` 表示 ETag 命中，调用方保留旧数据。 */

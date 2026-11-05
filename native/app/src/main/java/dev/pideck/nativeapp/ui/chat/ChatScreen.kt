@@ -883,11 +883,21 @@ private fun UserBubble(
             modifier = Modifier.widthIn(max = 320.dp),
         ) {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text(
-                    text = item.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
+                // 图片在文字上面：手机发的图通常是「图 + 一句话」的，先看图更顺
+                if (item.images.isNotEmpty()) {
+                    MessageImages(
+                        images = item.images,
+                        keyPrefix = item.key,
+                        modifier = Modifier.padding(bottom = if (item.text.isBlank()) 0.dp else 8.dp),
+                    )
+                }
+                if (item.text.isNotBlank()) {
+                    Text(
+                        text = item.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
                 Text(
                     text = clock(item.timestamp),
                     style = MaterialTheme.typography.labelSmall,

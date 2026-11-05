@@ -16,6 +16,7 @@ import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.ImagePrep
 import dev.pideck.nativeapp.data.LineDiff
+import dev.pideck.nativeapp.data.MessageImage
 import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.data.BusySendMode
 import dev.pideck.nativeapp.data.ChatPayloads
@@ -1169,13 +1170,20 @@ class ChatViewModel @Inject constructor(
         live = null
         // 用户消息先上屏：等磁盘落盘再显示会有半秒的「没反应」。
         val localKey = "local-${System.currentTimeMillis()}"
-        // 本地气泡里补一句图片数：历史接口不回传图片，不然重拉之后这条消息看着像空的
-        val localText = when {
-            body.isNotEmpty() && attached.isEmpty() -> body
-            body.isNotEmpty() -> body + "\n（" + attached.size + " 张图片）"
-            else -> "（" + attached.size + " 张图片）"
+        // 图片直接带在气泡里（宿主回传的也是 base64，形状一致），不再用「（N 张图片）」占位。
+        val localImages = attached.map { image ->
+            MessageImage(
+                mimeType = image.dataUrl.substringBefore(';').substringAfter("data:").ifBlank { "image/jpeg" },
+                data = image.dataUrl.substringAfter("base64,"),
+            )
         }
-        items = items + TimelineItem.UserMessage(key = localKey, text = localText, timestamp = System.currentTimeMillis())
+        val localText = body
+        items = items + TimelineItem.UserMessage(
+            key = localKey,
+            text = localText,
+            timestamp = System.currentTimeMillis(),
+            images = localImages,
+        )
 
         sendJob = viewModelScope.launch {
             val payload = ChatPayloads.chatBody(

@@ -279,6 +279,16 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   `MainActivity` 在 `onCreate`/`onNewIntent` 里 `post()` 并摘掉 extras（转屏重建会拿同一份
   Intent 再走一遍 `onCreate`），`AppNav` 冷启动用 `take()` 直接把它当起点、热启动靠 `flow` 就地跳。
 
+- **历史消息里的图片要自己捞**（`native/app/src/main/java/dev/pideck/nativeapp/data/Models.kt` 的
+  `ChatMessage.images`）：宿主 `/api/sessions/:id/messages/page` 对 user 消息会带
+  `images: [{type, data, mimeType}]`，`data` 是**裸 base64**（不是 data URL）。kotlinx 默认不认识的键
+  直接丢，所以模型里不声明就等于「图从来没到过手机」—— 0.5.23 之前就是这样，气泡里只剩一句
+  「（N 张图片）」。渲染在 `native/app/src/main/java/dev/pideck/nativeapp/ui/chat/MessageImages.kt`：
+  按缩略图尺寸 `inSampleSize` 降采样 + `LruCache(24)`，别整张原图往内存里搬。
+- **Markdown 表格是 GFM 解析**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/Markdown.kt`
+  的 `MdBlock.Table`）：判据必须同时满足「本行含 `|`」+「下一行是同列数的 `:?-+:?` 分隔行」，
+  只有竖线不算表格（否则普通正文里的 `|` 会被吃掉）；`\|` 是字面竖线，代码块里的 `|` 一律不算。
+  表格渲染用 `Modifier.height(IntrinsicSize.Min)` + 竖线 `fillMaxHeight()`，否则竖线高度是 0。
 - **state 要声明在 `init` 之前**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt`）：
   Kotlin 按文本顺序初始化属性，`init` 里给「声明在后面」的 `by mutableStateOf(...)` 赋值
   会命中还没初始化的委托字段 → NPE，整个 ViewModel 构造失败（表现：会话页进不去，编译期看不出来）。
