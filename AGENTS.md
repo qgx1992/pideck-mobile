@@ -359,6 +359,14 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   与 `firstDeltaAt`（任意，给生成速度），`ChatViewModel.markTurnFirstContent()` 两个都打点。
   桌面那行里的「均速」（`sessionStreamingTps`）是**整段会话**的平均流式速度，不是本轮，
   别拿它跟手机的「全程」对账。
+  **流式期间每 2 秒刷一次行**（`ChatViewModel.startLiveStats()`，`LIVE_STATS_INTERVAL_MS = 2_000L`，
+  用户 0.5.33 要求）：全程是真实墙钟（请求发出 → 现在），tokens 只能**按字数估**
+  （`data/TurnStats.kt` 的 `estimateOutputTokens()`：流里没有 usage，`webExternalStream` 的帧只有
+  text/thinking/tool 增量）。系数由本机 66 条 assistant 消息最小二乘拟合：CJK ≈0.9 token/字、
+  其余 ≈0.17 token/字符，工具入参（模型自己生成的输出）也计入；中位误差约 15%，所以直播文案
+  一律带 `≈`，收尾后 `settleTurnStats()` 用 `meta.usage` 换成真值。别再试图从 HTTP 拿实时 usage：
+  `/api/state` 的 runtimes 只有 `{sessionId, agentId, runtimeGeneration, projectId, cwd, status,
+  sessionPath, deckSessionId, createdAt}`，桌面端的 perf 是主进程内存里的，只走 IPC。
   跨设备 / 翻历史只能靠 meta 的 `durationMs`，而**只有 pi 后端有**
   （实测：pi = `{usage, durationMs, startedAt, endedAt}`，dsh = 只有 `usage`，acp = `null`）——
   那种情况只报端到端速度，别硬算「生成速度」。渲染在 `ui/chat/ChatScreen.kt` 的 `TurnStatsLine`
