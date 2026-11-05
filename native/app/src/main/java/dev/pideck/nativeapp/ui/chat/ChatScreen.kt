@@ -96,6 +96,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontFamily
@@ -1017,7 +1018,20 @@ private fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
+    // 输入区不需要一个「底板」：之前是 Surface + tonalElevation，会在底部铺出一条
+    // 顶边笔直的浅色方块，跟圆角输入卡片放一起很割裂。改成向上渐隐的遮罩，
+    // 消息滚到底下时被柔和地盖住，但看不出任何边界。
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    0.0f to Color.Transparent,
+                    0.45f to MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),
+                    1.0f to MaterialTheme.colorScheme.surface,
+                ),
+            ),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1056,9 +1070,8 @@ private fun Composer(
             // 整条输入区就是一张卡片：正文在上，动作在下。
             // 以前是「圆形按钮 + 输入框 + 圆形按钮」并排，两个浮在框外的圆点看着很别扭。
             Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
             ) {
                 Column(
                     modifier = Modifier
