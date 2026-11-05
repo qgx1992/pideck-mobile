@@ -13,14 +13,15 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
@@ -29,8 +30,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.data.AgentBackend
+import dev.pideck.nativeapp.data.Project
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.ui.theme.AppButton
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
@@ -133,22 +133,33 @@ fun HomeScreen(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
+
+            // 工作区 + 后端并排两枚胶囊：都是「下拉选一个」，形态一致就不用两套心智。
+            // 工作区那枚吃掉剩余宽度（项目名可能很长），下面再补一行完整路径，免得同名项目分不清。
             item {
-                Text(
-                    "选一个工作区，直接说你要做什么",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        WorkspacePicker(viewModel = viewModel)
+                    }
+                    BackendPicker(viewModel = viewModel)
+                }
             }
 
-            item {
-                WorkspacePicker(viewModel = viewModel)
-            }
-
-            // 后端选择：桌面端在 composer 里选，手机上放在第一句输入框上面。
-            // 拿不到桌面端的 defaultAgentBackend（不走 HTTP），所以默认值 = 本地上次的选择。
-            item {
-                BackendPicker(viewModel = viewModel)
+            viewModel.selectedProject?.path?.takeIf { it.isNotBlank() }?.let { path ->
+                item {
+                    Text(
+                        path,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+                    )
+                }
             }
 
             item {
@@ -244,6 +255,12 @@ fun HomeScreen(
     }
 }
 
+/**
+ * 工作区选择：和后端那枚一样是「胶囊 + 下拉」。
+ *
+ * 以前是一排横向滚动的 FilterChip —— 项目一多就得左右划，也看不出选的是哪个目录。
+ * 现在名字在胶囊里（超长省略），完整路径另起一行显示在它下面。
+ */
 @Composable
 private fun WorkspacePicker(viewModel: HomeViewModel) {
     if (viewModel.loading && viewModel.projects.isEmpty()) {
@@ -258,31 +275,69 @@ private fun WorkspacePicker(viewModel: HomeViewModel) {
         }
         return
     }
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(viewModel.projects, key = { it.id }) { project ->
-            val selected = project.id == viewModel.selectedProjectId
-            FilterChip(
-                selected = selected,
-                onClick = { viewModel.select(project.id) },
-                label = {
-                    Text(
-                        project.name.ifBlank { project.path.ifBlank { "未命名工作区" } },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-                leadingIcon = if (selected) {
-                    { Icon(Icons.Outlined.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                } else {
-                    null
-                },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                ),
-            )
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val selected = viewModel.selectedProject
+    Box {
+        SelectChip(
+            text = selected?.let(::projectLabel) ?: "选择工作区",
+            onClick = { expanded = true },
+            icon = Icons.Outlined.FolderOpen,
+            trailing = Icons.Filled.KeyboardArrowDown,
+            accent = selected == null,
+            // 一个工作区都没有时别让它可点：空下拉只会让人以为卡住了
+            enabled = viewModel.projects.isNotEmpty() && !viewModel.creating,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.widthIn(min = 240.dp, max = 340.dp),
+        ) {
+            viewModel.projects.forEach { project ->
+                val isSelected = project.id == viewModel.selectedProjectId
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(
+                                projectLabel(project),
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            project.path?.takeIf { it.isNotBlank() }?.let { path ->
+                                Text(
+                                    path,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    },
+                    trailingIcon = if (isSelected) {
+                        {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "当前工作区",
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        viewModel.select(project.id)
+                        expanded = false
+                    },
+                )
+            }
         }
     }
 }
+
+private fun projectLabel(project: Project): String =
+    project.name.ifBlank { project.path?.ifBlank { null } ?: "未命名工作区" }
 
 @Composable
 private fun SendButton(enabled: Boolean, busy: Boolean, onClick: () -> Unit) {
