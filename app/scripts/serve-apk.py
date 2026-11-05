@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import os
+import re
 import sys
 from datetime import datetime
 from functools import partial
@@ -51,6 +52,72 @@ def open_log() -> IO[str]:
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     """默认 handler + 明确的目录（不依赖进程工作目录，开机自启时 cwd 是 system32）。"""
+
+    # HTTP/1.0 下浏览器不走 keep-alive，且 http.server 不支持 Range（返回 200 + 全量），
+    # iOS Safari / 微信内置浏览器对 <video> 会直接拒播。这里升到 HTTP/1.1 并自己实现 Range。
+    protocol_version = "HTTP/1.1"
+
+    def send_head(self):
+        path = self.translate_path(self.path)
+        if os.path.isdir(path):
+            return super().send_head()
+        try:
+            f = open(path, "rb")
+        except OSError:
+            self.send_error(404, "File not found")
+            return None
+        try:
+            st = os.fstat(f.fileno())
+            size = st.st_size
+            rng = None
+            m = re.match(r"bytes=(\d*)-(\d*)$", (self.headers.get("Range") or "").strip())
+            if m and size > 0 and "," not in self.headers.get("Range", ""):
+                if m.group(1):
+                    start = int(m.group(1))
+                    end = int(m.group(2)) if m.group(2) else size - 1
+                elif m.group(2):  # 尾段 bytes=-N
+                    start = max(0, size - int(m.group(2)))
+                    end = size - 1
+                else:
+                    start = end = 0
+                end = min(end, size - 1)
+                if start > end or start >= size:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    f.close()
+                    return None
+                rng = (start, end)
+            self._range = rng
+            self.send_response(206 if rng else 200)
+            self.send_header("Content-Type", self.guess_type(path))
+            self.send_header("Accept-Ranges", "bytes")
+            if rng:
+                self.send_header("Content-Range", f"bytes {rng[0]}-{rng[1]}/{size}")
+                self.send_header("Content-Length", str(rng[1] - rng[0] + 1))
+            else:
+                self.send_header("Content-Length", str(size))
+            self.send_header("Last-Modified", self.date_time_string(st.st_mtime))
+            self.end_headers()
+            if rng:
+                f.seek(rng[0])
+            return f
+        except Exception:
+            f.close()
+            raise
+
+    def copyfile(self, source, outputfile) -> None:
+        rng = getattr(self, "_range", None)
+        if not rng:
+            return super().copyfile(source, outputfile)
+        remaining = rng[1] - rng[0] + 1
+        while remaining > 0:
+            chunk = source.read(min(64 * 1024, remaining))
+            if not chunk:
+                break
+            outputfile.write(chunk)
+            remaining -= len(chunk)
 
     def end_headers(self) -> None:
         # 页面 / 校验文件经常原地改：不加这句，手机浏览器会按启发式缓存一直显示旧页面
