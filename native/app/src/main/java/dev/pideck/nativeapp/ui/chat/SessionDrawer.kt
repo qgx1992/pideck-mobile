@@ -2,6 +2,8 @@ package dev.pideck.nativeapp.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
+import dev.pideck.nativeapp.ui.theme.softPress
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -182,6 +184,7 @@ fun SessionDrawer(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 3.dp)
+                            .clip(RoundedCornerShape(12.dp))
                             .border(
                                 width = 1.dp,
                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f),
@@ -265,7 +268,7 @@ private fun DrawerGroupHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onToggle, onLongClick = onLongPress)
+            .softPress(RoundedCornerShape(12.dp), onClick = onToggle, onLongClick = onLongPress)
             // 上下留白取同一值：卡片顶边到名称、名称到第一条会话看起来是等距的
             .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -308,7 +311,7 @@ private fun DrawerSessionRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                .softPress(RoundedCornerShape(8.dp), onClick = onClick, onLongClick = onLongClick)
                 // 左 34dp = 卡片 12 + 箭头 18 + 间距 4，和组名左缘对齐
                 .padding(start = 34.dp, end = 12.dp, top = 9.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically,

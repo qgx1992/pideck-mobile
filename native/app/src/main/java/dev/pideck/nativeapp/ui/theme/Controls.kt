@@ -1,6 +1,12 @@
 package dev.pideck.nativeapp.ui.theme
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -14,8 +20,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -183,3 +194,45 @@ fun SelectChip(
     }
 }
 
+/**
+ * 卡片类区域的按压反馈。
+ *
+ * 不用默认的 ripple：它是一块**直角**的半透明色块，铺在圆角卡片上会从角上溢出来，
+ * 深色主题里看着像瞬间盖了一层生硬的灰影（用户反馈「展开时的阴影太生硬」）。
+ * 这里改成整块轻微提亮 + 裁剪到卡片形状，松手 110ms 淡出，跟卡片是一体的。
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+internal fun Modifier.softPress(
+    shape: Shape,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+): Modifier {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val progress by animateFloatAsState(
+        targetValue = if (pressed) 1f else 0f,
+        animationSpec = tween(durationMillis = 110),
+        label = "softPress",
+    )
+    val tint = MaterialTheme.colorScheme.onSurface
+    val clickableModifier = if (onLongClick == null) {
+        Modifier.clickable(interactionSource = interaction, indication = null, onClick = onClick)
+    } else {
+        Modifier.combinedClickable(
+            interactionSource = interaction,
+            indication = null,
+            onClick = onClick,
+            onLongClick = onLongClick,
+        )
+    }
+    return this
+        .clip(shape)
+        .then(clickableModifier)
+        .drawWithContent {
+            drawContent()
+            if (progress > 0f) {
+                drawRect(color = tint.copy(alpha = 0.055f * progress))
+            }
+        }
+}

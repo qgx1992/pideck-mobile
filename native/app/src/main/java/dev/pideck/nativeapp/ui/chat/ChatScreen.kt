@@ -112,6 +112,7 @@ import dev.pideck.nativeapp.data.thinkingLabel
 import dev.pideck.nativeapp.data.toTimelineItem
 import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.ui.theme.ControlShape
+import dev.pideck.nativeapp.ui.theme.softPress
 import dev.pideck.nativeapp.data.ImagePrep
 import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.ui.theme.SelectChip
@@ -894,7 +895,7 @@ private fun ThinkingCard(
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle),
+            .softPress(RoundedCornerShape(10.dp), onToggle),
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -941,7 +942,7 @@ private fun ToolCard(tool: ToolView) {
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { open = !open },
+            .softPress(RoundedCornerShape(10.dp), onClick = { open = !open }),
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
