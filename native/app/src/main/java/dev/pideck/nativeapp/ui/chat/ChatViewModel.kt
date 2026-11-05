@@ -39,7 +39,10 @@ import dev.pideck.nativeapp.data.describeConnectionError
 import dev.pideck.nativeapp.data.toTimelineItem
 import dev.pideck.nativeapp.data.toTimelineItems
 import dev.pideck.nativeapp.data.ContextUsage
+import dev.pideck.nativeapp.data.FileIndex
 import dev.pideck.nativeapp.data.FileSaver
+import dev.pideck.nativeapp.data.HostCommand
+import dev.pideck.nativeapp.data.parseHostCommands
 import dev.pideck.nativeapp.data.PermissionPresets
 import dev.pideck.nativeapp.data.PideckException
 import dev.pideck.nativeapp.data.RuntimeTarget
@@ -581,17 +584,71 @@ class ChatViewModel @Inject constructor(
     var mentionFiles by mutableStateOf<List<FileNode>>(emptyList())
         private set
 
-    private var mentionLoading = false
+    /** 正在扫工作区（候选条显示「正在扫…」）。 */
+    var mentionIndexing by mutableStateOf(false)
+        private set
 
-    fun ensureMentionFiles() {
-        if (mentionLoading) return
+    private var indexJob: Job? = null
+
+    /**
+     * 扫一遍工作区建 `@` 索引。
+     *
+     * `/api/files` 只列一层，所以这里按目录广度优先走一遍（上限 [FileIndex.MAX_DIRS] 个目录 /
+     * [FileIndex.MAX_NODES] 个节点，跳过 `.git`、`node_modules`、`build` 这类噪音目录），
+     * 边扫边更新候选，用户打 `@` 立刻就有东西可选，不用等全扫完。
+     */
+    fun buildMentionIndex() {
+        if (indexJob?.isActive == true) return
         val target = device ?: return
         val projectId = projectIdOf() ?: return
-        mentionLoading = true
+        indexJob = viewModelScope.launch {
+            mentionIndexing = true
+            val seen = LinkedHashSet<String>()
+            val nodes = mutableListOf<FileNode>()
+            val queue = ArrayDeque<String>()
+            queue.add(workspaceDir)
+            var dirs = 0
+            try {
+                while (queue.isNotEmpty() && dirs < FileIndex.MAX_DIRS && nodes.size < FileIndex.MAX_NODES) {
+                    val dir = queue.removeFirst()
+                    dirs++
+                    val batch = runCatching { api.files(target, token, projectId, dir) }
+                        .getOrDefault(emptyList())
+                    for (node in batch) {
+                        if (seen.add(node.path)) nodes.add(node)
+                        if (node.isDir && !FileIndex.shouldSkipDir(node.name)) queue.add(node.path)
+                    }
+                    mentionFiles = nodes.toList()
+                }
+            } finally {
+                mentionIndexing = false
+            }
+        }
+    }
+
+    // ---- 斜杠命令（`runtime/commands`：扩展 / 提示词模板 / 技能） ----
+
+    var hostCommands by mutableStateOf<List<HostCommand>>(emptyList())
+        private set
+
+    private var commandsRequested = false
+
+    fun ensureCommands() {
+        if (commandsRequested) return
+        val target = device ?: return
+        val runtime = runtimeTarget() ?: return
+        commandsRequested = true
         viewModelScope.launch {
-            runCatching { api.files(target, token, projectId, workspaceDir) }
-                .onSuccess { mentionFiles = it }
-            mentionLoading = false
+            runCatching {
+                parseHostCommands(PideckJson.parseToJsonElement(
+                    api.runtimeCommand(target, token, runtime, "commands"),
+                ))
+            }.onSuccess { list ->
+                hostCommands = list
+            }.onFailure {
+                // 运行时不可用（草稿会话等）：允许下次再试，列表里只剩客户端接管的两条
+                commandsRequested = false
+            }
         }
     }
 

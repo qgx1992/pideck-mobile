@@ -122,6 +122,7 @@ import dev.pideck.nativeapp.ui.theme.ControlShape
 import dev.pideck.nativeapp.ui.theme.softPress
 import dev.pideck.nativeapp.data.ImagePrep
 import dev.pideck.nativeapp.data.FileNode
+import dev.pideck.nativeapp.data.HostCommand
 import dev.pideck.nativeapp.data.PendingImage
 import dev.pideck.nativeapp.ui.theme.SelectChip
 import java.text.SimpleDateFormat
@@ -494,14 +495,23 @@ fun ChatScreen(
                 },
                 onStop = { viewModel.stop() },
                 mentionFiles = viewModel.mentionFiles,
-                onNeedMention = { viewModel.ensureMentionFiles() },
-                onCommand = { command ->
-                    draft = "/${command.id} "
-                    ChatDrafts.put(viewModel.sessionId, draft)
-                    if (command.id == "new") {
-                        draft = ""
-                        ChatDrafts.clear(viewModel.sessionId)
-                        onOpenHome()
+                mentionIndexing = viewModel.mentionIndexing,
+                hostCommands = viewModel.hostCommands,
+                onNeedMention = { viewModel.buildMentionIndex() },
+                onNeedCommands = { viewModel.ensureCommands() },
+                onCommand = { entry ->
+                    when (entry.builtin) {
+                        // 客户端接管：新会话直接回首页，压缩把命令写回输入框（可以再补一句提示词）
+                        "new" -> {
+                            draft = ""
+                            ChatDrafts.clear(viewModel.sessionId)
+                            onOpenHome()
+                        }
+
+                        else -> {
+                            draft = "/${entry.insert} "
+                            ChatDrafts.put(viewModel.sessionId, draft)
+                        }
                     }
                 },
                 )
@@ -1155,8 +1165,11 @@ private fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     mentionFiles: List<FileNode> = emptyList(),
+    mentionIndexing: Boolean = false,
+    hostCommands: List<HostCommand> = emptyList(),
     onNeedMention: () -> Unit = {},
-    onCommand: (SlashCommand) -> Unit = {},
+    onNeedCommands: () -> Unit = {},
+    onCommand: (CommandEntry) -> Unit = {},
 ) {
     // 输入区不需要一个「底板」：之前是 Surface + tonalElevation，会在底部铺出一条
     // 顶边笔直的浅色方块，跟圆角输入卡片放一起很割裂。改成向上渐隐的遮罩，
@@ -1209,15 +1222,20 @@ private fun Composer(
             }
             // `@文件` / `/命令` 的候选：只在输入框末尾正打着半截引用时出现
             val trigger = remember(value) { detectTrigger(value) }
-            LaunchedEffect(trigger is ComposerTrigger.Mention) {
-                if (trigger is ComposerTrigger.Mention) onNeedMention()
+            LaunchedEffect(trigger) {
+                when (trigger) {
+                    is ComposerTrigger.Mention -> onNeedMention()
+                    is ComposerTrigger.Slash -> onNeedCommands()
+                    null -> Unit
+                }
             }
             when (trigger) {
                 is ComposerTrigger.Mention -> ComposerSuggest(
                     files = filterMentionFiles(mentionFiles, trigger.query),
                     commands = emptyList(),
+                    loading = mentionIndexing,
                     onPickFile = { node ->
-                        onValueChange(applyMention(value, trigger, node.path))
+                        onValueChange(applyMention(value, trigger, node))
                     },
                     onPickCommand = {},
                     modifier = Modifier.padding(bottom = 6.dp),
@@ -1225,9 +1243,9 @@ private fun Composer(
 
                 is ComposerTrigger.Slash -> ComposerSuggest(
                     files = emptyList(),
-                    commands = filterSlashCommands(trigger.query),
+                    commands = commandEntries(hostCommands, trigger.query),
                     onPickFile = {},
-                    onPickCommand = { command -> onCommand(command) },
+                    onPickCommand = { entry -> onCommand(entry) },
                     modifier = Modifier.padding(bottom = 6.dp),
                 )
 
