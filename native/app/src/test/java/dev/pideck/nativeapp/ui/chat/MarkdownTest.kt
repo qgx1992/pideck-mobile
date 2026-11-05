@@ -1,6 +1,7 @@
 package dev.pideck.nativeapp.ui.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -122,6 +123,35 @@ class MarkdownTest {
         val blocks = parseMarkdown("```md\n| a | b |\n|---|---|\n```")
         assertEquals(1, blocks.size)
         assertTrue(blocks[0] is MdBlock.Code)
+    }
+
+    @Test
+    fun `无表头的表（键值对照）照样成表并从数据行开始`() {
+        // 用户实际报的那个：表头是全空的 `| | |`，旧实现因为 headers 全空而整张不认
+        val source = """
+            | | |
+            |---|---|
+            | 文件 | `apk/PiDeck-native-0.5.32-release.apk` |
+            | 版本 | 0.5.32 / versionCode **532** |
+        """.trimIndent()
+        val table = parseMarkdown(source).single() as MdBlock.Table
+        assertEquals(2, table.headers.size)
+        assertFalse("表头全空 → 不画表头行", table.showHeader)
+        assertEquals(2, table.rows.size)
+        assertEquals(listOf("文件", "`apk/PiDeck-native-0.5.32-release.apk`"), table.rows[0])
+        assertEquals(listOf("版本", "0.5.32 / versionCode **532**"), table.rows[1])
+    }
+
+    @Test
+    fun `表头正常时 showHeader 为 true`() {
+        val table = parseMarkdown("| a | b |\n|---|---|\n| 1 | 2 |").single() as MdBlock.Table
+        assertTrue(table.showHeader)
+    }
+
+    @Test
+    fun `只有分隔行没有数据行时当段落`() {
+        val blocks = parseMarkdown("| a | b |\n|---|---|")
+        assertTrue("空盒子不如就当普通文本", blocks.single() is MdBlock.Paragraph)
     }
 
     @Test

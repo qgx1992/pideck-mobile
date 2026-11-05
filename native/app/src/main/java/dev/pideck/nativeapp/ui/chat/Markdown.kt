@@ -65,6 +65,12 @@ sealed interface MdBlock {
         val headers: List<String>,
         val aligns: List<TableCellAlign> = headers.map { TableCellAlign.LEFT },
         val rows: List<List<String>> = emptyList(),
+        /**
+         * 表头是不是空的。GFM 允许 `| | |` 这种无表头的表（常见于模型写的「键 | 值」对照），
+         * 这种表不画表头行、也不给它铺底色，直接从数据行开始 —— 否则屏上会出现一条
+         * 高度只够背景色的空白带，看起来像表格「顶破了」。
+         */
+        val showHeader: Boolean = true,
     ) : MdBlock
 }
 
@@ -129,7 +135,8 @@ internal fun readTable(lines: List<String>, headerIndex: Int): Pair<MdBlock.Tabl
     val headerLine = lines[headerIndex]
     if (!headerLine.contains('|')) return null
     val headers = splitTableRow(headerLine)
-    if (headers.isEmpty() || headers.all { it.isBlank() }) return null
+    // 至少要能分成两列；表头全空是合法的（后面按「无表头的表」渲染），这里不能因此不认。
+    if (headers.size < 2) return null
     val delimiters = splitTableRow(lines[headerIndex + 1])
     if (delimiters.size != headers.size) return null
     if (!delimiters.all { delimiterCell.matches(it) }) return null
@@ -144,7 +151,14 @@ internal fun readTable(lines: List<String>, headerIndex: Int): Pair<MdBlock.Tabl
         rows += List(headers.size) { position -> cells.getOrElse(position) { "" } }
         cursor += 1
     }
-    return MdBlock.Table(headers, delimiters.map(::alignOf), rows) to cursor
+    // 只有分隔行、没有任何数据行的「表」当段落处理（否则屏上就剩一个空盒子）。
+    if (rows.isEmpty()) return null
+    return MdBlock.Table(
+        headers = headers,
+        aligns = delimiters.map(::alignOf),
+        rows = rows,
+        showHeader = headers.any { it.isNotBlank() },
+    ) to cursor
 }
 
 fun parseMarkdown(source: String): List<MdBlock> {
@@ -461,12 +475,16 @@ private fun MdTable(block: MdBlock.Table, modifier: Modifier = Modifier) {
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(modifier = if (scrollable) Modifier.horizontalScroll(scroll) else Modifier) {
-            TableRow(block.headers, block.aligns, header = true, scrollable = scrollable)
-            block.rows.forEach { row ->
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant,
-                    thickness = 1.dp,
-                )
+            if (block.showHeader) {
+                TableRow(block.headers, block.aligns, header = true, scrollable = scrollable)
+            }
+            block.rows.forEachIndexed { index, row ->
+                if (block.showHeader || index > 0) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        thickness = 1.dp,
+                    )
+                }
                 TableRow(row, block.aligns, header = false, scrollable = scrollable)
             }
         }
