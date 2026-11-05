@@ -13,7 +13,7 @@ Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
 ```bash
 cd native
-./gradlew :app:testDebugUnitTest    # 195 条 JVM 单测
+./gradlew :app:testDebugUnitTest    # 198 条 JVM 单测
 ./gradlew :app:assembleRelease      # app/build/outputs/apk/release/app-release.apk
 ```
 
