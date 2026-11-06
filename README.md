@@ -11,6 +11,10 @@
 当前版本 **0.5.36**（`versionCode 536`），包名 `top.caoayu.pideck`，
 Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
+> **适配的桌面端版本：0.10.0**（截至 0.5.36 对过一遍路由、字段与流帧）。
+> 桌面端升级后会先跑探针与单测再跟；版本低于 0.10.0 时设置页会给一行提示，
+> 见下表「兼容性」一行。
+
 ```bash
 cd native
 ./gradlew :app:testDebugUnitTest    # 247 条 JVM 单测
