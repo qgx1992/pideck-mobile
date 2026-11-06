@@ -1,7 +1,6 @@
 package dev.pideck.nativeapp.ui.chat
 
 import dev.pideck.nativeapp.data.Session
-import dev.pideck.nativeapp.data.SessionActivity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -11,58 +10,59 @@ class DrawerActivePaneTest {
     private fun session(id: String, updatedAt: Long, title: String = id) =
         Session(id = id, projectId = "p1", title = title, updatedAt = updatedAt)
 
+    private val sessions = listOf(
+        session("running", 6_000),
+        session("idle-loaded", 5_000),
+        session("recent-new", 4_000),
+        session("recent-old", 3_000),
+        session("recent-oldest", 2_000),
+    )
+
     @Test
-    fun `活动段列出全部会话，不只是运行中的`() {
-        val sessions = listOf(
-            session("running", 3_000),
-            session("waiting", 2_000),
-            session("done", 5_000),
-            session("idle", 4_000),
-        )
-        val statuses = mapOf(
-            "running" to SessionActivity.Status.Running,
-            "waiting" to SessionActivity.Status.Waiting,
-            "done" to SessionActivity.Status.Done,
-        )
-        val ordered = activityDrawerSessions(sessions) { statuses[it] ?: SessionActivity.Status.Idle }
-        // 等回答 > 正在跑 > 其余（其余内部按最近活动倒序）；一条都不能少
-        assertEquals(listOf("waiting", "running", "done", "idle"), ordered.map { it.id })
+    fun `上半是装载着运行时的会话，按最近活动倒序（不是只挑在跑的）`() {
+        val live = liveDrawerSessions(sessions, setOf("running", "idle-loaded"))
+        assertEquals(listOf("running", "idle-loaded"), live.map { it.id })
     }
 
     @Test
-    fun `没有会话在跑时仍然按最近活动列出全部会话`() {
-        val sessions = listOf(session("a", 1_000), session("b", 3_000), session("c", 2_000))
-        val ordered = activityDrawerSessions(sessions) { SessionActivity.Status.Idle }
-        assertEquals(listOf("b", "c", "a"), ordered.map { it.id })
+    fun `运行时全是 idle 时上半照样有内容`() {
+        val live = liveDrawerSessions(sessions, setOf("idle-loaded"))
+        assertEquals(listOf("idle-loaded"), live.map { it.id })
     }
 
     @Test
-    fun `等你回答的排在正在跑的前面`() {
-        val sessions = listOf(
-            session("running-new", 9_000),
-            session("waiting-old", 1_000),
-        )
-        val ordered = activityDrawerSessions(sessions) {
-            if (it.startsWith("waiting")) SessionActivity.Status.Waiting else SessionActivity.Status.Running
-        }
-        assertEquals(listOf("waiting-old", "running-new"), ordered.map { it.id })
+    fun `下半排除上半已经出现过的会话，上下不重复`() {
+        val loaded = setOf("running", "idle-loaded")
+        val live = liveDrawerSessions(sessions, loaded)
+        val recent = recentDrawerSessions(sessions, loaded)
+        assertEquals(listOf("recent-new", "recent-old", "recent-oldest"), recent.map { it.id })
+        val overlap = live.map { it.id }.intersect(recent.map { it.id }.toSet())
+        assertTrue("上下两段不能有重复：$overlap", overlap.isEmpty())
     }
 
     @Test
-    fun `已结束或失败的会话排在运行中的后面`() {
-        val sessions = listOf(session("failed", 9_000), session("done", 8_000), session("running", 1_000))
-        val statuses = mapOf(
-            "failed" to SessionActivity.Status.Failed,
-            "done" to SessionActivity.Status.Done,
-            "running" to SessionActivity.Status.Running,
-        )
-        val ordered = activityDrawerSessions(sessions) { statuses[it] ?: SessionActivity.Status.Idle }
-        assertEquals(listOf("running", "failed", "done"), ordered.map { it.id })
+    fun `下半按最近活动倒序`() {
+        val recent = recentDrawerSessions(sessions, setOf("running"))
+        assertEquals(listOf("idle-loaded", "recent-new", "recent-old", "recent-oldest"), recent.map { it.id })
+    }
+
+    @Test
+    fun `没有任何运行时时上半为空、下半是全部会话`() {
+        assertTrue(liveDrawerSessions(sessions, emptySet()).isEmpty())
+        assertEquals(5, recentDrawerSessions(sessions, emptySet()).size)
+    }
+
+    @Test
+    fun `运行时集合里出现本地没有的会话 id 不会炸也不算进上下两段`() {
+        val live = liveDrawerSessions(sessions, setOf("ghost"))
+        assertTrue(live.isEmpty())
+        assertEquals(5, recentDrawerSessions(sessions, setOf("ghost")).size)
     }
 
     @Test
     fun `空列表不炸`() {
-        assertTrue(activityDrawerSessions(emptyList()) { SessionActivity.Status.Idle }.isEmpty())
+        assertTrue(liveDrawerSessions(emptyList(), setOf("a")).isEmpty())
+        assertTrue(recentDrawerSessions(emptyList(), emptySet()).isEmpty())
     }
 
     @Test

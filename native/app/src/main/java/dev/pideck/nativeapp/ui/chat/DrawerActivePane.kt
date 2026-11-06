@@ -71,34 +71,35 @@ object DrawerTabState {
 }
 
 /**
- * 「活动」段的列表：**所有会话**，按「等回答 > 正在跑 > 其余」再按最近活动排。
+ * 「活动」上半：宿主上**装载着运行时**的会话（`/api/state` 的 `runtimes`，idle 也算），按最近活动倒序。
  *
- * 这里不再是「只列运行中」—— 桌面端那一栏（`ActiveSessionsTree`）是「正在跑的 agent 行 +
- * 最近会话」拼起来的一个平铺列表，没有任何会话在跑时看到的就是最近会话那串；
- * 手机既没有 agent 级数据源，也不该在没人在跑时显示一片空白（0.5.37 头两稿就是这么错的）。
- * 运行态只用来排前面与画状态点，不再当过滤条件。
- *
- * 纯函数，`statusOf` 由调用方注入（生产里是 `SessionActivity::statusOf`）。
+ * 照桌面端 `collectActiveSessionRows` 来的 —— 那一段不是「正在跑」（`status` 里只有一条
+ * `running`，其余是 idle），而是「这台桌面上开着 agent 的会话」：跑完但运行时还挂着的也在上面。
+ * 0.5.37 头几稿按 `Running/Waiting` 过滤，于是只有真在跑的那一条会出现，其余全掉到下面去。
  */
-internal fun activityDrawerSessions(
+internal fun liveDrawerSessions(
     sessions: List<Session>,
-    statusOf: (String) -> SessionActivity.Status,
-): List<Session> = sessions.sortedWith(
-    compareBy<Session> { rankOf(statusOf(it.id)) }
-        .thenByDescending { it.updatedAt },
-)
+    loadedSessionIds: Set<String>,
+): List<Session> = sessions
+    .filter { it.id in loadedSessionIds }
+    .sortedByDescending { it.updatedAt }
 
-private fun rankOf(status: SessionActivity.Status): Int = when (status) {
-    SessionActivity.Status.Waiting -> 0
-    SessionActivity.Status.Running -> 1
-    else -> 2
-}
+/**
+ * 「活动」下半：最近会话 —— **排除**上半已经出现过的那几条（桌面端 `collectRecentActivityRows`
+ * 里用 `activeSessionIds` 去重，用户明确说过「上下两部分没有重复」），按活动时间倒序。
+ */
+internal fun recentDrawerSessions(
+    sessions: List<Session>,
+    loadedSessionIds: Set<String>,
+): List<Session> = sessions
+    .filter { it.id !in loadedSessionIds }
+    .sortedByDescending { it.updatedAt }
 
-/** 一次露多少条，点「显示更多」再加这么多（与桌面端 `RECENT_SESSIONS_INITIAL_VISIBLE = 10` 对齐）。 */
-private const val DRAWER_ACTIVE_PREVIEW = 10
+/** 「最近会话」初露多少条（桌面端 `RECENT_SESSIONS_INITIAL_VISIBLE = 10`）。 */
+private const val DRAWER_RECENT_INITIAL = 10
 
-/** 「显示更多」一次加多少。 */
-private const val DRAWER_ACTIVE_STEP = 12
+/** 「加载更多」一次加多少（桌面端 `RECENT_SESSIONS_PAGE_SIZE`）。 */
+private const val DRAWER_RECENT_STEP = 12
 
 /** 「活动」段看得见时刷运行态的间隔。和后台看护的 15s 不同：这里是人在看，要跟手。 */
 private const val RUNTIMES_POLL_MS = 5_000L
@@ -164,13 +165,14 @@ internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
 }
 
 /**
- * 「活动」段：一条平铺的会话列表（桌面端 `ActiveSessionsTree` 的移动版）。
+ * 「活动」段：上半是**装载着运行时的会话**（桌面端的 agent 行），下半是**最近会话**。
  *
- * 行就是「状态点 + 标题 + 相对时间」，和桌面端一致；不做「运行中 / 最近会话」两个小标题，
- * 也不按运行态过滤 —— 运行中的会话因为 [activityDrawerSessions] 的排序自然浮在最上面，
- * 状态点自己会区分正在跑（红点）/ 等你回答（橙点）/ 空闲（灰点）。
+ * 两段之间不重复：下半会把上半已经列出的会话剔掉（用户明确要求 —— 「上下两部分是没有重复的」）。
+ * 上半没有小标题，空的时候只留一行「暂无运行中的 Agent 会话」（桌面端 `sidebarActiveEmpty`）；
+ * 下半有一个吸顶小标题「最近会话 · 共 N 条」+ 右侧「显示前 N 项 / 全部已显示」，
+ * 底部「加载更多 (N)」/「收起」。
  *
- * 只列**会话**级：桌面端那一栏是 agent 级（子代理也单列一行），手机要通过
+ * 只列**会话**级：桌面端上半是 agent 级（子代理也会出现），手机要通过
  * `/api/sessions/:id/subagents` 逐个会话查，放进抽屉会变成 N 次串行请求；子代理明细在
  * 会话页右侧工作区里已经有了。
  */
@@ -191,18 +193,20 @@ internal fun DrawerActivePane(
             delay(RUNTIMES_POLL_MS)
         }
     }
-    // 状态与排序都是 Compose 可观察的：SessionActivity.statuses 一变，这里跟着重组
-    val ordered = activityDrawerSessions(sessions) { SessionActivity.statusOf(it) }
-    var limit by rememberSaveable { mutableIntStateOf(DRAWER_ACTIVE_PREVIEW) }
-    val visible = if (limit >= ordered.size) ordered else ordered.take(limit)
+    // 状态与排序都是 Compose 可观察的：SessionActivity 一变，这里跟着重组
+    val loaded = SessionActivity.loadedSessionIds
+    val live = liveDrawerSessions(sessions, loaded)
+    val recentAll = recentDrawerSessions(sessions, loaded)
+    var limit by rememberSaveable { mutableIntStateOf(DRAWER_RECENT_INITIAL) }
+    val recent = if (limit >= recentAll.size) recentAll else recentAll.take(limit)
 
     LazyColumn(
         modifier = modifier,
-        contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 2.dp, bottom = 12.dp),
+        contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
-        if (visible.isEmpty()) {
-            item(key = "active-empty") {
+        if (sessions.isEmpty()) {
+            item(key = "empty") {
                 Text(
                     "正在读取会话…",
                     style = MaterialTheme.typography.labelMedium,
@@ -211,33 +215,114 @@ internal fun DrawerActivePane(
                 )
             }
         }
-        items(visible, key = { "a-${it.id}" }) { session ->
+        if (sessions.isNotEmpty() && live.isEmpty()) {
+            item(key = "live-empty") {
+                Text(
+                    "暂无运行中的 Agent 会话",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp),
+                )
+            }
+        }
+        items(live, key = { "live-${it.id}" }) { session ->
             ActiveSessionRow(
                 session = session,
                 current = session.id == currentSessionId,
-                onClick = {
-                    if (session.id != currentSessionId) onPickSession(session.id)
-                },
+                onClick = { if (session.id != currentSessionId) onPickSession(session.id) },
                 onLongClick = { onLongClickSession(session) },
             )
         }
-        val remaining = ordered.size - visible.size
-        if (remaining > 0) {
-            item(key = "active-more") {
-                Text(
-                    "显示更多（还有 $remaining 个）",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .softPress(
-                            RoundedCornerShape(8.dp),
-                            onClick = { limit += DRAWER_ACTIVE_STEP },
-                            onLongClick = {},
-                        )
-                        .padding(start = 22.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
+        if (recentAll.isNotEmpty()) {
+            item(key = "recent-header") {
+                RecentHeader(total = recentAll.size, shown = recent.size)
+            }
+            items(recent, key = { "recent-${it.id}" }) { session ->
+                ActiveSessionRow(
+                    session = session,
+                    current = session.id == currentSessionId,
+                    onClick = { if (session.id != currentSessionId) onPickSession(session.id) },
+                    onLongClick = { onLongClickSession(session) },
                 )
             }
+            val remaining = recentAll.size - recent.size
+            if (remaining > 0 || limit > DRAWER_RECENT_INITIAL) {
+                item(key = "recent-footer") {
+                    RecentFooter(
+                        remaining = remaining,
+                        canCollapse = limit > DRAWER_RECENT_INITIAL,
+                        onMore = { limit += DRAWER_RECENT_STEP },
+                        onCollapse = { limit = DRAWER_RECENT_INITIAL },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 「最近会话」小标题：左边标题 + 共 N 条，右边「显示前 M 项 / 全部已显示」（桌面端同款）。 */
+@Composable
+private fun RecentHeader(total: Int, shown: Int) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 10.dp, end = 10.dp, top = 12.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "最近会话",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            "共 $total 条",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            if (shown >= total) "全部已显示" else "显示前 $shown 项",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    }
+}
+
+/** 列表底部那两颗按钮：加载更多 / 收起。 */
+@Composable
+private fun RecentFooter(
+    remaining: Int,
+    canCollapse: Boolean,
+    onMore: () -> Unit,
+    onCollapse: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 10.dp, end = 10.dp, top = 2.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (remaining > 0) {
+            Text(
+                "加载更多 ($remaining)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .softPress(RoundedCornerShape(8.dp), onClick = onMore, onLongClick = {})
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        if (canCollapse) {
+            Text(
+                "收起",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier
+                    .softPress(RoundedCornerShape(8.dp), onClick = onCollapse, onLongClick = {})
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            )
         }
     }
 }

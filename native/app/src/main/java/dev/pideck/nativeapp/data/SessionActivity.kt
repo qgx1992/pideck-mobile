@@ -27,6 +27,15 @@ object SessionActivity {
 
     fun statusOf(sessionId: String): Status = statuses[sessionId] ?: Status.Idle
 
+    /**
+     * 宿主上**装载着运行时**的会话 id（`/api/state` 的 `runtimes`，idle 也算）。
+     *
+     * 侧栏「活动」上半段照桌面端的 `collectActiveSessionRows` 来：那一栏不是「正在跑」，
+     * 而是「这台桌面上开着 agent 的会话」—— 跑完但运行时还挂着的会话也留在上面。
+     */
+    var loadedSessionIds by mutableStateOf<Set<String>>(emptySet())
+        private set
+
     /** 上一次从 `/api/state` 读到的「等你回答」集合；轻量轮询（只有 runtimes）时沿用它。 */
     private var lastWaiting: Set<String> = emptySet()
 
@@ -47,6 +56,8 @@ object SessionActivity {
      */
     fun observeRuntimes(runtimes: List<RuntimeInfo>, waiting: Set<String>? = null) {
         if (waiting != null && waiting != lastWaiting) lastWaiting = waiting
+        val loaded = runtimes.map { it.sessionId }.toSet()
+        if (loaded != loadedSessionIds) loadedSessionIds = loaded
         val running = runtimes.filter { it.isRunning }.map { it.sessionId }.toSet()
         val waitingIds = lastWaiting
         val next = statuses.toMutableMap()
@@ -77,6 +88,7 @@ object SessionActivity {
         statuses = emptyMap()
         previousRunning = emptySet()
         lastWaiting = emptySet()
+        loadedSessionIds = emptySet()
     }
 
     /** 删除会话时顺手清掉，免得同一 id 复用（复制会话）时串色。 */

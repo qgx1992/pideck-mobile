@@ -456,11 +456,18 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   0.5.37）：抽屉顶上一排 pill 分「活动 / 聊天」两段，对应桌面端左侧栏那个 `Tabs`
   （`active` / `chats`，`projects` 还没做）。`DrawerTabState` 是**单例**不是 `rememberSaveable` ——
   抽屉每次开合都是新组合，会话列表页与聊天页又是两个 ViewModel 实例（同 `GroupCollapse` 的理由）。
-  「活动」是**一条平铺的会话列表**，与桌面端 `ActiveSessionsTree` 的观感一致（dot + 标题 + 相对时间）：
-  `activityDrawerSessions()` 按「等回答 > 正在跑 > 其余」再按 `updatedAt` 倒序，先露 10 条、
-  「显示更多」每次 +12。**不要按运行态过滤**：0.5.37 头两稿按 Running/Waiting 过滤并分成
-  「运行中 / 最近会话」两段，结果没人在跑时整段空白 —— 桌面那栏在没人跑时显示的也是最近会话。
-  运行态只用来排序与画 `StatusDot`。
+  **结构照桌面端 `ActiveSessionsTree`，别自己发明**：上半 `liveDrawerSessions(sessions, loadedSessionIds)`
+  = 宿主上**装载着运行时**的会话（`/api/state` 的 `runtimes`，`idle` 也算，按 `updatedAt` 倒序）；
+  下半 `recentDrawerSessions(sessions, loadedSessionIds)` = **排除上半**、再按最近活动倒序。
+  用户明确要求过「上下两部分没有重复」。上半无小标题、空时一行「暂无运行中的 Agent 会话」；
+  下半有「最近会话 · 共 N 条」+「显示前 N 项 / 全部已显示」，先露 10 条（`DRAWER_RECENT_INITIAL`）、
+  「加载更多 (N)」每次 +12（`DRAWER_RECENT_STEP`）、「收起」回 10 条。
+  **踩过两稿**：① 把上半当成「正在跑」（`Status.Running/Waiting` 过滤）→ 只有真在跑的那条出现，
+  其余全掉到下面，用户报「运行中怎么没显示会话列表」；② 改成「全部会话一条平铺列表、运行态只排序
+  不过滤」→ 也不对，那是没分组时的旧观感。判据只看一点：桌面端上半来自 `catalog.agents`
+  （装载着运行时即列出），不是 `status`。
+  `loadedSessionIds` 是 `data/SessionActivity.kt` 里的 `var ... by mutableStateOf<Set<String>>(emptySet())`，
+  在 `observeRuntimes` 里 `runtimes.map { it.sessionId }` 赋值（`reset()` 清空）。
   **运行态必须自己轮询**：`SessionActivity.observe()` 只在 `SessionsViewModel.refresh()`（`/api/state`，
   56KB 且带 ETag，只在 ViewModel init 跑一次）与 `ChatViewModel` 切会话/发消息时调 —— 抽屉打开后不会自己重拉。
   现在 `SessionActivity.observeRuntimes(runtimes)` 吃轻量的 `/api/sessions/runtimes`（约 3KB），
@@ -468,8 +475,10 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   `DrawerActivePane` 里每 5 秒（`RUNTIMES_POLL_MS`）再打一次，离开该段随组合注销即停。
   轻量接口没有 `pendingUiRequests`，`waiting` 传 null 时沿用 `lastWaiting`，别当成空集合。
   行是独立组件 `ActiveSessionRow`，**不要**去改 `DrawerSessionRow` / `SessionRow` / `RecentSessionRow`
-  —— 那三处各自安静（见上面「会话行有三份布局」）。纯函数有单测 `DrawerActivePaneTest`（6 条）。
-  桌面端的插件分组区（`desktopApi.sessionGroups.list()`）走 IPC，手机拿不到，这一段不接受复刻。
+  —— 那三处各自安静（见上面「会话行有三份布局」）。纯函数有单测 `DrawerActivePaneTest`（8 条）。
+  桌面端上半是 agent 级（子代理单列），手机只到会话级（子代理要逐会话请求 `/api/sessions/:id/subagents`）；
+  桌面端的插件分组区（`desktopApi.sessionGroups.list()`）走 IPC，手机拿不到，这两处不复刻。
+  改这个文件别用「截到最后一个 `}`」这类写法 —— `ActiveSessionRow` 曾被一次批量改写误删。
 
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
