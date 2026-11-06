@@ -60,7 +60,7 @@ data class TurnClock(
 )
 
 /** 一轮里所有 assistant 步骤的 output tokens 合计。 */
-data class TurnUsage(val outputTokens: Int, val steps: Int)
+data class TurnUsage(val outputTokens: Int, val steps: Int, val spanMs: Long? = null)
 
 /**
  * 从消息列表里取「本轮」的 output tokens —— **一轮可能有很多步**。
@@ -82,14 +82,25 @@ fun turnUsageOf(messages: List<ChatMessage>): TurnUsage? {
     }
     var tokens = 0
     var steps = 0
+    var firstStart = 0L
+    var lastEnd = 0L
     for (message in messages.drop(start)) {
         if (message.role != "assistant") continue
         val usage = runCatching { message.meta?.get("usage")?.jsonObject }.getOrNull() ?: continue
         val out = runCatching { (usage["outputTokens"] as? JsonPrimitive)?.intOrNull }.getOrNull() ?: continue
         tokens += out
         steps += 1
+        // 整轮的起止：翻历史时没有秒表，拿不到宿主 perf，也要有一个**整轮**的时长，
+        // 不能拿最后一步的 durationMs 去当整轮（那会让全程速度凭空翻好几倍）。
+        val startAt = runCatching { (message.meta?.get("startedAt") as? JsonPrimitive)?.doubleOrNull }
+            .getOrNull()?.toLong() ?: 0L
+        val endAt = runCatching { (message.meta?.get("endedAt") as? JsonPrimitive)?.doubleOrNull }
+            .getOrNull()?.toLong() ?: 0L
+        if (startAt > 0L && (firstStart == 0L || startAt < firstStart)) firstStart = startAt
+        if (endAt > lastEnd) lastEnd = endAt
     }
-    return if (steps == 0) null else TurnUsage(outputTokens = tokens, steps = steps)
+    val span = if (firstStart > 0L && lastEnd > firstStart) lastEnd - firstStart else null
+    return if (steps == 0) null else TurnUsage(outputTokens = tokens, steps = steps, spanMs = span)
 }
 
 /**
@@ -136,11 +147,13 @@ fun deriveTurnStats(
         ttftMs = ttft,
         totalMs = total,
         outputTokens = tokens,
-        tps = if (tokens != null && decodeMs != null && decodeMs >= 100L && ttft != null) {
-            tokens / (decodeMs / 1000.0)
-        } else {
-            host?.tps
-        },
+        // 宿主自己算的生成速度优先：它和桌面端屏幕上那个数同源，本端秒表只能算近似。
+        tps = host?.tps?.takeIf { it > 0.0 }
+            ?: if (tokens != null && decodeMs != null && decodeMs >= 100L && ttft != null) {
+                tokens / (decodeMs / 1000.0)
+            } else {
+                null
+            },
         // 分子分母都用同一份 tokens 与同一个 total：宿主给了 total 时，这一行与桌面端同轮同值。
         endToEndTps = if (tokens != null && total != null && total >= 100L) {
             tokens / (total / 1000.0)
@@ -161,6 +174,7 @@ fun turnStatsFromMeta(
     clock: TurnClock?,
     host: HostTurnPerf? = null,
     tokens: Int? = null,
+    turnSpanMs: Long? = null,
 ): TurnStats {
     val usage = runCatching { meta?.get("usage")?.jsonObject }.getOrNull()
     val tokens = tokens
@@ -173,7 +187,8 @@ fun turnStatsFromMeta(
         val end = (meta?.get("endedAt") as? JsonPrimitive)?.doubleOrNull
         if (start != null && end != null && end > start) (end - start).roundToLong() else null
     }.getOrNull()
-    return deriveTurnStats(clock, tokens, duration ?: span, host)
+    // 有时长的来源排序：整轮跨度（翻历史时唯一可靠的那个）→ 这一步的 durationMs → 这一步的起止
+    return deriveTurnStats(clock, tokens, turnSpanMs ?: duration ?: span, host)
 }
 
 /**

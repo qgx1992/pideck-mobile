@@ -408,11 +408,17 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   里带着 perf 四件套 `{ttftMs, totalMs, tps, endToEndTps, perfAt}`，就是桌面端屏幕上那几个数
   （`data/RuntimeActions.kt` 的 `parseHostTurnPerf`）。`deriveTurnStats(host = …)` 会用它，
   并且**连 tokens 都从它反推**（`tokens = endToEndTps × totalMs`，本来就是这个式子算出来的），
-  免得「本端整轮求和 + 宿主单步耗时」拼出一个假的大速度。只认 `perfAt` 在 2 分钟内的
-  （`HOST_PERF_FRESH_MS`）：翻历史时 runtime 里留的是很久以前那轮的数。
+  免得「本端整轮求和 + 宿主单步耗时」拼出一个假的大速度。认「是不是这一轮」靠
+  `perfAt` 与消息 `meta.endedAt` 对账（`HOST_PERF_MATCH_MS = 120_000`），没有 `endedAt`
+  才退回「2 分钟内」。**别退回「只看年龄」**：切个会话就超过窗口，数字立刻换一套。
   拿不到 perf 时（翻历史 / dsh / 运行时已退出）才用本端秒表 + `meta.usage`，这时 tokens
   **必须整轮求和**（`TurnStats.turnUsageOf()`）：带工具的一轮有多条 assistant 消息，一条只是
-  一步的量，只取最后一条会把 12k 的一轮显示成 881。
+  一步的量，只取最后一条会把 12k 的一轮显示成 881。整轮的时间也要整轮算（`TurnUsage.spanMs`
+  = 首步 `startedAt` → 末步 `endedAt`），别拿最后一步的 `durationMs` 当整轮。
+  **结算结果要存下来**（`data/TurnStatsStore.kt`，key = `sessionId|messageId`，上限 120 条，
+  SharedPreferences + 内存镜像，`PiDeckApp.onCreate` 里 `attach`）：切走再切回来时秒表已清、
+  宿主 perf 可能过期，重新算会得到另一套数（用户报过「切换会话后数值消失或变了」）。
+  所以 `settleTurnStats()` 是「先 recall、没有再算、算了就存」。
   `/api/state` 的 runtimes 仍然只有 `{sessionId, agentId, runtimeGeneration, projectId, cwd, status,
   sessionPath, deckSessionId, createdAt}`（perf 只在 runtime/state 那个 POST 里）。
   跨设备 / 翻历史只能靠 meta 的 `durationMs`，而**只有 pi 后端有**

@@ -53,6 +53,7 @@ import dev.pideck.nativeapp.data.deriveTurnStats
 import dev.pideck.nativeapp.data.HostTurnPerf
 import dev.pideck.nativeapp.data.estimateOutputTokens
 import dev.pideck.nativeapp.data.turnStatsFromMeta
+import dev.pideck.nativeapp.data.TurnStatsStore
 import dev.pideck.nativeapp.data.turnUsageOf
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
@@ -80,6 +81,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -182,8 +185,11 @@ class ChatViewModel @Inject constructor(
         /** 直播节拍：2s 一次（用户 0.5.33 要求）。 */
         const val LIVE_STATS_INTERVAL_MS = 2_000L
 
-        /** 宿主 perf 超过这个岁数就不认了（翻历史时它可能是几小时前那一轮的）。 */
+        /** 宿主 perf 超过这个岁数就不认了（没有 `endedAt` 可对账时的兜底）。 */
         const val HOST_PERF_FRESH_MS = 120_000L
+
+        /** 宿主 perf 的 `perfAt` 与消息 `endedAt` 允许的偏差（同一瞬间，给时钟/落盘误差留量）。 */
+        const val HOST_PERF_MATCH_MS = 120_000L
     }
 
     var sending by mutableStateOf(false)
@@ -1280,13 +1286,28 @@ class ChatViewModel @Inject constructor(
      * 只认「刚刚」结算的：翻历史时 runtime 里留的是很久以前的数，用它反而会把上一轮的节奏
      * 贴到这一轮上。
      */
-    private suspend fun freshHostPerf(): HostTurnPerf? {
+    private suspend fun hostPerfFor(messages: List<ChatMessage>): HostTurnPerf? {
         val target = device ?: return null
         val runtime = runtimeTarget() ?: return null
         val perf = runCatching { api.runtimeState(target, token, runtime).perf }.getOrNull() ?: return null
         if (perf.at <= 0L) return null
-        val age = System.currentTimeMillis() - perf.at
-        return perf.takeIf { age in 0..HOST_PERF_FRESH_MS }
+        // 认「是不是这一轮」靠时刻对账，而不是靠「多久以前」：这一轮 assistant 落盘的 endedAt
+        // 与宿主 perf 的 perfAt 是同一个瞬间。仅凭年龄判断的话，切会话超过两分钟就认不出来，
+        // 数字跟着换一套（0.5.36 的坑）。
+        val endedAt = hostEndedAtOf(messages)
+        return if (endedAt > 0L) {
+            perf.takeIf { kotlin.math.abs(it.at - endedAt) <= HOST_PERF_MATCH_MS }
+        } else {
+            perf.takeIf { System.currentTimeMillis() - it.at in 0..HOST_PERF_FRESH_MS }
+        }
+    }
+
+    /** 这一轮最后一条 assistant 消息的 `meta.endedAt`（宿主落盘时刻，epoch 毫秒）。 */
+    private fun hostEndedAtOf(messages: List<ChatMessage>): Long {
+        val last = messages.lastOrNull { it.role == "assistant" } ?: return 0L
+        return runCatching {
+            (last.meta?.get("endedAt") as? JsonPrimitive)?.doubleOrNull?.toLong() ?: 0L
+        }.getOrNull() ?: 0L
     }
 
     // ---- 统计行的打点与结算（首字时间 / tok/s，口径见 data/TurnStats.kt）----
@@ -1350,10 +1371,22 @@ class ChatViewModel @Inject constructor(
             null
         }
         statsForMessageId = last.id
+        // 已经结算过这一轮就照原样显示：秒表已经清了、宿主 perf 也可能过期，
+        // 重新算出来的数会和刚跑完时不一样（tok 变多、时间变短），用户看到的就是「切换会话后数值变了」。
+        val cached = TurnStatsStore.recall(sessionId, last.id)
         // 一轮可能有很多步（每步一条 assistant 消息），token 数要整轮求和：
         // 只取最后一步会把 12k 的一轮显示成 881，两档速度跟着一起偏小十几倍。
-        val tokens = turnUsageOf(messages)?.outputTokens
-        turnStats = turnStatsFromMeta(last.meta, clock, freshHostPerf(), tokens).takeIf { !it.isEmpty }
+        val usage = turnUsageOf(messages)
+        val computed = turnStatsFromMeta(
+            last.meta,
+            clock,
+            hostPerfFor(messages),
+            usage?.outputTokens,
+            usage?.spanMs,
+        )
+            .takeIf { !it.isEmpty }
+        turnStats = cached ?: computed
+        if (computed != null && cached == null) TurnStatsStore.remember(sessionId, last.id, computed)
         // 秒表只能用一次：下次重拉历史不能拿旧起点再算一遍。
         turnStartedAt = 0L
         turnRequestSentAt = 0L

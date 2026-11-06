@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import dev.pideck.nativeapp.data.Prefs
+import dev.pideck.nativeapp.data.TurnStatsStore
 import dev.pideck.nativeapp.ui.sessions.GroupCollapse
 import dev.pideck.nativeapp.watch.Notifications
 import dev.pideck.nativeapp.watch.RunWatcher
@@ -24,6 +25,8 @@ class PiDeckApp : Application() {
         Prefs.load(this, prefsScope)
         // 折叠状态要落盘，也要在启动时按设置恢复
         GroupCollapse.attach(this, prefsScope)
+        // 统计行的结算结果：切会话/重启后还要显示同一份数
+        TurnStatsStore.attach(this)
         // 前后台切换：切后台时尝试起看护服务（Android 12+ 可能拒绝，外面有 runCatching），
         // 回前台时把可见标记置回来，这样「跑完了」的通知只在真看不见 App 时弹。
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {

@@ -224,6 +224,39 @@ class TurnStatsTest {
         )
     }
 
+    /** 带起止时刻的一条 assistant（翻历史那条路径要靠它算整轮跨度）。 */
+    private fun timed(id: String, tokens: Int, start: Long, end: Long) = ChatMessage(
+        id = id,
+        role = "assistant",
+        text = "x",
+        meta = meta("""{"usage":{"outputTokens":$tokens},"startedAt":$start,"endedAt":$end}"""),
+    )
+
+    @Test
+    fun `翻历史时用整轮跨度当总耗时，不拿最后一步的时长`() {
+        // 两条 assistant（中间夹一条 tool），整轮 2s → 12s = 10s，token 100+300=400
+        val turn = listOf(
+            message("u1", "user"),
+            timed("a1", 100, 1_000, 3_000),
+            message("t1", "tool"),
+            timed("a2", 300, 3_100, 12_000),
+        )
+        val usage = turnUsageOf(turn)
+        assertEquals(400, usage?.outputTokens)
+        assertEquals(11_000L, usage?.spanMs)
+        val stats = turnStatsFromMeta(
+            meta = null,
+            clock = null,
+            host = null,
+            tokens = usage?.outputTokens,
+            turnSpanMs = usage?.spanMs,
+        )
+        assertEquals(11_000L, stats.totalMs)
+        assertEquals(400, stats.outputTokens)
+        assertEquals(36.36, stats.endToEndTps!!, 0.02)
+        assertNull(stats.ttftMs)
+    }
+
     private fun message(id: String, role: String, tokens: Int? = null) = ChatMessage(
         id = id,
         role = role,
