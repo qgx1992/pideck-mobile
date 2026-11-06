@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +38,7 @@ import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.SessionActivity
 import dev.pideck.nativeapp.ui.sessions.relativeTime
 import dev.pideck.nativeapp.ui.theme.softPress
+import kotlinx.coroutines.delay
 
 /**
  * 侧栏顶部的分段（桌面端那个 `Tabs` 的 `active` / `chats`，`projects` 还没做）。
@@ -104,6 +106,9 @@ private const val DRAWER_RECENT_PREVIEW = 12
 
 /** 「显示更多」一次加多少。 */
 private const val DRAWER_RECENT_STEP = 12
+
+/** 「活动」段看得见时刷运行态的间隔。和后台看护的 15s 不同：这里是人在看，要跟手。 */
+private const val RUNTIMES_POLL_MS = 5_000L
 
 /**
  * 侧栏顶部那一排分段（桌面端 `Tabs` 的 pill 变体）：一枚胶囊里并排两段，选中那段是
@@ -179,8 +184,17 @@ internal fun DrawerActivePane(
     projectNameOf: (String) -> String,
     onPickSession: (String) -> Unit,
     onLongClickSession: (Session) -> Unit,
+    onPollRuntimes: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // 运行态是「别处也在变」的东西：抽屉开着、别的机器/桌面端在跑的时候必须自己问。
+    // 每 5 秒拉一次 `/api/sessions/runtimes`（约 3KB），离开这一段就自动停（LaunchedEffect 随组合注销）。
+    LaunchedEffect(Unit) {
+        while (true) {
+            onPollRuntimes()
+            delay(RUNTIMES_POLL_MS)
+        }
+    }
     // 状态变化是 Compose 可观察的：SessionActivity.statuses 一变，这里跟着重组。
     val active = activeDrawerSessions(sessions) { SessionActivity.statusOf(it) }
     var recentLimit by rememberSaveable { mutableIntStateOf(DRAWER_RECENT_PREVIEW) }
@@ -197,7 +211,7 @@ internal fun DrawerActivePane(
         if (active.isEmpty()) {
             item(key = "active-empty") {
                 Text(
-                    "暂无运行中的 Agent 会话",
+                    if (sessions.isEmpty()) "正在读取会话…" else "暂无运行中的 Agent 会话",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.outline,
                     modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 8.dp),

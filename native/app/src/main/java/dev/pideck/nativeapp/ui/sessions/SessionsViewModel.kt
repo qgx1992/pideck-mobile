@@ -18,6 +18,7 @@ import dev.pideck.nativeapp.data.StateCache
 import dev.pideck.nativeapp.data.StateFetch
 import dev.pideck.nativeapp.data.describeConnectionError
 import dev.pideck.nativeapp.watch.RunWatcher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -230,6 +231,32 @@ class SessionsViewModel @Inject constructor(
 
     fun clearError() {
         error = null
+    }
+
+    private var runtimesBusy = false
+
+    /**
+     * 只刷运行态（`/api/sessions/runtimes`，约 3KB），供侧栏「活动」段轮询。
+     *
+     * 为什么不能只靠 [refresh]：那个走 `/api/state`（56KB）且带 ETag，抽屉开着的时候不会自己重拉，
+     * 于是「别处刚开跑的会话」在手机上看起来一直是空闲 —— 0.5.37 第一版就是这样，活动段永远空。
+     */
+    fun refreshRuntimes() {
+        val target = device ?: return
+        if (runtimesBusy) return
+        runtimesBusy = true
+        viewModelScope.launch {
+            try {
+                val runtimes = api.runtimes(target, token)
+                SessionActivity.observeRuntimes(runtimes)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // 轻量轮询失败就静默：下一次（5 秒后）还会再试，不必为一个状态灯弹错
+            } finally {
+                runtimesBusy = false
+            }
+        }
     }
 
     fun refresh() {

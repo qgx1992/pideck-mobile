@@ -40,6 +40,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -91,6 +92,10 @@ fun SessionDrawer(
     val state = viewModel.state
     // 长按菜单（会话 / 工作区），逻辑与列表页共用
     val actions = rememberRowActionState()
+
+    // 抽屉每次打开先问一次运行态：`/api/state` 带 ETag 且只在 ViewModel 初始化时拉，
+    // 抽屉里的状态点会一直是「进入时那一刻」的 —— 别处刚开跑、刚跑完都看不出来。
+    LaunchedEffect(Unit) { viewModel.refreshRuntimes() }
 
     // 宽度别用默认的 360dp：390dp 宽的机器上几乎占满，右侧只留一条缝，看着像整页切换。
     ModalDrawerSheet(modifier = Modifier.width(DrawerWidth)) {
@@ -183,6 +188,7 @@ fun SessionDrawer(
                 projectNameOf = viewModel::projectNameOf,
                 onPickSession = onPickSession,
                 onLongClickSession = { actions.menuSession = it },
+                onPollRuntimes = viewModel::refreshRuntimes,
                 modifier = Modifier.weight(1f),
             )
         } else LazyColumn(

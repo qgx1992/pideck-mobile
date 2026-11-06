@@ -27,18 +27,33 @@ object SessionActivity {
 
     fun statusOf(sessionId: String): Status = statuses[sessionId] ?: Status.Idle
 
+    /** 上一次从 `/api/state` 读到的「等你回答」集合；轻量轮询（只有 runtimes）时沿用它。 */
+    private var lastWaiting: Set<String> = emptySet()
+
     /**
      * 用一次 `/api/state` 的结果刷新：跑起来的标蓝、在等回答的标橙，
      * 刚从「跑」变成「不跑」的先记成 Done，等 [markTurnResult] 用真实结果覆盖成 Failed。
      */
     fun observe(state: PideckState) {
-        val running = state.runtimes.filter { it.isRunning }.map { it.sessionId }.toSet()
-        val waiting = state.pendingUiRequests.map { it.sessionId }.toSet()
+        observeRuntimes(state.runtimes, state.pendingUiRequests.map { it.sessionId }.toSet())
+    }
+
+    /**
+     * 只喂运行态（`/api/sessions/runtimes`，约 3KB）的版本 —— 侧栏「活动」段每 5 秒刷一次走这条，
+     * 不必为了一个状态灯去拉 56KB 的 `/api/state`。
+     *
+     * [waiting] 传 null 表示「这次没问到」，沿用上一次的集合：轻量接口里没有 `pendingUiRequests`，
+     * 直接当成空会把「在等你回答」误降级成 Running/Idle。
+     */
+    fun observeRuntimes(runtimes: List<RuntimeInfo>, waiting: Set<String>? = null) {
+        if (waiting != null && waiting != lastWaiting) lastWaiting = waiting
+        val running = runtimes.filter { it.isRunning }.map { it.sessionId }.toSet()
+        val waitingIds = lastWaiting
         val next = statuses.toMutableMap()
         // 等你回答的会话可能还没把 runtime 标成 running，所以先按等待态铺一遍
-        for (id in waiting) next[id] = Status.Waiting
+        for (id in waitingIds) next[id] = Status.Waiting
         for (id in running) {
-            next[id] = if (id in waiting) Status.Waiting else Status.Running
+            next[id] = if (id in waitingIds) Status.Waiting else Status.Running
         }
         for (id in previousRunning - running) {
             // 已经判定过的（打开过会话、读过 errorText）就别被乐观的 Done 盖掉
@@ -61,6 +76,7 @@ object SessionActivity {
     internal fun reset() {
         statuses = emptyMap()
         previousRunning = emptySet()
+        lastWaiting = emptySet()
     }
 
     /** 删除会话时顺手清掉，免得同一 id 复用（复制会话）时串色。 */
