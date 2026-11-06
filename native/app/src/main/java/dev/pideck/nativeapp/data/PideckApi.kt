@@ -67,6 +67,7 @@ interface PideckApi {
         backend: String? = null,
         acpToolId: String? = null,
         model: SessionModel? = null,
+        thinkingLevel: String? = null,
     ): String
 
     /**
@@ -362,9 +363,10 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         backend: String?,
         acpToolId: String?,
         model: SessionModel?,
+        thinkingLevel: String?,
     ): String =
         withContext(Dispatchers.IO) {
-            val body = ChatPayloads.createSessionBody(projectId, backend, acpToolId, model)
+            val body = ChatPayloads.createSessionBody(projectId, backend, acpToolId, model, thinkingLevel)
             val text = postJson(device, token, "/api/sessions", body)
             val parsed = runCatching {
                 PideckJson.parseToJsonElement(text).jsonObject["session"]?.jsonObject?.get("id")?.jsonPrimitive?.content

@@ -41,6 +41,7 @@ import dev.pideck.nativeapp.data.StateCache
 import dev.pideck.nativeapp.data.StateFetch
 import dev.pideck.nativeapp.data.AskUi
 import dev.pideck.nativeapp.data.AvailableModel
+import dev.pideck.nativeapp.data.STANDARD_THINKING_LEVELS
 import dev.pideck.nativeapp.data.SessionModel
 import dev.pideck.nativeapp.data.SubagentEntry
 import dev.pideck.nativeapp.data.toSessionModel
@@ -49,8 +50,10 @@ import dev.pideck.nativeapp.data.TimelineItem
 import dev.pideck.nativeapp.data.TurnClock
 import dev.pideck.nativeapp.data.TurnStats
 import dev.pideck.nativeapp.data.deriveTurnStats
+import dev.pideck.nativeapp.data.HostTurnPerf
 import dev.pideck.nativeapp.data.estimateOutputTokens
 import dev.pideck.nativeapp.data.turnStatsFromMeta
+import dev.pideck.nativeapp.data.turnUsageOf
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
 import dev.pideck.nativeapp.data.describeConnectionError
@@ -169,6 +172,8 @@ class ChatViewModel @Inject constructor(
     private var turnFirstTextAt = 0L
     private var turnFirstAnyAt = 0L
     private var turnEndedAt = 0L
+    /** 本轮开始时宿主累计的 outputTokens（会话级累计），用来算直播期间的真实增量。 */
+    private var turnHostOutputBase: Long? = null
 
     /** 流式直播节拍器（每 2s 刷一次统计行）；收尾/取消时停。 */
     private var liveStatsJob: Job? = null
@@ -176,6 +181,9 @@ class ChatViewModel @Inject constructor(
     private companion object {
         /** 直播节拍：2s 一次（用户 0.5.33 要求）。 */
         const val LIVE_STATS_INTERVAL_MS = 2_000L
+
+        /** 宿主 perf 超过这个岁数就不认了（翻历史时它可能是几小时前那一轮的）。 */
+        const val HOST_PERF_FRESH_MS = 120_000L
     }
 
     var sending by mutableStateOf(false)
@@ -1202,7 +1210,7 @@ class ChatViewModel @Inject constructor(
      * **全程**是真实的墙钟（请求发出 → 现在），**tokens 是估的**（流里没有 usage），
      * 所以直播文案带 `≈`；收尾后 `settleTurnStats()` 用 `meta.usage` 换成真值。
      */
-    private fun publishLiveStats() {
+    private suspend fun publishLiveStats() {
         val base = turnRequestSentAt
         if (turnStartedAt <= 0L || base <= 0L) return
         val now = System.currentTimeMillis()
@@ -1210,7 +1218,10 @@ class ChatViewModel @Inject constructor(
         val firstText = turnFirstTextAt
         val firstAny = turnFirstAnyAt
         val first = if (firstText > 0L) firstText else firstAny
-        val tokens = live?.let { estimateOutputTokens(it.parts) }?.takeIf { it > 0 }
+        // 优先用宿主累计量的增量（真值，但只在每次模型步结束时跳一下），
+        // 拿不到才退回按字数估 —— 直播文案的 `≈` 跟着这个来源走。
+        val hostTokens = liveHostTokens()
+        val tokens = hostTokens ?: live?.let { estimateOutputTokens(it.parts) }?.takeIf { it > 0 }
         val decodeStart = if (firstAny > 0L) firstAny else first
         turnStats = TurnStats(
             ttftMs = if (first > 0L) first - base else null,
@@ -1222,8 +1233,29 @@ class ChatViewModel @Inject constructor(
                 null
             },
             endToEndTps = if (tokens != null && total >= 100L) tokens / (total / 1000.0) else null,
-            estimated = true,
+            estimated = hostTokens == null,
         )
+    }
+
+    /**
+     * 本轮真实 token 数：宿主 `runtime/state` 里会话级累计的 `outputTokens` 减本轮起点。
+     *
+     * pi 的累计量按**模型步**更新（一步跑完才加），所以一次长文本回复的中段可能是 0 ——
+     * 那时返回 null 让调用方退回按字数估，别把 0 显示出去。
+     */
+    private suspend fun liveHostTokens(): Int? {
+        val target = device ?: return null
+        val runtime = runtimeTarget() ?: return null
+        val cumulative = runCatching {
+            api.runtimeState(target, token, runtime).usage.outputTokens
+        }.getOrNull() ?: return null
+        val base = turnHostOutputBase
+        if (base == null) {
+            // 第一拍才拿到基准：这一拍还没有可比的增量
+            turnHostOutputBase = cumulative
+            return null
+        }
+        return (cumulative - base).toInt().takeIf { it > 0 }
     }
 
     private fun startLiveStats() {
@@ -1241,6 +1273,22 @@ class ChatViewModel @Inject constructor(
         liveStatsJob = null
     }
 
+    /**
+     * 宿主刚结算的那份 perf（`runtime/state` 的 ttftMs / totalMs / tps / endToEndTps）。
+     *
+     * 桌面端屏幕上的就是它，所以收尾时优先用它，本端秒表只在拿不到时兜底。
+     * 只认「刚刚」结算的：翻历史时 runtime 里留的是很久以前的数，用它反而会把上一轮的节奏
+     * 贴到这一轮上。
+     */
+    private suspend fun freshHostPerf(): HostTurnPerf? {
+        val target = device ?: return null
+        val runtime = runtimeTarget() ?: return null
+        val perf = runCatching { api.runtimeState(target, token, runtime).perf }.getOrNull() ?: return null
+        if (perf.at <= 0L) return null
+        val age = System.currentTimeMillis() - perf.at
+        return perf.takeIf { age in 0..HOST_PERF_FRESH_MS }
+    }
+
     // ---- 统计行的打点与结算（首字时间 / tok/s，口径见 data/TurnStats.kt）----
 
     private fun resetTurnClock(now: Long = System.currentTimeMillis()) {
@@ -1249,6 +1297,7 @@ class ChatViewModel @Inject constructor(
         turnFirstTextAt = 0L
         turnFirstAnyAt = 0L
         turnEndedAt = 0L
+        turnHostOutputBase = null
         turnStats = null
     }
 
@@ -1285,7 +1334,7 @@ class ChatViewModel @Inject constructor(
      * 本机发的回合用秒表（任何后端都有）；翻历史 / 换设备看的回合只能靠 meta 里的
      * `durationMs`（只有 pi 后端有）算端到端速度，首字无从得知。
      */
-    private fun settleTurnStats(messages: List<ChatMessage>) {
+    private suspend fun settleTurnStats(messages: List<ChatMessage>) {
         stopLiveStats()
         val last = messages.lastOrNull { it.role == "assistant" } ?: return
         if (last.id == statsForMessageId) return
@@ -1301,7 +1350,10 @@ class ChatViewModel @Inject constructor(
             null
         }
         statsForMessageId = last.id
-        turnStats = turnStatsFromMeta(last.meta, clock).takeIf { !it.isEmpty }
+        // 一轮可能有很多步（每步一条 assistant 消息），token 数要整轮求和：
+        // 只取最后一步会把 12k 的一轮显示成 881，两档速度跟着一起偏小十几倍。
+        val tokens = turnUsageOf(messages)?.outputTokens
+        turnStats = turnStatsFromMeta(last.meta, clock, freshHostPerf(), tokens).takeIf { !it.isEmpty }
         // 秒表只能用一次：下次重拉历史不能拿旧起点再算一遍。
         turnStartedAt = 0L
         turnRequestSentAt = 0L
@@ -1778,6 +1830,3 @@ private class AskStreamDone : Exception()
 
 private fun newRequestId(): String = java.util.UUID.randomUUID().toString()
 
-/** pi 的标准档位表（桌面端在拿不到模型能力时也用这一份）。 */
-private val STANDARD_THINKING_LEVELS =
-    listOf("off", "minimal", "low", "medium", "high", "xhigh", "max")

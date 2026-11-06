@@ -48,7 +48,28 @@ data class RuntimeSnapshot(
     val usage: ContextUsage = ContextUsage(),
     val model: SessionModel? = null,
     val thinkingLevel: String? = null,
+    val perf: HostTurnPerf? = null,
 )
+
+/**
+ * 宿主**已经算好**的「最近一次回复」节奏（`runtime/state` 的 perf 四件套）。
+ *
+ * 这就是桌面端统计行上那几个数的来源 —— 主进程在自己的秒表里结算（起点是它收到 prompt 的时刻、
+ * 生成速度的起点是首个任意增量），随 `agentsRuntimeState` 边沿推送，也留在 runtime state 里。
+ * 手机端自己也能算一份（`data/TurnStats.kt` 的 [TurnClock]），但既然宿主把答案直接给了，
+ * 收尾时就用它的：同轮同值，不会因为两端的时钟/起点细节差出几秒。
+ *
+ * [at] 是结算时刻，用来判断这份数还是不是「刚跑完的这一轮」（老会话翻出来时它可能是很久以前的）。
+ */
+data class HostTurnPerf(
+    val ttftMs: Long? = null,
+    val totalMs: Long? = null,
+    val tps: Double? = null,
+    val endToEndTps: Double? = null,
+    val at: Long = 0L,
+) {
+    val known: Boolean get() = ttftMs != null || totalMs != null || tps != null || endToEndTps != null
+}
 
 /** 运行时状态 → [RuntimeSnapshot]；任何字段缺失都当没有，不猜。 */
 fun parseRuntimeSnapshot(root: JsonElement?): RuntimeSnapshot = RuntimeSnapshot(
@@ -57,7 +78,26 @@ fun parseRuntimeSnapshot(root: JsonElement?): RuntimeSnapshot = RuntimeSnapshot(
     thinkingLevel = (root as? JsonObject)?.let { obj ->
         (obj["thinkingLevel"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
     },
+    perf = parseHostTurnPerf(root),
 )
+
+/**
+ * `runtime/state` 的 perf 四件套 → [HostTurnPerf]；一个都没有就当没有（返回 null），
+ * 让调用方回退到本端秒表，而不是拿一串 `null` 覆盖掉能显示的数值。
+ */
+fun parseHostTurnPerf(root: JsonElement?): HostTurnPerf? {
+    val obj = root as? JsonObject ?: return null
+    fun num(key: String): Double? = (obj[key] as? JsonPrimitive)?.doubleOrNull
+    fun ms(key: String): Long? = num(key)?.takeIf { it > 0.0 }?.toLong()
+    val perf = HostTurnPerf(
+        ttftMs = ms("ttftMs"),
+        totalMs = ms("totalMs"),
+        tps = num("tps")?.takeIf { it > 0.0 },
+        endToEndTps = num("endToEndTps")?.takeIf { it > 0.0 },
+        at = ms("perfAt") ?: 0L,
+    )
+    return perf.takeIf { it.known }
+}
 
 /** `runtime/state` 里的 `provider` / `modelId` / `modelName` 就是 pi 当前真正在跑的模型。 */
 fun parseRuntimeModel(root: JsonElement?): SessionModel? {

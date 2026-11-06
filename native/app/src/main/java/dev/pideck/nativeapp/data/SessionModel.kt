@@ -38,6 +38,13 @@ data class AvailableModel(
     val label: String get() = name.ifBlank { id }
 }
 
+/**
+ * pi 的标准思考档位（桌面端在拿不到模型能力时也用这一份）。
+ *
+ * 模型表里带 `thinkingLevels` 时以它为准 —— 档位不在里面传上去会被主机拒或静默降级。
+ */
+val STANDARD_THINKING_LEVELS: List<String> = listOf("off", "minimal", "low", "medium", "high", "xhigh", "max")
+
 /** 思考档位的中文名。未知档位原样显示，不吞信息。 */
 fun thinkingLabel(level: String): String = when (level.lowercase()) {
     "off" -> "不思考"

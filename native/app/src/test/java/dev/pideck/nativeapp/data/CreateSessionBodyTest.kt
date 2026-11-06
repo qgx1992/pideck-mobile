@@ -72,6 +72,21 @@ class CreateSessionBodyTest {
     }
 
     @Test
+    fun `pi carries the thinking level, acp and dsh never do`() {
+        val pi = ChatPayloads.createSessionBody("p", null, null, null, "high").jsonObject
+        assertEquals("high", pi["thinkingLevel"]?.jsonPrimitive?.content)
+        assertFalse(ChatPayloads.createSessionBody("p", "acp", "t", null, "high").jsonObject.containsKey("thinkingLevel"))
+        assertFalse(ChatPayloads.createSessionBody("p", "dsh", null, null, "high").jsonObject.containsKey("thinkingLevel"))
+    }
+
+    @Test
+    fun `blank thinking level is not sent`() {
+        // 「跟随电脑端默认」：不带字段，宿主按模型能力 → settings.defaultThinkingLevel 解析
+        assertFalse(ChatPayloads.createSessionBody("p", null, null, null, "  ").jsonObject.containsKey("thinkingLevel"))
+        assertFalse(ChatPayloads.createSessionBody("p", null, null, null).jsonObject.containsKey("thinkingLevel"))
+    }
+
+    @Test
     fun `model name may be empty`() {
         val noName = SessionModel(provider = "openai", modelId = "gpt-5", modelName = "")
         val picked = ChatPayloads.createSessionBody("p", null, null, noName).jsonObject["model"]?.jsonObject

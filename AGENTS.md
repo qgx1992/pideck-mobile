@@ -403,9 +403,18 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   （`data/TurnStats.kt` 的 `estimateOutputTokens()`：流里没有 usage，`webExternalStream` 的帧只有
   text/thinking/tool 增量）。系数由本机 66 条 assistant 消息最小二乘拟合：CJK ≈0.9 token/字、
   其余 ≈0.17 token/字符，工具入参（模型自己生成的输出）也计入；中位误差约 15%，所以直播文案
-  一律带 `≈`，收尾后 `settleTurnStats()` 用 `meta.usage` 换成真值。别再试图从 HTTP 拿实时 usage：
-  `/api/state` 的 runtimes 只有 `{sessionId, agentId, runtimeGeneration, projectId, cwd, status,
-  sessionPath, deckSessionId, createdAt}`，桌面端的 perf 是主进程内存里的，只走 IPC。
+  一律带 `≈`，收尾后换真值。
+  **收尾的真值优先取宿主自己结算的那份**（0.5.36 起）：`POST /api/sessions/:id/runtime/state`
+  里带着 perf 四件套 `{ttftMs, totalMs, tps, endToEndTps, perfAt}`，就是桌面端屏幕上那几个数
+  （`data/RuntimeActions.kt` 的 `parseHostTurnPerf`）。`deriveTurnStats(host = …)` 会用它，
+  并且**连 tokens 都从它反推**（`tokens = endToEndTps × totalMs`，本来就是这个式子算出来的），
+  免得「本端整轮求和 + 宿主单步耗时」拼出一个假的大速度。只认 `perfAt` 在 2 分钟内的
+  （`HOST_PERF_FRESH_MS`）：翻历史时 runtime 里留的是很久以前那轮的数。
+  拿不到 perf 时（翻历史 / dsh / 运行时已退出）才用本端秒表 + `meta.usage`，这时 tokens
+  **必须整轮求和**（`TurnStats.turnUsageOf()`）：带工具的一轮有多条 assistant 消息，一条只是
+  一步的量，只取最后一条会把 12k 的一轮显示成 881。
+  `/api/state` 的 runtimes 仍然只有 `{sessionId, agentId, runtimeGeneration, projectId, cwd, status,
+  sessionPath, deckSessionId, createdAt}`（perf 只在 runtime/state 那个 POST 里）。
   跨设备 / 翻历史只能靠 meta 的 `durationMs`，而**只有 pi 后端有**
   （实测：pi = `{usage, durationMs, startedAt, endedAt}`，dsh = 只有 `usage`，acp = `null`）——
   那种情况只报端到端速度，别硬算「生成速度」。渲染在 `ui/chat/ChatScreen.kt` 的 `TurnStatsLine`

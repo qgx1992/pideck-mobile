@@ -14,6 +14,7 @@ import dev.pideck.nativeapp.data.Device
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.Project
+import dev.pideck.nativeapp.data.STANDARD_THINKING_LEVELS
 import dev.pideck.nativeapp.data.SessionModel
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.StateCache
@@ -104,9 +105,43 @@ class HomeViewModel @Inject constructor(
     var modelsBusy by mutableStateOf(false)
         private set
 
-    /** 选模型：`null` 表示回到「跟随电脑端默认」。 */
+    /**
+     * 新会话的思考档位；`null` = 跟随电脑端默认（宿主按模型能力 → `defaultThinkingLevel` 解析）。
+     */
+    var selectedThinking by mutableStateOf<String?>(null)
+        private set
+
+    /**
+     * 可选的思考档位。
+     *
+     * 选了具体模型就只列它支持的档位（`/api/models` 的 `thinkingLevels`）——
+     * 不在里面的档位传上去会被主机拒或静默降级；还没选模型、或者模型表没拉到，
+     * 就用 pi 的标准档位表。
+     */
+    val thinkingLevels: List<String>
+        get() {
+            val current = selectedModel ?: return STANDARD_THINKING_LEVELS
+            val entry = models.firstOrNull { it.provider == current.provider && it.id == current.modelId }
+            return entry?.thinkingLevels?.takeIf { it.isNotEmpty() } ?: STANDARD_THINKING_LEVELS
+        }
+
+    /** 选中的模型明确不支持思考时，思考胶囊只显示「不思考」并且不可点。 */
+    val thinkingAvailable: Boolean
+        get() {
+            val current = selectedModel ?: return true
+            val entry = models.firstOrNull { it.provider == current.provider && it.id == current.modelId }
+            return entry?.reasoning ?: true
+        }
+
+    /** 选模型：`null` 表示回到「跟随电脑端默认」；顺带清掉档位，免得留下上一个模型的档位。 */
     fun selectModel(next: SessionModel?) {
         selectedModel = next
+        selectedThinking = null
+    }
+
+    /** 选思考档位：`null` 表示回到「跟随电脑端默认」。 */
+    fun selectThinking(next: String?) {
+        selectedThinking = next
     }
 
     /**
@@ -201,8 +236,9 @@ class HomeViewModel @Inject constructor(
                     projectId,
                     backend = chosen.wire,
                     acpToolId = (chosen as? AgentBackend.Acp)?.toolId,
-                    // 只有 pi 吃这份模型偏好（见 ChatPayloads.createSessionBody）
+                    // 只有 pi 吃这份偏好（见 ChatPayloads.createSessionBody）
                     model = selectedModel.takeIf { chosen == AgentBackend.Pi },
+                    thinkingLevel = selectedThinking.takeIf { chosen == AgentBackend.Pi },
                 )
                 onCreated(id)
             } catch (e: Exception) {

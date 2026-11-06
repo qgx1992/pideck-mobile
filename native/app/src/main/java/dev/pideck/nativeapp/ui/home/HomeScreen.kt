@@ -57,6 +57,7 @@ import dev.pideck.nativeapp.data.AgentBackend
 import dev.pideck.nativeapp.data.AvailableModel
 import dev.pideck.nativeapp.data.Project
 import dev.pideck.nativeapp.data.SessionModel
+import dev.pideck.nativeapp.data.thinkingLabel
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.ui.theme.AppButton
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
@@ -165,11 +166,21 @@ fun HomeScreen(
                 }
             }
 
-            // 模型胶囊单独一行：模型名普遍比后端名长，和工作区、后端挤同一行会把三枚都压扁。
+            // 模型 + 思考单独一行：模型名普遍比后端名长，和工作区、后端挤同一行会把三枚都压扁；
+            // 行内模型那枚吃掉剩余宽度（超长省略），思考那枚固定宽度、永远不会被挤掉。
             // 只有 pi 才有这一行 —— DSH 有自己的模型体系，ACP 会话宿主不落模型偏好。
             if (viewModel.backend == AgentBackend.Pi) {
                 item {
-                    ModelPicker(viewModel = viewModel)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.weight(1f)) {
+                            ModelPicker(viewModel = viewModel)
+                        }
+                        ThinkingPicker(viewModel = viewModel)
+                    }
                 }
             }
 
@@ -447,6 +458,73 @@ private fun InfoCard(title: String, body: String) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/**
+ * 新会话的思考档位：和顶栏那颗同款（`思考 中`），但在新建之前就能定。
+ *
+ * 档位表跟着 [HomeViewModel.thinkingLevels] 走：选了具体模型就只列它支持的档位，
+ * 没选模型就给 pi 的标准表。默认 `null` = 跟随电脑端默认 —— 宿主按
+ * 「模型能力表 → `settings.defaultThinkingLevel`」解析，本端不猜。
+ */
+@Composable
+private fun ThinkingPicker(viewModel: HomeViewModel) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val selected = viewModel.selectedThinking
+    val levels = viewModel.thinkingLevels
+    val available = viewModel.thinkingAvailable
+    Box {
+        SelectChip(
+            text = when {
+                !available -> "不思考"
+                selected != null -> "思考 ${thinkingLabel(selected)}"
+                else -> "思考 默认"
+            },
+            onClick = { expanded = true },
+            trailing = Icons.Filled.KeyboardArrowDown,
+            // 和会话页同一套高亮口径：高档位才着色，默认态保持中性
+            accent = available && selected in setOf("high", "xhigh", "max"),
+            enabled = available && !viewModel.creating,
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text("跟随电脑端默认", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "不指定，由电脑端按模型能力解析",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                trailingIcon = if (selected == null) {
+                    { Icon(Icons.Filled.Check, contentDescription = null) }
+                } else {
+                    null
+                },
+                onClick = {
+                    viewModel.selectThinking(null)
+                    expanded = false
+                },
+            )
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            levels.forEach { level ->
+                DropdownMenuItem(
+                    text = { Text(thinkingLabel(level), style = MaterialTheme.typography.bodyMedium) },
+                    trailingIcon = if (selected == level) {
+                        { Icon(Icons.Filled.Check, contentDescription = null) }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        viewModel.selectThinking(level)
+                        expanded = false
+                    },
+                )
+            }
         }
     }
 }

@@ -224,6 +224,95 @@ class TurnStatsTest {
         )
     }
 
+    private fun message(id: String, role: String, tokens: Int? = null) = ChatMessage(
+        id = id,
+        role = role,
+        text = "x",
+        meta = tokens?.let { meta("""{"usage":{"outputTokens":$it}}""") },
+    )
+
+    @Test
+    fun `整轮的 token 数要把每一步加起来`() {
+        // 带工具的一轮 = 多条 assistant 消息（每步一条）。只取最后一条会把 350 显示成 50。
+        val turn = listOf(
+            message("u1", "user"),
+            message("a1", "assistant", 100),
+            message("t1", "tool"),
+            message("a2", "assistant", 200),
+            message("t2", "tool"),
+            message("a3", "assistant", 50),
+        )
+        val usage = turnUsageOf(turn)
+        assertEquals(350, usage?.outputTokens)
+        assertEquals(3, usage?.steps)
+    }
+
+    @Test
+    fun `求和只算最后一轮，不把上一轮算进来`() {
+        val messages = listOf(
+            message("u1", "user"),
+            message("a1", "assistant", 900),   // 上一轮
+            message("u2", "user"),
+            message("a2", "assistant", 120),
+            message("a3", "assistant", 80),
+        )
+        assertEquals(200, turnUsageOf(messages)?.outputTokens)
+    }
+
+    @Test
+    fun `翻页拿不到 user 消息时，从最后一个非 assistant 之后算`() {
+        val messages = listOf(
+            message("t9", "tool"),
+            message("a7", "assistant", 40),
+            message("a8", "assistant", 60),
+        )
+        assertEquals(100, turnUsageOf(messages)?.outputTokens)
+    }
+
+    @Test
+    fun `没有 usage 的时候返回 null，而不是 0`() {
+        assertNull(turnUsageOf(listOf(message("u1", "user"), message("a1", "assistant"))))
+        assertNull(turnUsageOf(emptyList()))
+    }
+
+    @Test
+    fun `宿主给了 perf 就以它为准，四个数都和桌面端一致`() {
+        // 桌面端 runtime/state 的 perf：ttft 2800 / total 10591 / 全程 117.82 → 反推 1248 tok
+        val stats = deriveTurnStats(
+            clock = clock(1_000L, 3_000L, 9_000L, requestSentAt = 1_100L),
+            outputTokens = 1_248,
+            host = HostTurnPerf(ttftMs = 2_800L, totalMs = 10_591L, tps = 150.0, endToEndTps = 117.82),
+        )
+        assertEquals(2_800L, stats.ttftMs)
+        assertEquals(10_591L, stats.totalMs)
+        assertEquals(1_248, stats.outputTokens)
+        assertEquals(117.8, stats.endToEndTps!!, 0.05)
+    }
+
+    @Test
+    fun `宿主 perf 与本地求和冲突时用宿主的，别拼出假速度`() {
+        // 带工具的一轮：本端整轮求和 9_400，宿主最后一步只有 881（total 9_689 → 90.9 tok/s）
+        val stats = deriveTurnStats(
+            clock = clock(1_000L, 3_000L, 12_000L, requestSentAt = 1_100L),
+            outputTokens = 9_400,
+            host = HostTurnPerf(ttftMs = 2_000L, totalMs = 9_689L, tps = 120.0, endToEndTps = 90.93),
+        )
+        assertEquals(881, stats.outputTokens)
+        assertEquals(90.93, stats.endToEndTps!!, 0.05)
+        assertEquals(2_000L, stats.ttftMs)
+    }
+
+    @Test
+    fun `宿主 perf 解析：四件套齐全才算有，空对象返回 null`() {
+        val perf = parseHostTurnPerf(meta("""{"ttftMs":2800,"totalMs":10591,"tps":150.2,"endToEndTps":117.8,"perfAt":1793953850056}"""))
+        assertEquals(2_800L, perf?.ttftMs)
+        assertEquals(10_591L, perf?.totalMs)
+        assertEquals(150.2, perf!!.tps!!, 0.001)
+        assertEquals(1793953850056L, perf.at)
+        assertNull(parseHostTurnPerf(meta("""{}""")))
+        assertNull(parseHostTurnPerf(null))
+    }
+
     @Test
     fun `首字时刻晚于收尾时被夹到总耗时内，不出现负的生成耗时`() {
         // 契约：coerceIn(0, total)，绝不产出负的 decodeMs（否则 tps 变负、展示成笑话）

@@ -160,6 +160,7 @@ object ChatPayloads {
         backend: String?,
         acpToolId: String?,
         model: SessionModel?,
+        thinkingLevel: String? = null,
     ): JsonObject = buildJsonObject {
         put("projectId", projectId)
         backend?.takeIf { it.isNotBlank() }?.let { put("backend", it) }
@@ -172,6 +173,9 @@ object ChatPayloads {
                 put("modelName", model.modelName)
             }
         }
+        // `thinkingLevel: acp ? void 0 : input.thinkingLevel` —— 和模型一样只在 pi 上带；
+        // 不带就由宿主的默认链路解析（模型能力表 → settings.defaultThinkingLevel）
+        if (isPi) thinkingLevel?.takeIf { it.isNotBlank() }?.let { put("thinkingLevel", it) }
     }
 
     fun userMessage(text: String, imageDataUrls: List<String>): JsonObject = buildJsonObject {

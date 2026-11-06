@@ -59,13 +59,51 @@ data class TurnClock(
     val endedAt: Long = 0L,
 )
 
+/** 一轮里所有 assistant 步骤的 output tokens 合计。 */
+data class TurnUsage(val outputTokens: Int, val steps: Int)
+
+/**
+ * 从消息列表里取「本轮」的 output tokens —— **一轮可能有很多步**。
+ *
+ * 带工具调用的一轮会有好几条 assistant 消息（每步一条：先说一句 → 调工具 → 再说 → 调工具 …），
+ * 每条 `meta.usage.outputTokens` 只是**那一步**的量。只取最后一条会把 12k 的一轮显示成 881，
+ * 生成速度与全程速度随之一起偏小十几倍（0.5.36 修的就是这个）。
+ *
+ * 口径：最后一条 user 消息之后的所有 assistant 步骤求和 —— 与桌面端 perf 里
+ * `outputTokens`（整轮累计）一致。翻页时可能拿不到那条 user 消息，就从最后一个非 assistant
+ * 消息之后开始；两种都没有（整页都是 assistant）才把整页当一轮。
+ */
+fun turnUsageOf(messages: List<ChatMessage>): TurnUsage? {
+    val lastUser = messages.indexOfLast { it.role == "user" }
+    val start = if (lastUser >= 0) {
+        lastUser + 1
+    } else {
+        messages.indexOfLast { it.role != "assistant" } + 1
+    }
+    var tokens = 0
+    var steps = 0
+    for (message in messages.drop(start)) {
+        if (message.role != "assistant") continue
+        val usage = runCatching { message.meta?.get("usage")?.jsonObject }.getOrNull() ?: continue
+        val out = runCatching { (usage["outputTokens"] as? JsonPrimitive)?.intOrNull }.getOrNull() ?: continue
+        tokens += out
+        steps += 1
+    }
+    return if (steps == 0) null else TurnUsage(outputTokens = tokens, steps = steps)
+}
+
 /**
  * 秒表 + tokens 数 → 展示用数据。
  *
  * [clock] 为空（或没有 [TurnClock.endedAt]）表示这一轮不是本机跑完的（翻历史 / 换了设备），
  * 此时只能靠 meta 里的 `durationMs`（只有 pi 后端有）算端到端速度，首字无从得知。
  */
-fun deriveTurnStats(clock: TurnClock?, outputTokens: Int?, metaTotalMs: Long? = null): TurnStats {
+fun deriveTurnStats(
+    clock: TurnClock?,
+    outputTokens: Int?,
+    metaTotalMs: Long? = null,
+    host: HostTurnPerf? = null,
+): TurnStats {
     val started = clock?.startedAt ?: 0L
     val ended = clock?.endedAt ?: 0L
     val content = clock?.firstContentAt ?: 0L
@@ -73,13 +111,22 @@ fun deriveTurnStats(clock: TurnClock?, outputTokens: Int?, metaTotalMs: Long? = 
     val requestAt = clock?.requestSentAt ?: 0L
     val base = if (requestAt > 0L) requestAt else started
     val measured = if (started > 0L && ended > started) ended - started else null
-    val total = metaTotalMs?.takeIf { it > 0L } ?: measured
-    val ttft = if (base > 0L && content > base && total != null) {
+    // 时间一律优先用宿主自己结算的那份（`runtime/state` 的 perf），它才是桌面端屏幕上那个数；
+    // 秒表只是宿主没给时的退路（翻历史、刚启动、dsh 之类）。
+    val total = host?.totalMs?.takeIf { it > 0L } ?: metaTotalMs?.takeIf { it > 0L } ?: measured
+    val ttft = host?.ttftMs?.takeIf { it >= 0L } ?: if (base > 0L && content > base && total != null) {
         (content - base).coerceIn(0L, total)
     } else {
         null
     }
-    val tokens = outputTokens?.takeIf { it > 0 }
+    // 宿主给了 perf 就以它为准，连 tokens 也从它反推：`e2e = tokens ÷ totalMs` 是它自己算的，
+    // 反解出来就是它屏幕上那个数。否则「本端整轮求和 + 宿主单步耗时」会配成一个假的更大速度。
+    val hostTokens = host?.let { h ->
+        val t = h.totalMs ?: 0L
+        val e = h.endToEndTps
+        if (t > 0L && e != null) (e * t / 1000.0).roundToInt().takeIf { it > 0 } else null
+    }
+    val tokens = hostTokens ?: outputTokens?.takeIf { it > 0 }
     // 生成速度只看「已经出字之后」那段，别把排队/建连/首字等待稀释进去。
     // 起点用首个任意增量（含思考）：桌面端 `firstDeltaAt` 就是这么算的，用正文字会快 5~10%。
     val delta = clock?.firstDeltaAt ?: 0L
@@ -92,12 +139,13 @@ fun deriveTurnStats(clock: TurnClock?, outputTokens: Int?, metaTotalMs: Long? = 
         tps = if (tokens != null && decodeMs != null && decodeMs >= 100L && ttft != null) {
             tokens / (decodeMs / 1000.0)
         } else {
-            null
+            host?.tps
         },
+        // 分子分母都用同一份 tokens 与同一个 total：宿主给了 total 时，这一行与桌面端同轮同值。
         endToEndTps = if (tokens != null && total != null && total >= 100L) {
             tokens / (total / 1000.0)
         } else {
-            null
+            host?.endToEndTps
         },
     )
 }
@@ -108,9 +156,15 @@ fun deriveTurnStats(clock: TurnClock?, outputTokens: Int?, metaTotalMs: Long? = 
  * 形状（实测）：pi = `{usage:{inputTokens,outputTokens,cacheReadTokens,…}, durationMs, startedAt, endedAt}`；
  * dsh = `{usage:{…}}`（**没有任何耗时字段**）；acp = `null`。
  */
-fun turnStatsFromMeta(meta: JsonObject?, clock: TurnClock?): TurnStats {
+fun turnStatsFromMeta(
+    meta: JsonObject?,
+    clock: TurnClock?,
+    host: HostTurnPerf? = null,
+    tokens: Int? = null,
+): TurnStats {
     val usage = runCatching { meta?.get("usage")?.jsonObject }.getOrNull()
-    val tokens = runCatching { (usage?.get("outputTokens") as? JsonPrimitive)?.intOrNull }.getOrNull()
+    val tokens = tokens
+        ?: runCatching { (usage?.get("outputTokens") as? JsonPrimitive)?.intOrNull }.getOrNull()
     val duration = runCatching {
         (meta?.get("durationMs") as? JsonPrimitive)?.doubleOrNull?.roundToLong()
     }.getOrNull()
@@ -119,7 +173,7 @@ fun turnStatsFromMeta(meta: JsonObject?, clock: TurnClock?): TurnStats {
         val end = (meta?.get("endedAt") as? JsonPrimitive)?.doubleOrNull
         if (start != null && end != null && end > start) (end - start).roundToLong() else null
     }.getOrNull()
-    return deriveTurnStats(clock, tokens, duration ?: span)
+    return deriveTurnStats(clock, tokens, duration ?: span, host)
 }
 
 /**
