@@ -68,6 +68,7 @@ import dev.pideck.nativeapp.data.exportFileName
 import dev.pideck.nativeapp.data.htmlLooksValid
 import dev.pideck.nativeapp.watch.RunWatcher
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -109,6 +110,15 @@ class ChatViewModel @Inject constructor(
 
     private var device: Device? = null
     private var token: String? = null
+
+    /**
+     * 「设备与令牌就位」的信号。
+     *
+     * `init` 里要先去仓库把设备读出来，而界面上的 `LaunchedEffect` 在这之前就跑完了：
+     * 以前 `loadModels()` 直接 `device ?: return`，于是第一次进来模型表永远是空的，
+     * 必须手动点一下刷新才出来（用户报的就是这个）。等这个信号再发请求。
+     */
+    private val deviceReady = CompletableDeferred<Unit>()
     private var before: Long? = null
     private var sendJob: Job? = null
     private var merger = ReplyMerger()
@@ -224,6 +234,8 @@ class ChatViewModel @Inject constructor(
                 device = found
                 token = repository.tokenOf(found.id)
             }
+            // 找不到设备也要放行：否则等信号的请求会永远挂着
+            deviceReady.complete(Unit)
             // 记下这一落脚点：下次冷启动直接回到这里，不用再从设备列表点进来
             runCatching { Prefs.rememberSession(context, deviceId, sessionId) }
             val cached = StateCache.session(deviceId, sessionId)
@@ -495,8 +507,10 @@ class ChatViewModel @Inject constructor(
 
     /** 拉上下文用量（也顺便对账权限预设：运行时的值比会话记录新）。 */
     fun refreshContext() {
-        val target = device ?: return
         viewModelScope.launch {
+            // 和 loadModels 一样：界面上的 LaunchedEffect(Unit) 比 init 里的设备读取先跑
+            deviceReady.await()
+            val target = device ?: return@launch
             contextBusy = true
             try {
                 // 缓存里没有 runtime（刚打开会话、轮询还没到）就现拉一次 /api/state，
@@ -825,9 +839,11 @@ class ChatViewModel @Inject constructor(
     }
 
     fun loadModels(force: Boolean = false) {
-        val target = device ?: return
         if (modelsBusy) return
         viewModelScope.launch {
+            // 界面上的 LaunchedEffect 比 init 里的设备读取先跑，这里等它就位再发请求
+            deviceReady.await()
+            val target = device ?: return@launch
             modelsBusy = true
             try {
                 availableModels = api.models(target, token, force)

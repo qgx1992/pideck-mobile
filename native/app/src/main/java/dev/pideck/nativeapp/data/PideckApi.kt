@@ -66,6 +66,7 @@ interface PideckApi {
         projectId: String,
         backend: String? = null,
         acpToolId: String? = null,
+        model: SessionModel? = null,
     ): String
 
     /**
@@ -360,14 +361,10 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         projectId: String,
         backend: String?,
         acpToolId: String?,
+        model: SessionModel?,
     ): String =
         withContext(Dispatchers.IO) {
-            val body = buildJsonObject {
-                put("projectId", projectId)
-                // pi 是「不写」，不是写 "pi"：宿主只认 dsh / acp
-                backend?.takeIf { it.isNotBlank() }?.let { put("backend", it) }
-                acpToolId?.takeIf { it.isNotBlank() }?.let { put("acpToolId", it) }
-            }
+            val body = ChatPayloads.createSessionBody(projectId, backend, acpToolId, model)
             val text = postJson(device, token, "/api/sessions", body)
             val parsed = runCatching {
                 PideckJson.parseToJsonElement(text).jsonObject["session"]?.jsonObject?.get("id")?.jsonPrimitive?.content

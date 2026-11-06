@@ -8,11 +8,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.pideck.nativeapp.data.AcpTool
+import dev.pideck.nativeapp.data.AvailableModel
 import dev.pideck.nativeapp.data.AgentBackend
 import dev.pideck.nativeapp.data.Device
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.Project
+import dev.pideck.nativeapp.data.SessionModel
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.StateCache
 import dev.pideck.nativeapp.data.StateFetch
@@ -85,6 +87,47 @@ class HomeViewModel @Inject constructor(
         backend = next
     }
 
+    /**
+     * `/api/models` 的清单：只给「新会话用哪个模型」这一颗胶囊。
+     *
+     * 默认 `null` = **跟随电脑端默认**：不带模型字段，宿主按它自己的链路解析
+     * （`welcomeModel ?? 设置里的默认模型 ?? 第一个启用模型 ?? 上次用的`）。
+     * 本端不记上次的选择 —— 桌面端默认值不经 HTTP 暴露，猜一个「上次用的」当默认
+     * 会比跟机器对齐更容易让人困惑（0.5.25/0.5.26 踩过）。
+     */
+    var selectedModel by mutableStateOf<SessionModel?>(null)
+        private set
+
+    var models by mutableStateOf<List<AvailableModel>>(emptyList())
+        private set
+
+    var modelsBusy by mutableStateOf(false)
+        private set
+
+    /** 选模型：`null` 表示回到「跟随电脑端默认」。 */
+    fun selectModel(next: SessionModel?) {
+        selectedModel = next
+    }
+
+    /**
+     * 拉模型清单。失败不弹窗（首页只有一行红字位，留给「新建失败」这种真错误）；
+     * 胶囊自己会显示「模型列表没拉到 · 点这里重试」。
+     */
+    fun loadModels(force: Boolean = false) {
+        if (modelsBusy) return
+        viewModelScope.launch {
+            modelsBusy = true
+            try {
+                val target = device ?: return@launch
+                models = api.models(target, token, force)
+            } catch (e: Exception) {
+                // 清单拿不到不影响新建会话：不带模型就是「跟随电脑端默认」
+            } finally {
+                modelsBusy = false
+            }
+        }
+    }
+
     val selectedProject: Project?
         get() = projects.firstOrNull { it.id == selectedProjectId }
 
@@ -103,6 +146,7 @@ class HomeViewModel @Inject constructor(
             // 列表页刚拉过的状态先垫上，首页不至于空着等网络
             StateCache.get(deviceId)?.let { apply(it.projects, it.sessions, it.acpTools) }
             load()
+            loadModels()
         }
     }
 
@@ -157,6 +201,8 @@ class HomeViewModel @Inject constructor(
                     projectId,
                     backend = chosen.wire,
                     acpToolId = (chosen as? AgentBackend.Acp)?.toolId,
+                    // 只有 pi 吃这份模型偏好（见 ChatPayloads.createSessionBody）
+                    model = selectedModel.takeIf { chosen == AgentBackend.Pi },
                 )
                 onCreated(id)
             } catch (e: Exception) {

@@ -12,6 +12,29 @@ PiDeck 手机客户端（Android，Kotlin + Jetpack Compose）。
 
 ---
 
+## 0.5.35 — 2026-11-06
+
+**新建会话时可以选模型了，顺手修掉「模型列表要点一下刷新才出来」。**
+
+- **首页新增「模型」胶囊**（只有 pi 后端显示，DSH 有自己的模型体系、ACP 宿主不落模型偏好）。
+  默认是「跟随电脑端默认」：不带 `model` 字段，宿主按它自己的链路解析
+  （`welcomeModel ?? 设置里的默认模型 ?? 第一个启用模型 ?? 上次用的`）。选了具体模型就写进
+  `POST /api/sessions` 的 body（`{provider, modelId, modelName}`，见 `ChatPayloads.createSessionBody`），
+  这一整个会话都用它；进会话页之后照样能在顶栏那颗胶囊里改。
+  下拉首项是「跟随电脑端默认」——「不选」必须是个能点回来的选项。列表拉不到时胶囊自己变成
+  「模型列表没拉到 · 点这里重试」，点一下重拉，不弹窗、不挡「开始」按钮。
+  布局上模型单独占一行：模型名普遍比后端名长，三枚胶囊挤一行会把工作区、后端一起压扁。
+- **修掉：会话页点开模型胶囊时列表是空的。** `ChatScreen` 的 `LaunchedEffect(Unit)` 在
+  `ChatViewModel.init` 读出设备之前就跑了，`loadModels()` 当时 `device` 还是 null，直接
+  `return` 且不会重试 —— 于是必须点一下右上角刷新才有列表。现在 `ChatViewModel` 有一个
+  `deviceReady` 信号（init 里设备就位后 complete），`loadModels()` / `refreshContext()`
+  都先 `await()` 它；另外点开选择器时若列表仍为空会再补一次。
+
+单测 229 → 236（`CreateSessionBodyTest` 7 条：pi 带模型 / pi 不带 / acp 永不带 / dsh 不带 /
+字段不全不发送 / 空白 backend 视作 pi / modelName 可为空）。
+
+---
+
 ## 0.5.34 — 2026-11-06
 
 **对齐桌面端 0.10.0**：查了一遍 0.10.0 的接口面（`/api/state`、`/api/models`、`/api/sessions`、

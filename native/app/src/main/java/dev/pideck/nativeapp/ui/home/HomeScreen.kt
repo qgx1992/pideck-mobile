@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.FolderOpen
@@ -53,7 +54,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.data.AgentBackend
+import dev.pideck.nativeapp.data.AvailableModel
 import dev.pideck.nativeapp.data.Project
+import dev.pideck.nativeapp.data.SessionModel
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.ui.theme.AppButton
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
@@ -159,6 +162,14 @@ fun HomeScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = 4.dp, top = 2.dp),
                     )
+                }
+            }
+
+            // 模型胶囊单独一行：模型名普遍比后端名长，和工作区、后端挤同一行会把三枚都压扁。
+            // 只有 pi 才有这一行 —— DSH 有自己的模型体系，ACP 会话宿主不落模型偏好。
+            if (viewModel.backend == AgentBackend.Pi) {
+                item {
+                    ModelPicker(viewModel = viewModel)
                 }
             }
 
@@ -438,6 +449,130 @@ private fun InfoCard(title: String, body: String) {
             )
         }
     }
+}
+
+/**
+ * 新会话用哪个模型：只有 pi 有这一颗。
+ *
+ * 默认是「跟随电脑端默认」—— 不带 `model` 字段，宿主按它自己的链路解析
+ * （`welcomeModel ?? 设置里的默认模型 ?? 第一个启用模型 ?? 上次用的`）。
+ * 选了就原样写进 `POST /api/sessions` 的 body，宿主落盘、这一整个会话都用它
+ * （之后还能在会话页顶栏那颗胶囊里改）。
+ *
+ * 布局：整行一枚胶囊（`fillMaxWidth`），模型名超长省略；下拉按 provider 分组，
+ * 首项是「跟随电脑端默认」——「不选」必须是个能点回来的选项，否则选错一次就没路退。
+ */
+@Composable
+private fun ModelPicker(viewModel: HomeViewModel) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val selected = viewModel.selectedModel
+    val models = viewModel.models
+    Box {
+        SelectChip(
+            text = when {
+                selected != null -> selected.shortLabel
+                viewModel.modelsBusy && models.isEmpty() -> "读取模型…"
+                models.isEmpty() -> "模型列表没拉到 · 点这里重试"
+                else -> "模型 · 跟随电脑端默认"
+            },
+            onClick = {
+                // 列表空（首次没拉到 / 主机刚启动）时，点一下先补一次，别让人对着空下拉；
+                // 正在读的时候点了就等它回来，不叠第二个请求。
+                when {
+                    models.isNotEmpty() -> expanded = true
+                    !viewModel.modelsBusy -> viewModel.loadModels(force = true)
+                }
+            },
+            icon = Icons.Default.Memory,
+            trailing = Icons.Filled.KeyboardArrowDown,
+            // 「跟随默认」是中性态，选过具体模型才高亮
+            accent = selected != null,
+            enabled = !viewModel.creating,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.widthIn(min = 260.dp, max = 360.dp),
+        ) {
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text("跟随电脑端默认", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "不指定，由电脑端按它的默认模型启动",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                trailingIcon = if (selected == null) {
+                    { Icon(Icons.Filled.Check, contentDescription = null) }
+                } else {
+                    null
+                },
+                onClick = {
+                    viewModel.selectModel(null)
+                    expanded = false
+                },
+            )
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            models.groupBy { it.provider }.forEach { (provider, group) ->
+                Text(
+                    provider.ifBlank { "其他" },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 2.dp),
+                )
+                group.forEach { model ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(
+                                    model.label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    modelSubtitle(model),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        },
+                        trailingIcon = if (selected?.provider == model.provider && selected.modelId == model.id) {
+                            { Icon(Icons.Filled.Check, contentDescription = null) }
+                        } else {
+                            null
+                        },
+                        onClick = {
+                            viewModel.selectModel(
+                                SessionModel(
+                                    provider = model.provider,
+                                    modelId = model.id,
+                                    modelName = model.name,
+                                ),
+                            )
+                            expanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 模型下拉的副标题：id · 上下文长度 · 能不能思考。 */
+private fun modelSubtitle(model: AvailableModel): String = buildString {
+    append(model.id)
+    if (model.contextWindow > 0) {
+        append(" · ")
+        append(if (model.contextWindow >= 1000) "${model.contextWindow / 1000}k" else "${model.contextWindow}")
+    }
+    if (model.reasoning) append(" · 可思考")
 }
 
 /**

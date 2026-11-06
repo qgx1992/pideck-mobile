@@ -12,6 +12,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 
@@ -141,6 +142,37 @@ object ChatPayloads {
             put("message", text.trim())
             if (!behavior.isNullOrBlank()) put("streamingBehavior", behavior)
         }
+
+    /**
+     * `POST /api/sessions` 的请求体。
+     *
+     * 宿主的路由只校验 `projectId`，其余字段整个透传给 `createSessionDraft`：
+     * `backend` 只认 `dsh` / `acp`（pi 是「不写」），`model` 只在**非 ACP** 时被落盘
+     * （`!acp && input.model ? … : void 0`），形状 `{provider, modelId, modelName}`。
+     *
+     * 本端只在 pi 上带模型：DSH 有自己的一套模型体系，ACP 宿主根本不看这个字段 ——
+     * 带过去只会让会话记录里多一份谁都不用的偏好。不带时宿主按它自己的默认链路解析
+     * （`welcomeModel ?? 设置里的默认模型 ?? 第一个启用模型 ?? 上次用的`），这正是
+     * 「跟随电脑端默认」那一档的意思。
+     */
+    fun createSessionBody(
+        projectId: String,
+        backend: String?,
+        acpToolId: String?,
+        model: SessionModel?,
+    ): JsonObject = buildJsonObject {
+        put("projectId", projectId)
+        backend?.takeIf { it.isNotBlank() }?.let { put("backend", it) }
+        acpToolId?.takeIf { it.isNotBlank() }?.let { put("acpToolId", it) }
+        val isPi = backend.isNullOrBlank()
+        if (isPi && model != null && model.provider.isNotBlank() && model.modelId.isNotBlank()) {
+            putJsonObject("model") {
+                put("provider", model.provider)
+                put("modelId", model.modelId)
+                put("modelName", model.modelName)
+            }
+        }
+    }
 
     fun userMessage(text: String, imageDataUrls: List<String>): JsonObject = buildJsonObject {
         put("role", "user")

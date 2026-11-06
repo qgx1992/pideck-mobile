@@ -357,6 +357,21 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   时会一次消掉好几条。宿主没有序号时退回按出现次数对账，别直接清空。
   另外：**手机做不到「撤回排队」** —— 桌面端那个排队面板是客户端自己攒的账（Electron IPC），
   手机发出去就进了 pi 自己的队列，HTTP 侧没有撤回接口。别照着桌面文案做撤回按钮。
+- **ViewModel 里的 `device` 是异步来的，界面上的 `LaunchedEffect(Unit)` 比它早**
+  （`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt` 的 `deviceReady`）：
+  `init` 要先去 `DeviceRepository` 把设备/令牌读出来才知道往哪发请求，而 Composable 的
+  `LaunchedEffect(Unit)` 在同一帧就跑了。以前 `loadModels()` 直接 `device ?: return`，
+  于是模型表第一次永远是空的，必须手动点刷新（0.5.35 修的就是这个）。
+  **凡是「界面自动触发、需要 device/token」的加载函数，都先 `deviceReady.await()` 再取值**，
+  别在函数顶部 `device ?: return`；用户在点击后才触发的（发送、停止、翻页）可以不改，
+  那时设备早就在了。
+- **新会话的模型偏好只在 pi 上带**（`native/app/src/main/java/dev/pideck/nativeapp/data/Images.kt`
+  的 `ChatPayloads.createSessionBody`）：宿主 `createSessionDraft` 的 `model` 是
+  `!acp && input.model ? … : void 0`，DSH 则用它自己的模型体系。带 `model` 时形状必须是
+  `{provider, modelId, modelName}`；**不带就是「跟随电脑端默认」**，宿主按
+  `welcomeModel ?? settings.defaultProvider+defaultModel ?? 第一个启用模型 ?? lastUsedModel` 解析，
+  所以「不指定」这一档不要自己猜一个模型填进去。首页那颗胶囊因此只在 `backend == Pi` 时出现。
+
 - **宿主版本与适配基线**（`native/app/src/main/java/dev/pideck/nativeapp/data/HostCompat.kt`）：
   `/api/state.version` 是桌面端 0.10.0 才加的常量字段，老宿主解析出来是 null。
   设置页已显示版本，`BASELINE` 只在本客户端**真的重新对过一遍接口**时才涨；低于基线给提示，

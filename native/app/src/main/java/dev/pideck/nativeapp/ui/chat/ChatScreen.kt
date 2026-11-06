@@ -239,6 +239,8 @@ fun ChatScreen(
 
     // 模型表要提前拉：思考档位是从模型的 thinkingLevels 推出来的，
     // 以前只在点开模型选择时才拉，于是「思考」按钮要点一下模型才冒出来。
+    // （这一次调用会等 ViewModel 里的设备就位再发请求 —— 以前它比设备读取先跑，
+    //   直接空手回来，表现是「点开模型胶囊要点一下刷新才有列表」。）
     LaunchedEffect(Unit) { viewModel.loadModels() }
     // 上下文用量：进来先读一次，每轮跑完再对一次（用量只在运行时活着时拿得到）
     LaunchedEffect(Unit) { viewModel.refreshContext() }
@@ -249,6 +251,10 @@ fun ChatScreen(
     var showWorkspace by remember { mutableStateOf(false) }
     // 顶栏的模型 / 思考档位选择器
     var showModelSheet by remember { mutableStateOf(false) }
+    // 兜底：万一首次拉取失败（主机刚起 / 断线），点开选择器时再补一次
+    LaunchedEffect(showModelSheet) {
+        if (showModelSheet && viewModel.availableModels.isEmpty()) viewModel.loadModels()
+    }
     var showThinkingSheet by remember { mutableStateOf(false) }
     // 本会话的历史提问：点一条跳回那一段
     var showHistory by remember { mutableStateOf(false) }
