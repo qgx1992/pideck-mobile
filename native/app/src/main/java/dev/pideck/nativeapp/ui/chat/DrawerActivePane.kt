@@ -4,7 +4,9 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -41,7 +43,10 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.onSizeChanged
@@ -55,6 +60,7 @@ import dev.pideck.nativeapp.ui.sessions.relativeTime
 import dev.pideck.nativeapp.ui.theme.softPress
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -148,13 +154,20 @@ internal fun dragTargetSection(
 /**
  * 侧栏顶部那一排分段（活动 / 聊天）。
  *
- * **可以左右拖**（0.5.37 用户要求「拖动到哪一类就展开哪一类」）：实心底跟着手走，松手吸附到
- * 最近一段并切过去；点按照旧直接跳。拖动只影响指示块的位置，列表内容仍是瞬时替换，
- * 但切换发生在**松手那一刻**，所以拖到位即展开对应分类。
+ * **可以左右拖**（0.5.37 用户要求「拖动到哪一类就展开哪一类」）：实心底块跟着手走，松手吸附到
+ * 最近一段并切过去；点按照旧直接跳。
  *
- * 实现要点：指示块用 `drawBehind` 画（读 `Animatable.value` 只触发重绘、不触发布局），
- * 这样段宽不用等布局收敛；速度用 `VelocityTracker` 自己算 —— `detectHorizontalDragGestures`
- * 的 `onDragEnd` 不带速度。
+ * 视觉是「液态玻璃」那一路（同版第五稿）：底块是竖向渐变的玻璃片 + 1dp 高光边 + 一层淡外发光，
+ * 拖离原位时按位移比例**横向撑开**（最多 12%）并让外发光变亮 —— 白底块在深色胶囊里本来不显眼，
+ * 撑开 + 呼吸发光才看得出「正在被拖」。渐变的明暗按主题亮度分两套：浅色主题白→浅灰，
+ * 深色主题比轨道提亮一档（否则底块比轨道还暗，等于没画）。
+ *
+ * 点按**不要水波纹**：准备拖动时手指按下去先出一圈灰，看着像误触。这里用
+ * `clickable(indication = null)`，反馈只体现为底块滑过去 + 文字变强调色。
+ *
+ * 实现要点：底块用 `drawBehind` 画（读 `Animatable.value` 只触发重绘、不触发布局），
+ * 段宽取 `onSizeChanged` 的实测宽度；速度用 `VelocityTracker` 自己算 ——
+ * `detectHorizontalDragGestures` 的 `onDragEnd` 不带速度。
  */
 @Composable
 internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
@@ -163,7 +176,14 @@ internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
     val current = DrawerTabState.current
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
-    val indicatorColor = MaterialTheme.colorScheme.surface
+    val scheme = MaterialTheme.colorScheme
+    val isLight = scheme.surface.luminance() > 0.5f
+    // 玻璃片：浅色主题白 → 浅灰；深色主题比轨道亮两档（只亮一档时底边和轨道糊在一起）
+    val thumbTop = if (isLight) Color.White else Color(0xFF3D4450)
+    val thumbBottom = if (isLight) Color(0xFFE9EDF4) else Color(0xFF2B3038)
+    val thumbEdge = if (isLight) Color(0x22000000) else Color(0x33FFFFFF)
+    val thumbShadow = if (isLight) Color(0x14000000) else Color(0x55000000)
+    val glow = scheme.primary
     val padPx = with(density) { DRAWER_BAR_PAD.toPx() }
     var widthPx by remember { mutableFloatStateOf(0f) }
     val segmentPx = if (widthPx > 0f) (widthPx - padPx * 2f) / count else 0f
@@ -184,17 +204,65 @@ internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f))
+            .background(scheme.surfaceContainerHigh.copy(alpha = 0.7f))
             .onSizeChanged { widthPx = it.width.toFloat() }
             .drawBehind {
-                if (segmentPx > 0f) {
-                    drawRoundRect(
-                        color = indicatorColor,
-                        topLeft = Offset(offset.value + padPx, padPx),
-                        size = Size(segmentPx, (size.height - padPx * 2f).coerceAtLeast(0f)),
-                        cornerRadius = CornerRadius((size.height - padPx * 2f) / 2f),
-                    )
-                }
+                if (segmentPx <= 0f) return@drawBehind
+                val height = (size.height - padPx * 2f).coerceAtLeast(1f)
+                if (widthPx <= 0f) return@drawBehind
+                // 离最近一格有多远（0..1）：拖动时用它撑开胶囊、点亮外发光
+                val snap = offset.value / segmentPx
+                val lean = (abs(snap - snap.roundToInt()).coerceIn(0f, 0.5f) * 2f)
+                val growth = segmentPx * 0.12f * lean
+                val left = offset.value + padPx - growth / 2f
+                val width = segmentPx + growth
+                val radius = CornerRadius(height / 2f)
+                // 底部投影：玻璃片"浮"在轨道上的一层厚度（两片叠出柔和边）
+                drawRoundRect(
+                    color = thumbShadow.copy(alpha = thumbShadow.alpha * 0.55f),
+                    topLeft = Offset(left, padPx + 2.5f),
+                    size = Size(width, height),
+                    cornerRadius = radius,
+                )
+                drawRoundRect(
+                    color = thumbShadow,
+                    topLeft = Offset(left, padPx + 1.5f),
+                    size = Size(width, height),
+                    cornerRadius = radius,
+                )
+                // 外发光：贴着玻璃片一圈，拖动时更亮
+                drawRoundRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            glow.copy(alpha = 0.10f + 0.22f * lean),
+                            glow.copy(alpha = 0.02f + 0.08f * lean),
+                        ),
+                        startY = padPx - 2f,
+                        endY = padPx + height + 2f,
+                    ),
+                    topLeft = Offset(left - 2f, padPx - 2f),
+                    size = Size(width + 4f, height + 4f),
+                    cornerRadius = CornerRadius((height + 4f) / 2f),
+                )
+                // 玻璃主体
+                drawRoundRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(thumbTop, thumbBottom),
+                        startY = padPx,
+                        endY = padPx + height,
+                    ),
+                    topLeft = Offset(left, padPx),
+                    size = Size(width, height),
+                    cornerRadius = radius,
+                )
+                // 1dp 高光边（玻璃的"厚度"）
+                drawRoundRect(
+                    color = thumbEdge,
+                    topLeft = Offset(left + 0.5f, padPx + 0.5f),
+                    size = Size((width - 1f).coerceAtLeast(1f), (height - 1f).coerceAtLeast(1f)),
+                    cornerRadius = radius,
+                    style = Stroke(width = 1f),
+                )
             }
             .pointerInput(count, segmentPx) {
                 if (segmentPx <= 0f) return@pointerInput
@@ -234,17 +302,17 @@ internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
                 )
             },
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(0.dp),
-        ) {
+        Row(modifier = Modifier.fillMaxWidth()) {
             sections.forEach { section ->
                 val selected = section == current
-                Surface(
-                    onClick = { DrawerTabState.select(section) },
-                    shape = RoundedCornerShape(50),
-                    color = Color.Transparent,
-                    modifier = Modifier.weight(1f),
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(50))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { DrawerTabState.select(section) },
                 ) {
                     Row(
                         modifier = Modifier
@@ -257,21 +325,13 @@ internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
                             section.icon,
                             contentDescription = null,
                             modifier = Modifier.size(14.dp),
-                            tint = if (selected) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
+                            tint = if (selected) glow else scheme.onSurfaceVariant,
                         )
                         Spacer(Modifier.width(5.dp))
                         Text(
                             section.label,
                             style = MaterialTheme.typography.labelMedium,
-                            color = if (selected) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
+                            color = if (selected) glow else scheme.onSurfaceVariant,
                         )
                     }
                 }

@@ -29,6 +29,13 @@
   `dragTargetSection(offsetFraction, velocitySectionsPerSecond, count)`，多段（以后加「项目」）自然支持。
   指示块用 `drawBehind` 画（读 `Animatable.value` 只重绘不重排），速度用 `VelocityTracker` 自己算
   —— `detectHorizontalDragGestures` 的 `onDragEnd` 不带速度。
+- **选中块改成「液态玻璃」+ 去掉点按灰底**（同版第五稿）：原来那块是 `surface` 纯色 —— 浅色主题下
+  白片压在浅灰轨道上、又是纯色，拖起来看不出哪块在动。现在底块是竖向渐变的玻璃片 + 1dp 高光边 +
+  底部投影 + 一圈淡强调色外发光；**拖离原位时横向撑开最多 12%**，外发光随之变亮（撑开幅度 =
+  离最近一格的距离比例），松手吸附后缩回。深色主题比轨道亮两档（只亮一档时底边和轨道糊在一起）。
+  选中段的图标与文字改用强调色，未选仍是次要色。
+  点按反馈从 `Surface(onClick)` 的 Material 水波纹换成 `clickable(indication = null)` ——
+  原来手指刚按下去准备拖，先闪一层灰，看着像误触；现在反馈只有底块滑过去。
 - 单测 247 → 262。
 ## 0.5.36 — 2026-11-06
 

@@ -485,6 +485,10 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   **不带速度**，要用 `VelocityTracker.addPosition(change.uptimeMillis, change.position)` 自己攒
   （`addPointerInputChange` 在当前 Compose 版本里解析不到）。指示块画在 `drawBehind` 里，
   段宽取 `onSizeChanged` 的实测宽度 —— 别改成布局里的 `offset` 子节点，那样每帧都要重排。
+  底块的样式是玻璃片（渐变 + 1dp 高光边 + 投影 + 外发光），**拖动时按离最近一格的距离横向撑开**
+  最多 12%、外发光同时变亮；这不是装饰：纯色白片压在浅灰轨道上拖起来看不出在动。深色主题不能只比
+  轨道亮一档（底边会和轨道糊在一起）。点按必须 `clickable(indication = null)`，
+  用 `Surface(onClick)` / 水波纹会在「准备拖动」时先闪一层灰，用户当误触报过。
 
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
