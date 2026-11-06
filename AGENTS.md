@@ -344,6 +344,28 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
     答案只能从流里取；关面板要 `runtime/stop`，否则匿名运行时一直挂着。
   - `prompt` 的 body 没有 images 字段：运行中的消息一律不带图片，带图就明确提示，别悄悄丢。
 
+- **忙碌时的投递档位要按后端筛**（`native/app/src/main/java/dev/pideck/nativeapp/data/BusySendMode.kt` 的
+  `options(backend)` / `coerce(backend, mode)`）：**ACP 协议没有 steer 通道**，桌面端 0.9.x 起就用
+  `steerSupported` 把「加入当前回合」藏掉（文案「该会话的 agent 不支持插入当前回合」），0.10.0 起用
+  「立即发送」占那一格 —— 先停本轮再把这条当新一轮发。手机上如果照旧给三档，用户点「加入当前回合」
+  只会被排到本轮之后而以为插进去了。别把这条判定写进 Composable：界面只读
+  `ChatViewModel.busyModes / effectiveBusyMode`，判定留在枚举伴生对象里，单测 `data/BusySendModeTest.kt`。
+- **排队消息的对账键是序号，不是文本**（`native/app/src/main/java/dev/pideck/nativeapp/data/QueuedPrompts.kt`）：
+  宿主给每条落盘消息写了 `meta._piDeckMsgSeq`（全局递增，`ChatMessage.seq` 读它），
+  入队时记下当时的最大序号，只有**序号更大**的同文 user 消息才算这条到达 —— 一条落盘只抵一条排队。
+  按文本做 `filterNot { it in landed }`（0.5.22–0.5.33 的做法）在「同一句话发两次」「回答里回显了这句话」
+  时会一次消掉好几条。宿主没有序号时退回按出现次数对账，别直接清空。
+  另外：**手机做不到「撤回排队」** —— 桌面端那个排队面板是客户端自己攒的账（Electron IPC），
+  手机发出去就进了 pi 自己的队列，HTTP 侧没有撤回接口。别照着桌面文案做撤回按钮。
+- **宿主版本与适配基线**（`native/app/src/main/java/dev/pideck/nativeapp/data/HostCompat.kt`）：
+  `/api/state.version` 是桌面端 0.10.0 才加的常量字段，老宿主解析出来是 null。
+  设置页已显示版本，`BASELINE` 只在本客户端**真的重新对过一遍接口**时才涨；低于基线给提示，
+  版本未知不给 —— 拿不到版本不等于宿主旧。
+  对账方法：把桌面端 `resources/app.asar` 用 `npx @electron/asar extract` 解开，
+  比路由字符串集合、`getState()` / `toPublicSession` / `/api/chat` 的处理代码、以及 `data-*` 流帧集合。
+  0.10.0 实测：路由 28 条全同、七处处理代码逐字节相同、`/api/state` 只多了 `version`、
+  消息页多了 `nextBeforeEntryId` / `indexVersion`（客户端忽略即可）。
+
 - **回合统计行（首字 / tok/s）是本端自己打点的**（`native/app/src/main/java/dev/pideck/nativeapp/data/TurnStats.kt`）：
   桌面端那一行数是主进程现测的（`out/main/index.js` 的 perf：起点 `requestedAt` 是宿主**收到** prompt 的时刻，
   `firstDeltaAt`/`firstTextAt` 由 agent 事件流打点），走 `agentsRuntimeState` 边沿推送，

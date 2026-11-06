@@ -567,7 +567,8 @@ fun ChatScreen(
                 onAttach = { showAttachSheet = true },
                 onRemoveImage = { viewModel.removeImage(it) },
                 onDismissImageError = { viewModel.dismissImageError() },
-                busyMode = viewModel.busySendMode,
+                busyMode = viewModel.effectiveBusyMode,
+                busyModes = viewModel.busyModes,
                 onBusyModeChange = { viewModel.rememberBusySendMode(it) },
                 onSend = { mode ->
                     val text = draft
@@ -1326,6 +1327,7 @@ private fun Composer(
     onValueChange: (String) -> Unit,
     sending: Boolean,
     busyMode: BusySendMode = BusySendMode.STEER,
+    busyModes: List<BusySendMode> = BusySendMode.entries.toList(),
     onBusyModeChange: (BusySendMode) -> Unit = {},
     images: List<PendingImage>,
     imageError: String?,
@@ -1472,7 +1474,7 @@ private fun Composer(
                         // 正在跑、而且框里有内容：先给一个「怎么发」的选择器，
                         // 停止按钮和发送按钮并存 —— 停止不会清掉输入框。
                         if (sending && value.isNotBlank()) {
-                            BusySendPicker(mode = busyMode, onChange = onBusyModeChange)
+                            BusySendPicker(mode = busyMode, modes = busyModes, onChange = onBusyModeChange)
                             Spacer(Modifier.width(8.dp))
                         }
                         if (sending) {
@@ -1510,12 +1512,17 @@ private fun Composer(
 }
 
 /**
- * 「这条消息怎么发」：加入当前回合 / 排队到下一轮 / 并行发送。
+ * 「这条消息怎么发」：加入当前回合 / 立即发送 / 排队到下一轮 / 并行发送。
  *
  * 只在会话还在跑、且输入框里有内容时出现 —— 空闲时发送没有歧义，多一个选择器只是噪音。
+ * 可选项由后端决定（ACP 没有 steer 通道，那一格换成「立即发送」）。
  */
 @Composable
-private fun BusySendPicker(mode: BusySendMode, onChange: (BusySendMode) -> Unit) {
+private fun BusySendPicker(
+    mode: BusySendMode,
+    modes: List<BusySendMode>,
+    onChange: (BusySendMode) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
     Box {
         Surface(
@@ -1542,7 +1549,7 @@ private fun BusySendPicker(mode: BusySendMode, onChange: (BusySendMode) -> Unit)
             }
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            BusySendMode.entries.forEach { entry ->
+            modes.forEach { entry ->
                 DropdownMenuItem(
                     text = {
                         Column {

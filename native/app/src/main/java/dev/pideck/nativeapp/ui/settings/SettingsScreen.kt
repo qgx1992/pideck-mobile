@@ -38,6 +38,7 @@ import dev.pideck.nativeapp.BuildConfig
 import dev.pideck.nativeapp.ui.theme.AppButton
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import dev.pideck.nativeapp.ui.theme.AppIconButton
+import dev.pideck.nativeapp.data.HostCompat
 import dev.pideck.nativeapp.data.ThemeMode
 
 /**
@@ -141,6 +142,14 @@ fun SettingsScreen(
             SectionTitle("连接")
             InfoRow("地址", viewModel.device?.baseUrl ?: "还没配对设备")
             InfoRow("桌面端版本", viewModel.hostVersion ?: "未知（回会话列表刷新一次）")
+            HostCompat.hint(viewModel.hostVersion)?.let { hint ->
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
             InfoRow("已配对设备", "${viewModel.deviceCount} 台")
             InfoRow("会话数", "${viewModel.sessionCount}")
             Spacer(Modifier.height(6.dp))

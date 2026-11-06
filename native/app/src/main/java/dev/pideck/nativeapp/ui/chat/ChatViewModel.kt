@@ -31,6 +31,8 @@ import dev.pideck.nativeapp.data.SecurityState
 import dev.pideck.nativeapp.data.parseSecurityState
 import dev.pideck.nativeapp.data.privilegeControlFor
 import dev.pideck.nativeapp.data.Prefs
+import dev.pideck.nativeapp.data.QueuedPrompt
+import dev.pideck.nativeapp.data.QueuedPrompts
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.ReplyMerger
 import dev.pideck.nativeapp.data.ReplySnapshot
@@ -73,6 +75,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -179,14 +182,26 @@ class ChatViewModel @Inject constructor(
     var busySendMode by mutableStateOf(BusySendMode.STEER)
         private set
 
+    /** 这个后端在忙碌时能选的投递档位（ACP 没有 steer 通道，见 [BusySendMode.options]）。 */
+    val busyModes: List<BusySendMode> get() = BusySendMode.options(backend)
+
+    /** 界面上显示 / 真正生效的档位：偏好里存的是 steer，但 ACP 会话要落成「立即发送」。 */
+    val effectiveBusyMode: BusySendMode get() = BusySendMode.coerce(backend, busySendMode)
+
     /**
-     * 排队到下一轮、还没被 pi 取走的那些文本。
+     * 排队到下一轮、还没被 pi 取走的那些消息。
      *
      * 宿主不回传队列内容（桌面端走 Electron IPC 的 queued messages，HTTP 侧没有这个接口），
      * 所以这边只留自己发过的那几条，等它们出现在历史里就自动删掉 —— 对账而不是缓存。
+     * 每条带一个入队时的序号基线，见 [QueuedPrompts]。
      */
-    var queuedTexts by mutableStateOf<List<String>>(emptyList())
+    var queuedPrompts by mutableStateOf<List<QueuedPrompt>>(emptyList())
         private set
+
+    val queuedTexts: List<String> get() = queuedPrompts.map { it.text }
+
+    /** 最近一次读到的最大消息序号：入队时记下来，落盘后只有比它大的同文消息才算到达。 */
+    private var lastMessageSeq: Long = 0L
 
     /** 并行问询面板的状态；null = 面板关着。 */
     var parallelAsk by mutableStateOf<ParallelAsk?>(null)
@@ -249,6 +264,8 @@ class ChatViewModel @Inject constructor(
         record.model.toSessionModel()?.let { sessionModel = it }
         record.thinkingLevel?.takeIf { it.isNotBlank() }?.let { thinkingLevel = it }
         record.backend?.takeIf { it.isNotBlank() }?.let { backend = it }
+        // 偏好里的档位可能在当前后端不可用（ACP 的「加入当前回合」）：换成等价的默认档
+        busySendMode = BusySendMode.coerce(backend, busySendMode)
         val toolId = record.acpToolId
         if (!toolId.isNullOrBlank()) {
             acpTools.firstOrNull { it.id == toolId }?.name?.takeIf { it.isNotBlank() }?.let { acpToolName = it }
@@ -1288,7 +1305,8 @@ class ChatViewModel @Inject constructor(
                 items = page.messages.toTimelineItems()
                 markLastTurnResult()
                 settleTurnStats(page.messages)
-                reconcileQueue()
+                lastMessageSeq = maxOf(lastMessageSeq, QueuedPrompts.baselineOf(page.messages))
+                reconcileQueue(page.messages)
                 before = page.nextBefore
                 hasOlder = page.nextBefore != null && page.messages.isNotEmpty()
             } catch (e: CancellationException) {
@@ -1312,6 +1330,7 @@ class ChatViewModel @Inject constructor(
                 val page = api.messagesPage(target, token, sessionId, pageSize = 40, before = cursor)
                 val older = page.messages.toTimelineItems()
                 items = older + items
+                lastMessageSeq = maxOf(lastMessageSeq, QueuedPrompts.baselineOf(page.messages))
                 before = page.nextBefore
                 hasOlder = page.nextBefore != null && older.isNotEmpty()
             } catch (e: CancellationException) {
@@ -1517,10 +1536,43 @@ class ChatViewModel @Inject constructor(
             actionNote = "运行中的消息不带图片，等这一轮结束再发"
             return
         }
-        when (mode) {
+        when (BusySendMode.coerce(backend, mode)) {
             BusySendMode.STEER -> steerDuringRun(text)
+            BusySendMode.SEND_NOW -> sendNowInterrupting(text)
             BusySendMode.FOLLOW_UP -> enqueueFollowUp(text)
             BusySendMode.PARALLEL -> startParallelAsk(text)
+        }
+    }
+
+    /**
+     * 立即发送：先停掉这一轮，再把这条当新一轮发出去。
+     *
+     * ACP 协议没有 steer 通道，「加入当前回合」在 ACP 会话上其实只是排到本轮之后；
+     * 桌面端 0.10.0 把那一格换成这个操作（先 stop、再 prompt）。
+     */
+    private fun sendNowInterrupting(text: String) {
+        val target = device ?: return
+        val body = text.trim()
+        if (body.isEmpty()) return
+        sendJob?.cancel()
+        sendJob = null
+        viewModelScope.launch {
+            val runtime = StateCache.runtime(deviceId, sessionId)
+            if (runtime != null) {
+                runCatching {
+                    api.stopRuntime(target, token, sessionId, runtime.agentId, runtime.runtimeGeneration.toLong())
+                }
+            }
+            // 宿主停下这一轮会推 finish，本端的 sendJob 也就结束了；最多等 8 秒，别在没停稳时再发一条
+            val stopped = withTimeoutOrNull(8_000) {
+                while (sending) delay(100)
+                true
+            } != null
+            if (!stopped) {
+                error = "这一轮还没停下来，稍后再试（或先点停止）"
+                return@launch
+            }
+            send(body)
         }
     }
 
@@ -1579,7 +1631,7 @@ class ChatViewModel @Inject constructor(
                     error = delivery.error ?: "宿主没有接受这条消息"
                     return@launch
                 }
-                queuedTexts = queuedTexts + body
+                queuedPrompts = queuedPrompts + QueuedPrompt(body, lastMessageSeq)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -1683,12 +1735,11 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** 排队的消息一旦出现在历史里就把提示撤掉（宿主那边已经没有「待发」这回事）。 */
-    private fun reconcileQueue() {
-        if (queuedTexts.isEmpty()) return
-        val landed = items.filterIsInstance<TimelineItem.UserMessage>().map { it.text }.toSet()
-        val rest = queuedTexts.filterNot { it in landed }
-        if (rest.size != queuedTexts.size) queuedTexts = rest
+    /** 排队消息一旦出现在历史里就撤掉提示（宿主那边已经没有「待发」这回事）。 */
+    private fun reconcileQueue(messages: List<ChatMessage>) {
+        if (queuedPrompts.isEmpty()) return
+        val rest = QueuedPrompts.afterLanding(queuedPrompts, messages)
+        if (rest.size != queuedPrompts.size) queuedPrompts = rest
     }
 
     override fun onCleared() {

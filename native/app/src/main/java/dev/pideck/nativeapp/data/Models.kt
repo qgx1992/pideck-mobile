@@ -10,6 +10,8 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * 与桌面端 WebServiceManager 的 JSON 契约（`app/vendor/pideck/src/renderer/src/web/webTypes.ts`）。
@@ -203,7 +205,16 @@ data class ChatMessage(
     val meta: JsonObject? = null,
     /** 只有 user 消息会带（手机/网页发图之后回读历史），其余为空。 */
     val images: List<MessageImage> = emptyList(),
-)
+) {
+    /**
+     * 宿主给每条消息写的全局递增序号（`meta._piDeckMsgSeq`）。
+     *
+     * 「排队到下一轮」发出去的消息没有回执，只能等它出现在历史里。按文本对账会把
+     * 「同一句话发两次」错算成两条都到了；按序号对账，一条落盘只抵掉一条排队。
+     */
+    val seq: Long?
+        get() = (meta?.get("_piDeckMsgSeq") as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+}
 
 /** `/api/state` 的一次抓取结果：`NotModified` 表示 ETag 命中，调用方保留旧数据。 */
 sealed interface StateFetch {

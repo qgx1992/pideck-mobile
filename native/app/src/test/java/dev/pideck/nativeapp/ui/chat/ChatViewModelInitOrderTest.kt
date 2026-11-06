@@ -27,7 +27,7 @@ class ChatViewModelInitOrderTest {
         assertTrue("restoreBusySendMode() 应该还在 init 里", source.contains("init {\n        restoreBusySendMode()"))
         val declared = listOf(
             "var busySendMode by",
-            "var queuedTexts by",
+            "var queuedPrompts by",
             "var parallelAsk by",
             "var parallelInsert by",
         )

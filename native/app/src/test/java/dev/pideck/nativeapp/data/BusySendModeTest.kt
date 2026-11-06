@@ -72,4 +72,47 @@ class BusySendModeTest {
         assertFalse(receipt.accepted)
         assertEquals("busy", receipt.error)
     }
+
+    // ---- 后端能力：ACP 没有 steer 通道（0.10.0 起桌面端把那一格换成「立即发送」）----
+
+    @Test
+    fun `pi keeps all four delivery modes`() {
+        assertEquals(
+            listOf(
+                BusySendMode.STEER,
+                BusySendMode.SEND_NOW,
+                BusySendMode.FOLLOW_UP,
+                BusySendMode.PARALLEL,
+            ),
+            BusySendMode.options(null),
+        )
+        assertEquals(BusySendMode.options(null), BusySendMode.options("dsh"))
+    }
+
+    @Test
+    fun `acp drops steer and offers send now instead`() {
+        assertEquals(
+            listOf(BusySendMode.SEND_NOW, BusySendMode.FOLLOW_UP, BusySendMode.PARALLEL),
+            BusySendMode.options("acp"),
+        )
+    }
+
+    @Test
+    fun `stored steer falls back to send now on acp`() {
+        assertEquals(BusySendMode.SEND_NOW, BusySendMode.coerce("acp", BusySendMode.STEER))
+        assertEquals(BusySendMode.FOLLOW_UP, BusySendMode.coerce("acp", BusySendMode.FOLLOW_UP))
+        assertEquals(BusySendMode.PARALLEL, BusySendMode.coerce("acp", BusySendMode.PARALLEL))
+    }
+
+    @Test
+    fun `non acp keeps whatever was stored`() {
+        assertEquals(BusySendMode.STEER, BusySendMode.coerce(null, BusySendMode.STEER))
+        assertEquals(BusySendMode.SEND_NOW, BusySendMode.coerce("dsh", BusySendMode.SEND_NOW))
+    }
+
+    @Test
+    fun `parse knows the send now id`() {
+        assertEquals(BusySendMode.SEND_NOW, BusySendMode.parse("sendNow"))
+        assertEquals("sendNow", BusySendMode.SEND_NOW.id)
+    }
 }
