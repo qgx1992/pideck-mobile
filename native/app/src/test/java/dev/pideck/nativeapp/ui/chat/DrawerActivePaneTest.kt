@@ -12,7 +12,7 @@ class DrawerActivePaneTest {
         Session(id = id, projectId = "p1", title = title, updatedAt = updatedAt)
 
     @Test
-    fun `运行中与等回答的会话进活动段，其余不进`() {
+    fun `活动段列出全部会话，不只是运行中的`() {
         val sessions = listOf(
             session("running", 3_000),
             session("waiting", 2_000),
@@ -24,9 +24,16 @@ class DrawerActivePaneTest {
             "waiting" to SessionActivity.Status.Waiting,
             "done" to SessionActivity.Status.Done,
         )
-        val active = activeDrawerSessions(sessions) { statuses[it] ?: SessionActivity.Status.Idle }
-        // 等回答的排前面（那是真的卡住了），正在跑的排后面
-        assertEquals(listOf("waiting", "running"), active.map { it.id })
+        val ordered = activityDrawerSessions(sessions) { statuses[it] ?: SessionActivity.Status.Idle }
+        // 等回答 > 正在跑 > 其余（其余内部按最近活动倒序）；一条都不能少
+        assertEquals(listOf("waiting", "running", "done", "idle"), ordered.map { it.id })
+    }
+
+    @Test
+    fun `没有会话在跑时仍然按最近活动列出全部会话`() {
+        val sessions = listOf(session("a", 1_000), session("b", 3_000), session("c", 2_000))
+        val ordered = activityDrawerSessions(sessions) { SessionActivity.Status.Idle }
+        assertEquals(listOf("b", "c", "a"), ordered.map { it.id })
     }
 
     @Test
@@ -35,39 +42,27 @@ class DrawerActivePaneTest {
             session("running-new", 9_000),
             session("waiting-old", 1_000),
         )
-        val active = activeDrawerSessions(sessions) {
+        val ordered = activityDrawerSessions(sessions) {
             if (it.startsWith("waiting")) SessionActivity.Status.Waiting else SessionActivity.Status.Running
         }
-        assertEquals(listOf("waiting-old", "running-new"), active.map { it.id })
+        assertEquals(listOf("waiting-old", "running-new"), ordered.map { it.id })
     }
 
     @Test
-    fun `同档内按最近活动倒序`() {
-        val sessions = listOf(session("a", 1_000), session("c", 3_000), session("b", 2_000))
-        val active = activeDrawerSessions(sessions) { SessionActivity.Status.Running }
-        assertEquals(listOf("c", "b", "a"), active.map { it.id })
-    }
-
-    @Test
-    fun `没有在跑的会话时活动段为空`() {
-        val active = activeDrawerSessions(listOf(session("a", 1_000))) { SessionActivity.Status.Done }
-        assertTrue(active.isEmpty())
-    }
-
-    @Test
-    fun `最近会话只取前 N 条，且按时间倒序`() {
-        val sessions = listOf(
-            session("old", 1_000),
-            session("new", 9_000),
-            session("mid", 5_000),
+    fun `已结束或失败的会话排在运行中的后面`() {
+        val sessions = listOf(session("failed", 9_000), session("done", 8_000), session("running", 1_000))
+        val statuses = mapOf(
+            "failed" to SessionActivity.Status.Failed,
+            "done" to SessionActivity.Status.Done,
+            "running" to SessionActivity.Status.Running,
         )
-        assertEquals(listOf("new", "mid"), recentDrawerSessions(sessions, 2).map { it.id })
+        val ordered = activityDrawerSessions(sessions) { statuses[it] ?: SessionActivity.Status.Idle }
+        assertEquals(listOf("running", "failed", "done"), ordered.map { it.id })
     }
 
     @Test
-    fun `限额为零时最近会话为空（做除法或 take 负数前先挡住）`() {
-        assertTrue(recentDrawerSessions(listOf(session("a", 1_000)), 0).isEmpty())
-        assertTrue(recentDrawerSessions(listOf(session("a", 1_000)), -5).isEmpty())
+    fun `空列表不炸`() {
+        assertTrue(activityDrawerSessions(emptyList()) { SessionActivity.Status.Idle }.isEmpty())
     }
 
     @Test

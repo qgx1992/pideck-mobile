@@ -185,7 +185,6 @@ fun SessionDrawer(
             DrawerActivePane(
                 sessions = viewModel.allSessions,
                 currentSessionId = currentSessionId,
-                projectNameOf = viewModel::projectNameOf,
                 onPickSession = onPickSession,
                 onLongClickSession = { actions.menuSession = it },
                 onPollRuntimes = viewModel::refreshRuntimes,

@@ -456,20 +456,19 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   0.5.37）：抽屉顶上一排 pill 分「活动 / 聊天」两段，对应桌面端左侧栏那个 `Tabs`
   （`active` / `chats`，`projects` 还没做）。`DrawerTabState` 是**单例**不是 `rememberSaveable` ——
   抽屉每次开合都是新组合，会话列表页与聊天页又是两个 ViewModel 实例（同 `GroupCollapse` 的理由）。
-  「活动」= 上半「运行中」（`SessionActivity.statusOf` 的 Running / Waiting，等回答的排前面）
-  + 下半「最近会话」（`updatedAt` 倒序，先露 12 条，点「显示更多」每次 +12）。
-  **只到会话级**：桌面端那栏是 agent 级（子代理单列一行），手机要 `/api/sessions/:id/subagents`
-  逐会话查，子代理明细已经在会话页右侧工作区里了。
-  行是独立组件 `ActiveSessionRow`，**不要**去改 `DrawerSessionRow` / `SessionRow` / `RecentSessionRow`
-  —— 那三处各自安静（见上面「会话行有三份布局」）。纯函数 `activeDrawerSessions` /
-  `recentDrawerSessions` 有单测 `DrawerActivePaneTest`（7 条）。
+  「活动」是**一条平铺的会话列表**，与桌面端 `ActiveSessionsTree` 的观感一致（dot + 标题 + 相对时间）：
+  `activityDrawerSessions()` 按「等回答 > 正在跑 > 其余」再按 `updatedAt` 倒序，先露 10 条、
+  「显示更多」每次 +12。**不要按运行态过滤**：0.5.37 头两稿按 Running/Waiting 过滤并分成
+  「运行中 / 最近会话」两段，结果没人在跑时整段空白 —— 桌面那栏在没人跑时显示的也是最近会话。
+  运行态只用来排序与画 `StatusDot`。
   **运行态必须自己轮询**：`SessionActivity.observe()` 只在 `SessionsViewModel.refresh()`（`/api/state`，
-  56KB 且带 ETag，只在 ViewModel init 跑一次）与 `ChatViewModel` 切会话/发消息时调 —— 抽屉打开后不会自己重拉，
-  于是「别处刚开跑的会话」在手机上一直显示空闲（0.5.37 第一稿就是这样，活动段永远空）。
+  56KB 且带 ETag，只在 ViewModel init 跑一次）与 `ChatViewModel` 切会话/发消息时调 —— 抽屉打开后不会自己重拉。
   现在 `SessionActivity.observeRuntimes(runtimes)` 吃轻量的 `/api/sessions/runtimes`（约 3KB），
   `SessionsViewModel.refreshRuntimes()` 拉它：进抽屉 `LaunchedEffect(Unit)` 打一次、活动段
   `DrawerActivePane` 里每 5 秒（`RUNTIMES_POLL_MS`）再打一次，离开该段随组合注销即停。
   轻量接口没有 `pendingUiRequests`，`waiting` 传 null 时沿用 `lastWaiting`，别当成空集合。
+  行是独立组件 `ActiveSessionRow`，**不要**去改 `DrawerSessionRow` / `SessionRow` / `RecentSessionRow`
+  —— 那三处各自安静（见上面「会话行有三份布局」）。纯函数有单测 `DrawerActivePaneTest`（6 条）。
   桌面端的插件分组区（`desktopApi.sessionGroups.list()`）走 IPC，手机拿不到，这一段不接受复刻。
 
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
