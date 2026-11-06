@@ -2,6 +2,7 @@ package dev.pideck.nativeapp.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,14 +12,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,6 +35,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -38,8 +47,53 @@ import dev.pideck.nativeapp.BuildConfig
 import dev.pideck.nativeapp.ui.theme.AppButton
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import dev.pideck.nativeapp.ui.theme.AppIconButton
+import dev.pideck.nativeapp.ui.theme.SelectChip
 import dev.pideck.nativeapp.data.HostCompat
 import dev.pideck.nativeapp.data.ThemeMode
+
+/**
+ * 设置项的下拉选择器：一枚和首页同款的胶囊，点开是带勾的菜单。
+ *
+ * 设置页原来用一排 `FilterChip` 表示选项，选项一多就换行、和下面的说明文字挤在一起；
+ * 统一成下拉之后，行高固定、当前值一眼可读（胶囊上就是当前值）。
+ */
+@Composable
+private fun <T> DropdownSetting(
+    value: T,
+    options: List<T>,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        SelectChip(
+            text = label(value),
+            onClick = { expanded = true },
+            trailing = Icons.Filled.KeyboardArrowDown,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.widthIn(min = 200.dp),
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(label(option)) },
+                    trailingIcon = if (option == value) {
+                        { Icon(Icons.Filled.Check, contentDescription = null) }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        onSelect(option)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
 
 /**
  * 设置页。只放「手机上真的会调」的东西：
@@ -79,18 +133,12 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             SectionTitle("外观")
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ThemeMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = viewModel.theme == mode,
-                        onClick = { viewModel.chooseTheme(mode) },
-                        label = { Text(mode.label) },
-                    )
-                }
-            }
+            DropdownSetting(
+                value = viewModel.theme,
+                options = ThemeMode.entries.toList(),
+                label = { it.label },
+                onSelect = { viewModel.chooseTheme(it) },
+            )
             Text(
                 "深色是默认口味，和桌面端同一套基色。",
                 style = MaterialTheme.typography.labelSmall,
@@ -117,21 +165,12 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(12.dp))
             SectionTitle("会话列表")
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FilterChip(
-                    selected = viewModel.collapseRestore,
-                    onClick = { viewModel.chooseCollapseRestore(true) },
-                    label = { Text("恢复上次状态") },
-                )
-                FilterChip(
-                    selected = !viewModel.collapseRestore,
-                    onClick = { viewModel.chooseCollapseRestore(false) },
-                    label = { Text("一律全部收起") },
-                )
-            }
+            DropdownSetting(
+                value = viewModel.collapseRestore,
+                options = listOf(true, false),
+                label = { if (it) "恢复上次状态" else "一律全部收起" },
+                onSelect = { viewModel.chooseCollapseRestore(it) },
+            )
             Text(
                 "项目分组的收起/展开每次都写盘。选「恢复上次状态」就沿用退出时的样子；选「全部收起」则每次打开 App 从收起来开始。",
                 style = MaterialTheme.typography.labelSmall,

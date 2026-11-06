@@ -409,7 +409,13 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   - `匀速` = `perf.sessionTps`（**整段会话**的平均流式速度，桌面端上下文弹层里「会话平均流式 TPS」那行
     197 tok/s 就是它）。**不是**本轮的 `endToEndTps` —— 别再拿端到端顶上去（用户 0.5.36 明确换掉的）；
   - `命中` = `usage.cacheHitPercent`（宿主按最近一次回复算的）；
-  - **不显示 tok 数**：tokens 只是算速度的中间量（`TurnStats.outputTokens`），不往屏幕上放。
+  - **不显示 tok 数**：tokens 只是算速度的中间量（`TurnStats.outputTokens`），不往屏幕上放；
+  - **外框与输入卡片同宽同圆角**（`padding(horizontal = 12.dp)` + `RoundedCornerShape(16.dp)` + 1dp
+    `outlineVariant` 描边，`TurnStatsLine` 里注释写着对应关系）。输入区的内边距一改这里必须跟着改，
+    否则这一行会左右各错开几 dp。
+- **设置页的枚举型选项统一用下拉**（`ui/settings/SettingsScreen.kt` 的 `DropdownSetting`，
+  胶囊 + 带勾菜单，与首页的 `SelectChip` 同款），别再摆一排 `FilterChip`：选项一多就换行，
+  还会和下面的说明文字挤在一起。
   **收尾的真值优先取宿主自己结算的那份**（0.5.36 起）：`POST /api/sessions/:id/runtime/state`
   里带着 perf 四件套 `{ttftMs, totalMs, tps, endToEndTps, perfAt}`，就是桌面端屏幕上那几个数
   （`data/RuntimeActions.kt` 的 `parseHostTurnPerf`）。`deriveTurnStats(host = …)` 会用它，

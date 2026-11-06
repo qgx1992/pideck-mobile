@@ -1585,16 +1585,31 @@ private fun BusySendPicker(
  */
 @Composable
 private fun TurnStatsLine(stats: TurnStats?) {
-    Text(
-        text = formatTurnStats(stats),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    val scheme = MaterialTheme.colorScheme
+    // 宽度和输入卡片对齐：输入区自己是 `padding(horizontal = 12.dp)` + `RoundedCornerShape(16.dp)`，
+    // 这里必须用同一组数，否则一行字悬在中间、左右各差 4dp，看着像没对齐。
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 2.dp),
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
-    )
+            .padding(horizontal = 12.dp)
+            .padding(bottom = 6.dp),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Color.Transparent,
+            border = BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.7f)),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = formatTurnStats(stats),
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 /** 排队到下一轮的那几条：宿主不回传队列内容，这里只报数 + 头几个字。 */
