@@ -489,6 +489,9 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   最多 12%、外发光同时变亮；这不是装饰：纯色白片压在浅灰轨道上拖起来看不出在动。深色主题不能只比
   轨道亮一档（底边会和轨道糊在一起）。点按必须 `clickable(indication = null)`，
   用 `Surface(onClick)` / 水波纹会在「准备拖动」时先闪一层灰，用户当误触报过。
+  样式最终定在 **KernelSU / M3 expressive 那一路**（用户 0.5.37 给的参照）：图标在上、文字在下，
+  选中格是带投影的实心圆角块（圆角 = 高度 × 0.42），条子约 54dp 高 —— 别再退回「一条 38dp 的
+  渐变玻璃片 + 图标文字并排」，用户明确说「按钮太扁了」；吸附用 `spring(0.62, 420f)` 带一点回弹。
 
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
