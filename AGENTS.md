@@ -492,6 +492,9 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   样式最终定在 **KernelSU / M3 expressive 那一路**（用户 0.5.37 给的参照）：图标在上、文字在下，
   选中格是带投影的实心圆角块（圆角 = 高度 × 0.42），条子约 54dp 高 —— 别再退回「一条 38dp 的
   渐变玻璃片 + 图标文字并排」，用户明确说「按钮太扁了」；吸附用 `spring(0.62, 420f)` 带一点回弹。
+  最终定稿是**图标在左、文字在右、条高 42dp**（`DRAWER_BAR_HEIGHT`），三段：活动 / 聊天 / 项目；
+  三段内容切换用 `AnimatedContent`（`SessionDrawer.kt`，位移取 1/3 屏宽 + 叠化），不要改回 if/else，
+  否则切换是硬跳。
 
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），

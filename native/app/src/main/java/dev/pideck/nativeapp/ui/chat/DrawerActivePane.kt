@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,7 +25,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -41,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -54,6 +59,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.pideck.nativeapp.data.Project
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.SessionActivity
 import dev.pideck.nativeapp.ui.sessions.relativeTime
@@ -64,13 +70,14 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * 侧栏顶部的分段（桌面端那个 `Tabs` 的 `active` / `chats`，`projects` 还没做）。
+ * 侧栏顶部的分段（对应桌面端那个 `Tabs` 的 `active` / `chats` / `projects`）。
  *
- * 文案与桌面端一致：`sidebarActive` =「活动」、`sidebarChats` =「聊天」。
+ * 文案与桌面端一致：`sidebarActive` =「活动」、`sidebarChats` =「聊天」、`sidebarProjects` =「项目」。
  */
 enum class DrawerSection(val label: String, val icon: ImageVector) {
     Active("活动", Icons.Filled.Bolt),
     Chats("聊天", Icons.Filled.Forum),
+    Projects("项目", Icons.Filled.Folder),
 }
 
 /**
@@ -128,8 +135,11 @@ private const val DRAWER_RECENT_STEP = 12
 /** 「活动」段看得见时刷运行态的间隔。和后台看护的 15s 不同：这里是人在看，要跟手。 */
 private const val RUNTIMES_POLL_MS = 5_000L
 
-/** 胶囊条的内缩（拖动手感用，和样式上的 2dp 内边距是同一个数）。 */
+/** 胶囊条的内缩（拖动手感用，和样式上的内边距是同一个数）。 */
 private val DRAWER_BAR_PAD = 3.dp
+
+/** 胶囊条高度：图标与文字并排后 42dp 就够（用户指定；早先上下堆叠时是 54dp）。 */
+private val DRAWER_BAR_HEIGHT = 42.dp
 
 /** 松手后按速度往前多看多少秒：0.12s 大致等于「快速一甩前进一段」。 */
 private const val DRAG_FLING_SECONDS = 0.12f
@@ -197,7 +207,8 @@ internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(24.dp))
+            .height(DRAWER_BAR_HEIGHT + DRAWER_BAR_PAD * 2)
+            .clip(RoundedCornerShape(18.dp))
             .background(scheme.surfaceContainerHigh)
             .onSizeChanged { widthPx = it.width.toFloat() }
             .drawBehind {
@@ -276,31 +287,37 @@ internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
                 )
             },
     ) {
-        Row(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().height(DRAWER_BAR_HEIGHT),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             sections.forEach { section ->
                 val selected = section == current
-                Column(
+                Row(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(20.dp))
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(16.dp))
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                        ) { DrawerTabState.select(section) }
-                        .padding(vertical = 9.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                        ) { DrawerTabState.select(section) },
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
                         section.icon,
                         contentDescription = null,
-                        modifier = Modifier.size(19.dp),
+                        modifier = Modifier.size(17.dp),
                         tint = if (selected) glow else scheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.height(3.dp))
+                    Spacer(Modifier.width(5.dp))
                     Text(
                         section.label,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelMedium,
                         color = if (selected) glow else scheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -483,13 +500,14 @@ private fun ActiveSessionRow(
     current: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val background =
         if (current) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f) else Color.Transparent
     Surface(
         color = background,
         shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier
@@ -514,5 +532,151 @@ private fun ActiveSessionRow(
                 color = MaterialTheme.colorScheme.outline,
             )
         }
+    }
+}
+
+/**
+ * 某个项目下的会话：只算顶层会话（子代理会话挂在父会话下，展开项目时再出现一次就乱了），
+ * 按 `updatedAt` 倒序 —— 与「活动」段下半同一套顺序。
+ */
+internal fun projectDrawerSessions(sessions: List<Session>, projectId: String): List<Session> =
+    sessions
+        .filter { it.projectId == projectId && it.parentSessionId == null }
+        .sortedByDescending { it.updatedAt }
+
+/** 项目行副标题：优先露路径（同名项目时这是唯一区分），没有路径就只说会话数。 */
+internal fun projectRowSubtitle(project: Project, sessionCount: Int): String {
+    val path = project.path.trim()
+    return when {
+        path.isNotEmpty() && project.name.isNotBlank() -> path
+        path.isNotEmpty() -> path
+        else -> "共 $sessionCount 个会话"
+    }
+}
+
+/**
+ * 「项目」段：桌面端左侧栏第三枚 pill 的移动版。
+ *
+ * 桌面端那一栏是「插件分组 + 工作区项目列表」，置顶/排序走 Electron IPC，HTTP 拿不到；
+ * 手机这边就按 `lastOpenedAt` / 计数排一遍，**点一下展开该项目下的会话**（再点收起），
+ * 点会话直接进会话页。这样「按项目找会话」不必先切回「聊天」段再翻分组。
+ */
+@Composable
+internal fun DrawerProjectsPane(
+    projects: List<Project>,
+    sessions: List<Session>,
+    currentSessionId: String,
+    onPickSession: (String) -> Unit,
+    onLongClickSession: (Session) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // 展开状态不落盘：抽屉关掉再开回默认全收起，和桌面端的临时展开一致
+    var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = 12.dp),
+    ) {
+        if (projects.isEmpty()) {
+            item("projects-empty") {
+                Text(
+                    "还没有工作区（在桌面端添加项目后会出现在这里）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 14.dp),
+                )
+            }
+        }
+        projects.forEach { project ->
+            val list = projectDrawerSessions(sessions, project.id)
+            val open = project.id in expanded
+            item(key = "p-${project.id}") {
+                ProjectRow(
+                    project = project,
+                    sessionCount = list.size,
+                    expanded = open,
+                    onClick = {
+                        expanded = if (open) expanded - project.id else expanded + project.id
+                    },
+                )
+            }
+            if (open) {
+                if (list.isEmpty()) {
+                    item(key = "pe-${project.id}") {
+                        Text(
+                            "这个项目还没有会话",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 30.dp, top = 2.dp, bottom = 8.dp),
+                        )
+                    }
+                }
+                items(list, key = { "ps-${it.id}" }) { session ->
+                    ActiveSessionRow(
+                        session = session,
+                        current = session.id == currentSessionId,
+                        onClick = { onPickSession(session.id) },
+                        onLongClick = { onLongClickSession(session) },
+                        modifier = Modifier.padding(start = 14.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 项目行：文件夹图标 + 名称/路径两行 + 会话数 + 展开箭头。 */
+@Composable
+private fun ProjectRow(
+    project: Project,
+    sessionCount: Int,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.Folder,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = if (expanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(9.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                project.name.ifBlank { project.path.substringAfterLast('\\', project.path) },
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                projectRowSubtitle(project, sessionCount),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        if (sessionCount > 0) {
+            Text(
+                sessionCount.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            modifier = Modifier
+                .size(18.dp)
+                .rotate(if (expanded) 180f else 0f),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

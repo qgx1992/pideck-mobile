@@ -123,4 +123,42 @@ class DrawerActivePaneTest {
         assertEquals(1, dragTargetSection(1.3f, 0f, 3))
         assertEquals(2, dragTargetSection(1.7f, 0f, 3))
     }
+
+    // ---- 「项目」段 ----
+
+    @Test
+    fun `项目下的会话按最近更新倒序且不含子代理会话`() {
+        val sessions = listOf(
+            session(id = "a", projectId = "p1", updatedAt = 100L),
+            session(id = "b", projectId = "p1", updatedAt = 300L),
+            session(id = "c", projectId = "p2", updatedAt = 900L),
+            session(id = "sub", projectId = "p1", updatedAt = 500L, parentSessionId = "a"),
+        )
+        assertEquals(listOf("b", "a"), projectDrawerSessions(sessions, "p1").map { it.id })
+        assertEquals(listOf("c"), projectDrawerSessions(sessions, "p2").map { it.id })
+        assertEquals(emptyList<String>(), projectDrawerSessions(sessions, "p9").map { it.id })
+    }
+
+    @Test
+    fun `项目行副标题优先露路径`() {
+        assertEquals("D:\\work\\pideck", projectRowSubtitle(project(name = "PiDeck", path = "D:\\work\\pideck"), 3))
+        // 没有路径时改说会话数，不然那一行是空的
+        assertEquals("共 3 个会话", projectRowSubtitle(project(name = "PiDeck", path = ""), 3))
+    }
+
+    private fun session(
+        id: String,
+        projectId: String,
+        updatedAt: Long,
+        parentSessionId: String? = null,
+    ) = dev.pideck.nativeapp.data.Session(
+        id = id,
+        projectId = projectId,
+        title = id,
+        updatedAt = updatedAt,
+        parentSessionId = parentSessionId,
+    )
+
+    private fun project(name: String, path: String) =
+        dev.pideck.nativeapp.data.Project(id = "p-$name", name = name, path = path)
 }

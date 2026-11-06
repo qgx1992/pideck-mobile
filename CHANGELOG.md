@@ -42,7 +42,16 @@
   （浅色主题纯白、深色主题 `#3A404B`，圆角 = 高度 × 0.42），不再用渐变玻璃 + 高光边。
   吸附动画从 `tween(220)` 换成 `spring(dampingRatio = 0.62f, stiffness = 420f)`，滑过去有一点回弹；
   拖动时仍按位移比例撑开最多 12%，叠一层 6% 强调色的"正在被拖"提示。选中格图标与文字用强调色。
-- 单测 247 → 262。
+- **同版第七稿**（用户要求「图标左、文字右、42dp，加项目那一段，切换带滚动动画」）：
+  - 分段条改成**横向布局**（17dp 图标 + 5dp 间距 + `labelMedium` 文字），高度固定 **42dp**
+    （`DRAWER_BAR_HEIGHT`），条子圆角 18dp、内缩 3dp；选中块圆角仍按高度 × 0.42。
+  - 新增第三段**「项目」**（`DrawerSection.Projects`，`Icons.Filled.Folder`）：
+    `DrawerProjectsPane` 列出工作区（名称 + 路径 + 该项目的顶层会话数），点一下在行下展开
+    `projectDrawerSessions()` 排好的会话（子代理会话不算，展开状态不落盘），再点收起；
+    数据来自 `SessionsViewModel.projects`（`/api/state` 的 `projects`）。
+  - 三段内容切换改用 `AnimatedContent`：往右切从右侧推入 1/3 屏宽 + 淡入，往左切反向，
+    220ms/180ms `FastOutSlowInEasing`，两段同时在场不会先空一帧。
+  - 单测 262 → 264（`projectDrawerSessions` 排序/过滤子代理、`projectRowSubtitle` 路径优先）。
 ## 0.5.36 — 2026-11-06
 
 **新建页加思考胶囊；统计行改用宿主结算的节奏数据。**

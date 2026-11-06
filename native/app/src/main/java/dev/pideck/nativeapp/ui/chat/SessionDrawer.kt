@@ -1,5 +1,13 @@
 package dev.pideck.nativeapp.ui.chat
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.clip
@@ -13,6 +21,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -181,110 +190,144 @@ fun SessionDrawer(
         // 展开后每组先露 5 条，剩下的收进「显示其余 N 个」：项目一多整列就翻不到头
         var expandedRest by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
 
-        if (DrawerTabState.current == DrawerSection.Active) {
-            DrawerActivePane(
-                sessions = viewModel.allSessions,
-                currentSessionId = currentSessionId,
-                onPickSession = onPickSession,
-                onLongClickSession = { actions.menuSession = it },
-                onPollRuntimes = viewModel::refreshRuntimes,
-                modifier = Modifier.weight(1f),
-            )
-        } else LazyColumn(
+        // 分段内容切换带滑动动画：往右切（活动 → 聊天 → 项目）从右侧推进来，往左切反过来。
+        // 用 AnimatedContent 而不是 AnimatedVisibility —— 两段同时在场才能一边滑一边叠化，
+        // 不会出现「先空一帧再出现」。位移只取段宽的三分之一，够看出方向又不晃眼。
+        AnimatedContent(
+            targetState = DrawerTabState.current,
+            transitionSpec = {
+                val forward = targetState.ordinal >= initialState.ordinal
+                val direction = if (forward) 1 else -1
+                (slideInHorizontally(tween(durationMillis = 220, easing = FastOutSlowInEasing)) { full ->
+                    direction * full / 3
+                } + fadeIn(tween(durationMillis = 160))) togetherWith
+                    (slideOutHorizontally(tween(durationMillis = 180, easing = FastOutSlowInEasing)) { full ->
+                        -direction * full / 3
+                    } + fadeOut(tween(durationMillis = 140)))
+            },
             modifier = Modifier.weight(1f),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = 10.dp,
-                end = 10.dp,
-                bottom = 12.dp,
-            ),
-        ) {
-            groups.forEach { group ->
-                val collapsed = group.projectId in viewModel.collapsedGroups
-                // 先算出这一组当前会露哪几条：组头要不要接管「运行中」状态点就靠它判断
-                val showAllGroup = group.projectId in expandedRest
-                val previewShown = if (showAllGroup) {
-                    group.sessions
-                } else {
-                    group.sessions.take(DRAWER_SESSION_PREVIEW)
-                }
-                // 「正在动」的会话：运行中或在等用户回答 —— 完成/失败是静态结果，不需要在组头强调
-                val activeIds = group.sessions.mapNotNull { s ->
-                    val status = SessionActivity.statusOf(s.id)
-                    if (status == SessionActivity.Status.Running || status == SessionActivity.Status.Waiting) {
-                        s.id to status
+            label = "drawer-section",
+        ) { section ->
+            when (section) {
+                DrawerSection.Active -> DrawerActivePane(
+                    sessions = viewModel.allSessions,
+                    currentSessionId = currentSessionId,
+                    onPickSession = onPickSession,
+                    onLongClickSession = { actions.menuSession = it },
+                    onPollRuntimes = viewModel::refreshRuntimes,
+                    modifier = Modifier.fillMaxSize(),
+                )
+
+                DrawerSection.Projects -> DrawerProjectsPane(
+                    projects = viewModel.projects,
+                    sessions = viewModel.allSessions,
+                    currentSessionId = currentSessionId,
+                    onPickSession = onPickSession,
+                    onLongClickSession = { actions.menuSession = it },
+                    modifier = Modifier.fillMaxSize(),
+                )
+
+                DrawerSection.Chats -> LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = 10.dp,
+                    end = 10.dp,
+                    bottom = 12.dp,
+                ),
+            ) {
+                groups.forEach { group ->
+                    val collapsed = group.projectId in viewModel.collapsedGroups
+                    // 先算出这一组当前会露哪几条：组头要不要接管「运行中」状态点就靠它判断
+                    val showAllGroup = group.projectId in expandedRest
+                    val previewShown = if (showAllGroup) {
+                        group.sessions
                     } else {
-                        null
+                        group.sessions.take(DRAWER_SESSION_PREVIEW)
                     }
-                }
-                // 折叠时整组都不露行；展开但被「先露 5 条」截掉时同样看不到 —— 两种情况都由组头显示
-                val headerStatus = activeIds.firstOrNull { (id, _) -> collapsed || previewShown.none { it.id == id } }
-                    ?.second
-                item(key = "g-${group.projectId}") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 3.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .border(
-                                width = 1.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f),
-                                shape = RoundedCornerShape(12.dp),
-                            )
-                    ) {
-                        DrawerGroupHeader(
-                            name = group.projectName.ifBlank { "未命名项目" },
-                            count = group.sessions.size,
-                            collapsed = collapsed,
-                            status = headerStatus,
-                            onToggle = { viewModel.toggleGroup(group.projectId) },
-                            onLongPress = { actions.menuProject = group },
-                        )
-                        if (!collapsed) {
-                            val showAll = showAllGroup
-                            val shown = previewShown
-                            shown.forEach { session ->
-                                DrawerSessionRow(
-                                    session = session,
-                                    status = SessionActivity.statusOf(session.id),
-                                    current = session.id == currentSessionId,
-                                    acpToolName = state?.acpTools
-                                        ?.firstOrNull { it.id == session.acpToolId }
-                                        ?.name,
-                                    onClick = {
-                                        if (session.id != currentSessionId) onPickSession(session.id)
-                                    },
-                                    onLongClick = { actions.menuSession = session },
+                    // 「正在动」的会话：运行中或在等用户回答 —— 完成/失败是静态结果，不需要在组头强调
+                    val activeIds = group.sessions.mapNotNull { s ->
+                        val status = SessionActivity.statusOf(s.id)
+                        if (status == SessionActivity.Status.Running || status == SessionActivity.Status.Waiting) {
+                            s.id to status
+                        } else {
+                            null
+                        }
+                    }
+                    // 折叠时整组都不露行；展开但被「先露 5 条」截掉时同样看不到 —— 两种情况都由组头显示
+                    val headerStatus = activeIds.firstOrNull { (id, _) -> collapsed || previewShown.none { it.id == id } }
+                        ?.second
+                    item(key = "g-${group.projectId}") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .border(
+                                    width = 1.dp,
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f),
+                                    shape = RoundedCornerShape(12.dp),
                                 )
-                            }
-                            val rest = group.sessions.size - DRAWER_SESSION_PREVIEW
-                            if (rest > 0) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            expandedRest = if (showAll) {
-                                                expandedRest - group.projectId
-                                            } else {
-                                                expandedRest + group.projectId
-                                            }
-                                        }
-                                        .padding(start = 34.dp, end = 16.dp, top = 2.dp, bottom = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = if (showAll) "收起" else "显示其余 $rest 个",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary,
+                        ) {
+                            DrawerGroupHeader(
+                                name = group.projectName.ifBlank { "未命名项目" },
+                                count = group.sessions.size,
+                                collapsed = collapsed,
+                                status = headerStatus,
+                                onToggle = { viewModel.toggleGroup(group.projectId) },
+                                onLongPress = { actions.menuProject = group },
+                            )
+                            if (!collapsed) {
+                                val showAll = showAllGroup
+                                val shown = previewShown
+                                shown.forEach { session ->
+                                    DrawerSessionRow(
+                                        session = session,
+                                        status = SessionActivity.statusOf(session.id),
+                                        current = session.id == currentSessionId,
+                                        acpToolName = state?.acpTools
+                                            ?.firstOrNull { it.id == session.acpToolId }
+                                            ?.name,
+                                        onClick = {
+                                            if (session.id != currentSessionId) onPickSession(session.id)
+                                        },
+                                        onLongClick = { actions.menuSession = session },
                                     )
+                                }
+                                val rest = group.sessions.size - DRAWER_SESSION_PREVIEW
+                                if (rest > 0) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                expandedRest = if (showAll) {
+                                                    expandedRest - group.projectId
+                                                } else {
+                                                    expandedRest + group.projectId
+                                                }
+                                            }
+                                            .padding(start = 34.dp, end = 16.dp, top = 2.dp, bottom = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = if (showAll) "收起" else "显示其余 $rest 个",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                }
+
+                // 展开后每组先露 5 条，剩下的收进「显示其余 N 个」：项目一多整列就翻不到头
+                // （变量声明那段仍在原处，见上方 expandedRest）
             }
         }
-
     }
+
+
 
     RowActionsHost(
         state = actions,

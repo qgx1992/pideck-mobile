@@ -134,6 +134,10 @@ class SessionsViewModel @Inject constructor(
     val allSessions: List<dev.pideck.nativeapp.data.Session>
         get() = groups.flatMap { it.sessions }.sortedByDescending { it.updatedAt }
 
+    /** 工作区列表（置顶优先、最近打开靠前）：抽屉「项目」段直接用，排序口径与列表页一致。 */
+    val projects: List<dev.pideck.nativeapp.data.Project>
+        get() = state?.projects.orEmpty()
+
     /** 项目名查表（会话行要显示它属于哪个工作区）。查不到给空串，调用方自己兜底。 */
     fun projectNameOf(projectId: String): String {
         val snapshot = state ?: return ""
