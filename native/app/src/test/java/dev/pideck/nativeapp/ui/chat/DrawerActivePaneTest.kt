@@ -74,4 +74,53 @@ class DrawerActivePaneTest {
         DrawerTabState.reset()
         assertEquals(DrawerSection.Chats, DrawerTabState.current)
     }
+
+    // ---- 胶囊条拖动吸附（`dragTargetSection`）----
+
+    @Test
+    fun `没拖动时吸附回原段`() {
+        assertEquals(0, dragTargetSection(0f, 0f, 2))
+        assertEquals(1, dragTargetSection(1f, 0f, 2))
+    }
+
+    @Test
+    fun `拖不到一半就回弹`() {
+        assertEquals(0, dragTargetSection(0.3f, 0f, 2))
+        assertEquals(1, dragTargetSection(0.7f, 0f, 2))
+    }
+
+    @Test
+    fun `拖过一半就前进一段`() {
+        assertEquals(1, dragTargetSection(0.55f, 0f, 2))
+        assertEquals(0, dragTargetSection(0.45f, 0f, 2))
+    }
+
+    @Test
+    fun `快速一甩即使没拖过一半也会前进`() {
+        // 0.2 段 + 每秒 8 段 × 0.12s ≈ 1.16 段 → 吸附到第 2 段
+        assertEquals(1, dragTargetSection(0.2f, 8f, 2))
+        // 反方向同理
+        assertEquals(0, dragTargetSection(0.8f, -8f, 2))
+    }
+
+    @Test
+    fun `拖出边界时夹在两端`() {
+        assertEquals(0, dragTargetSection(-0.6f, -20f, 2))
+        assertEquals(1, dragTargetSection(1.6f, 20f, 2))
+        assertEquals(2, dragTargetSection(2.4f, 0f, 3))
+        assertEquals(0, dragTargetSection(-0.4f, 0f, 3))
+    }
+
+    @Test
+    fun `只有一段时永远吸附回 0`() {
+        assertEquals(0, dragTargetSection(0.9f, 40f, 1))
+        assertEquals(0, dragTargetSection(-0.9f, -40f, 1))
+    }
+
+    @Test
+    fun `三段时按连续位置取最近一段`() {
+        assertEquals(0, dragTargetSection(0.4f, 0f, 3))
+        assertEquals(1, dragTargetSection(1.3f, 0f, 3))
+        assertEquals(2, dragTargetSection(1.7f, 0f, 3))
+    }
 }

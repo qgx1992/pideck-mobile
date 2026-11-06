@@ -24,7 +24,12 @@
   （装载着运行时的 agent，`idle` 也在），`collectRecentActivityRows` 再用 `activeSessionIds`
   去重 —— 照这个改：上半 `SessionActivity.loadedSessionIds` 命中即列出，下半排除它们。
   中间还试过「全部会话一条平铺列表」，那也不对（那份是没分组时的旧样子，不是活动段）。
-- 单测 247 → 255。
+- **活动 / 聊天那排 pill 可以左右拖**（同版第四稿）：实心底块跟着手走，松手吸附到最近一段并
+  切过去（位移过半，或快速一甩 —— 速度按 0.12s 预测位移），点按还是直接跳。吸附判定抽成纯函数
+  `dragTargetSection(offsetFraction, velocitySectionsPerSecond, count)`，多段（以后加「项目」）自然支持。
+  指示块用 `drawBehind` 画（读 `Animatable.value` 只重绘不重排），速度用 `VelocityTracker` 自己算
+  —— `detectHorizontalDragGestures` 的 `onDragEnd` 不带速度。
+- 单测 247 → 262。
 ## 0.5.36 — 2026-11-06
 
 **新建页加思考胶囊；统计行改用宿主结算的节奏数据。**

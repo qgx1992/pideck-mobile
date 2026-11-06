@@ -1,7 +1,12 @@
 package dev.pideck.nativeapp.ui.chat
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,14 +27,25 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -38,6 +54,8 @@ import dev.pideck.nativeapp.data.SessionActivity
 import dev.pideck.nativeapp.ui.sessions.relativeTime
 import dev.pideck.nativeapp.ui.theme.softPress
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * 侧栏顶部的分段（桌面端那个 `Tabs` 的 `active` / `chats`，`projects` 还没做）。
@@ -104,60 +122,158 @@ private const val DRAWER_RECENT_STEP = 12
 /** 「活动」段看得见时刷运行态的间隔。和后台看护的 15s 不同：这里是人在看，要跟手。 */
 private const val RUNTIMES_POLL_MS = 5_000L
 
+/** 胶囊条的内缩（拖动手感用，和样式上的 2dp 内边距是同一个数）。 */
+private val DRAWER_BAR_PAD = 2.dp
+
+/** 松手后按速度往前多看多少秒：0.12s 大致等于「快速一甩前进一段」。 */
+private const val DRAG_FLING_SECONDS = 0.12f
+
 /**
- * 侧栏顶部那一排分段（桌面端 `Tabs` 的 pill 变体）：一枚胶囊里并排两段，选中那段是
- * 实心底 + 正文色，未选是透明底 + 次要色。
+ * 松手时该吸附到哪一段。
  *
- * 抽屉总宽 300dp，两段各占一半、图标 14dp + 两字标签，还剩不少余量；等「项目」那段也做进来
- * 时三段均分也放得下。
+ * @param offsetFraction 指示块此刻的连续位置（0 = 第一段，1 = 第二段……）
+ * @param velocitySectionsPerSecond 每秒划过多少段（横向速度 ÷ 段宽）
+ * @param count 段数
+ */
+internal fun dragTargetSection(
+    offsetFraction: Float,
+    velocitySectionsPerSecond: Float,
+    count: Int,
+): Int {
+    if (count <= 1) return 0
+    val predicted = offsetFraction + velocitySectionsPerSecond * DRAG_FLING_SECONDS
+    return predicted.roundToInt().coerceIn(0, count - 1)
+}
+
+/**
+ * 侧栏顶部那一排分段（活动 / 聊天）。
+ *
+ * **可以左右拖**（0.5.37 用户要求「拖动到哪一类就展开哪一类」）：实心底跟着手走，松手吸附到
+ * 最近一段并切过去；点按照旧直接跳。拖动只影响指示块的位置，列表内容仍是瞬时替换，
+ * 但切换发生在**松手那一刻**，所以拖到位即展开对应分类。
+ *
+ * 实现要点：指示块用 `drawBehind` 画（读 `Animatable.value` 只触发重绘、不触发布局），
+ * 这样段宽不用等布局收敛；速度用 `VelocityTracker` 自己算 —— `detectHorizontalDragGestures`
+ * 的 `onDragEnd` 不带速度。
  */
 @Composable
 internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
+    val sections = DrawerSection.entries
+    val count = sections.size
     val current = DrawerTabState.current
-    Row(
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val indicatorColor = MaterialTheme.colorScheme.surface
+    val padPx = with(density) { DRAWER_BAR_PAD.toPx() }
+    var widthPx by remember { mutableFloatStateOf(0f) }
+    val segmentPx = if (widthPx > 0f) (widthPx - padPx * 2f) / count else 0f
+    val offset = remember { Animatable(0f) }
+
+    // 选中项变化（点按 / 拖到位 / 别处改状态）都滑到目标位置
+    LaunchedEffect(current, segmentPx) {
+        if (segmentPx > 0f) {
+            offset.animateTo(
+                targetValue = current.ordinal * segmentPx,
+                animationSpec = tween(220, easing = FastOutSlowInEasing),
+            )
+        }
+    }
+
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(50))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f))
-            .padding(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+            .onSizeChanged { widthPx = it.width.toFloat() }
+            .drawBehind {
+                if (segmentPx > 0f) {
+                    drawRoundRect(
+                        color = indicatorColor,
+                        topLeft = Offset(offset.value + padPx, padPx),
+                        size = Size(segmentPx, (size.height - padPx * 2f).coerceAtLeast(0f)),
+                        cornerRadius = CornerRadius((size.height - padPx * 2f) / 2f),
+                    )
+                }
+            }
+            .pointerInput(count, segmentPx) {
+                if (segmentPx <= 0f) return@pointerInput
+                val maxOffset = (count - 1) * segmentPx
+                val tracker = VelocityTracker()
+                fun settle(target: Int) {
+                    if (sections[target] != DrawerTabState.current) {
+                        // 交给上面那个 LaunchedEffect 滑过去（keys 变了才会重跑）
+                        DrawerTabState.select(sections[target])
+                    } else {
+                        scope.launch {
+                            offset.animateTo(
+                                targetValue = target * segmentPx,
+                                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                            )
+                        }
+                    }
+                }
+                detectHorizontalDragGestures(
+                    onDragStart = { tracker.resetTracking() },
+                    onDragCancel = { settle(dragTargetSection(offset.value / segmentPx, 0f, count)) },
+                    onHorizontalDrag = { change, dragAmount ->
+                        tracker.addPosition(change.uptimeMillis, change.position)
+                        change.consume()
+                        scope.launch { offset.snapTo((offset.value + dragAmount).coerceIn(0f, maxOffset)) }
+                    },
+                    onDragEnd = {
+                        val velocityPx = runCatching { tracker.calculateVelocity().x }.getOrDefault(0f)
+                        settle(
+                            dragTargetSection(
+                                offsetFraction = offset.value / segmentPx,
+                                velocitySectionsPerSecond = velocityPx / segmentPx,
+                                count = count,
+                            ),
+                        )
+                    },
+                )
+            },
     ) {
-        DrawerSection.entries.forEach { section ->
-            val selected = section == current
-            Surface(
-                onClick = { DrawerTabState.select(section) },
-                shape = RoundedCornerShape(50),
-                color = if (selected) MaterialTheme.colorScheme.surface else Color.Transparent,
-                modifier = Modifier.weight(1f),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(0.dp),
+        ) {
+            sections.forEach { section ->
+                val selected = section == current
+                Surface(
+                    onClick = { DrawerTabState.select(section) },
+                    shape = RoundedCornerShape(50),
+                    color = Color.Transparent,
+                    modifier = Modifier.weight(1f),
                 ) {
-                    Icon(
-                        section.icon,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                        tint = if (selected) {
-                            MaterialTheme.colorScheme.onSurface
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                    Spacer(Modifier.width(5.dp))
-                    Text(
-                        section.label,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.onSurface
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            section.icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = if (selected) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            section.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
                 }
             }
         }

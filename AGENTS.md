@@ -479,6 +479,12 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   桌面端上半是 agent 级（子代理单列），手机只到会话级（子代理要逐会话请求 `/api/sessions/:id/subagents`）；
   桌面端的插件分组区（`desktopApi.sessionGroups.list()`）走 IPC，手机拿不到，这两处不复刻。
   改这个文件别用「截到最后一个 `}`」这类写法 —— `ActiveSessionRow` 曾被一次批量改写误删。
+  **那排 pill 是可拖的**（`DrawerSectionBar`，用户 0.5.37 要求「拖动到哪一类就展开哪一类」）：
+  实心底块用 `Animatable` 跟手，松手按 `dragTargetSection(连续位置, 每秒段数, 段数)` 吸附，
+  速度按 `DRAG_FLING_SECONDS = 0.12f` 预测位移；`detectHorizontalDragGestures` 的 `onDragEnd`
+  **不带速度**，要用 `VelocityTracker.addPosition(change.uptimeMillis, change.position)` 自己攒
+  （`addPointerInputChange` 在当前 Compose 版本里解析不到）。指示块画在 `drawBehind` 里，
+  段宽取 `onSizeChanged` 的实测宽度 —— 别改成布局里的 `offset` 子节点，那样每帧都要重排。
 
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
