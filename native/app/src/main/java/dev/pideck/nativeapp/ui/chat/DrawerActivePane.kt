@@ -286,9 +286,15 @@ internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
                     },
                 )
             },
+        // 三格必须落在选择块的坐标里：Box 的内边距不参与布局，不补这两处
+        // 文字会整体偏上 3dp、外侧两格还会各偏 1dp 左右（用户报「文本在遮罩里不够居中」）
+        contentAlignment = Alignment.Center,
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(DRAWER_BAR_HEIGHT),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(DRAWER_BAR_HEIGHT)
+                .padding(horizontal = DRAWER_BAR_PAD),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             sections.forEach { section ->
@@ -532,151 +538,5 @@ private fun ActiveSessionRow(
                 color = MaterialTheme.colorScheme.outline,
             )
         }
-    }
-}
-
-/**
- * 某个项目下的会话：只算顶层会话（子代理会话挂在父会话下，展开项目时再出现一次就乱了），
- * 按 `updatedAt` 倒序 —— 与「活动」段下半同一套顺序。
- */
-internal fun projectDrawerSessions(sessions: List<Session>, projectId: String): List<Session> =
-    sessions
-        .filter { it.projectId == projectId && it.parentSessionId == null }
-        .sortedByDescending { it.updatedAt }
-
-/** 项目行副标题：优先露路径（同名项目时这是唯一区分），没有路径就只说会话数。 */
-internal fun projectRowSubtitle(project: Project, sessionCount: Int): String {
-    val path = project.path.trim()
-    return when {
-        path.isNotEmpty() && project.name.isNotBlank() -> path
-        path.isNotEmpty() -> path
-        else -> "共 $sessionCount 个会话"
-    }
-}
-
-/**
- * 「项目」段：桌面端左侧栏第三枚 pill 的移动版。
- *
- * 桌面端那一栏是「插件分组 + 工作区项目列表」，置顶/排序走 Electron IPC，HTTP 拿不到；
- * 手机这边就按 `lastOpenedAt` / 计数排一遍，**点一下展开该项目下的会话**（再点收起），
- * 点会话直接进会话页。这样「按项目找会话」不必先切回「聊天」段再翻分组。
- */
-@Composable
-internal fun DrawerProjectsPane(
-    projects: List<Project>,
-    sessions: List<Session>,
-    currentSessionId: String,
-    onPickSession: (String) -> Unit,
-    onLongClickSession: (Session) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    // 展开状态不落盘：抽屉关掉再开回默认全收起，和桌面端的临时展开一致
-    var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = 12.dp),
-    ) {
-        if (projects.isEmpty()) {
-            item("projects-empty") {
-                Text(
-                    "还没有工作区（在桌面端添加项目后会出现在这里）",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 14.dp),
-                )
-            }
-        }
-        projects.forEach { project ->
-            val list = projectDrawerSessions(sessions, project.id)
-            val open = project.id in expanded
-            item(key = "p-${project.id}") {
-                ProjectRow(
-                    project = project,
-                    sessionCount = list.size,
-                    expanded = open,
-                    onClick = {
-                        expanded = if (open) expanded - project.id else expanded + project.id
-                    },
-                )
-            }
-            if (open) {
-                if (list.isEmpty()) {
-                    item(key = "pe-${project.id}") {
-                        Text(
-                            "这个项目还没有会话",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 30.dp, top = 2.dp, bottom = 8.dp),
-                        )
-                    }
-                }
-                items(list, key = { "ps-${it.id}" }) { session ->
-                    ActiveSessionRow(
-                        session = session,
-                        current = session.id == currentSessionId,
-                        onClick = { onPickSession(session.id) },
-                        onLongClick = { onLongClickSession(session) },
-                        modifier = Modifier.padding(start = 14.dp),
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** 项目行：文件夹图标 + 名称/路径两行 + 会话数 + 展开箭头。 */
-@Composable
-private fun ProjectRow(
-    project: Project,
-    sessionCount: Int,
-    expanded: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            Icons.Filled.Folder,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-            tint = if (expanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(9.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                project.name.ifBlank { project.path.substringAfterLast('\\', project.path) },
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                projectRowSubtitle(project, sessionCount),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(Modifier.width(6.dp))
-        if (sessionCount > 0) {
-            Text(
-                sessionCount.toString(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Icon(
-            Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-            modifier = Modifier
-                .size(18.dp)
-                .rotate(if (expanded) 180f else 0f),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

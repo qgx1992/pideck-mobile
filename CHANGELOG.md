@@ -52,6 +52,25 @@
   - 三段内容切换改用 `AnimatedContent`：往右切从右侧推入 1/3 屏宽 + 淡入，往左切反向，
     220ms/180ms `FastOutSlowInEasing`，两段同时在场不会先空一帧。
   - 单测 262 → 264（`projectDrawerSessions` 排序/过滤子代理、`projectRowSubtitle` 路径优先）。
+- **同版第八稿**（用户：「项目类应该显示之前聊天类的内容，UI 也没匹配，对齐桌面端看看这两项显示什么」）：
+  对的，第七稿把「项目」做成了「项目行 + 点开才展开会话」，而桌面端的 `projects` 段和 `chats` 段
+  **是同一套渲染、只是项目集合不同** —— `chatProjects = rootProjects.filter(isChatProject)`、
+  `workspaceProjects = rootProjects.filter(p => !isChatProject(p))`，而
+  `isChatProject(project) === project.kind === "chat"`。所以：
+  - 两段共用一个 `DrawerGroupList`（原来「聊天」那个按项目分组的列表整段抽出来），
+    都是「项目头 + 该项目下的会话树」，点组头折叠、每组先露 5 条。
+  - **聊天** = `kind == "chat"` 的项目；**项目** = 其余工作区，**没有会话的项目也列出来**
+    （桌面端就是这个用意，本机实测 9 个项目里 8 个是工作区，会话数从 1 到 85 不等）。
+    分组口径抽成纯函数 `projectGroupsOf(projects, sessions, chat)` + `isChatProject(project)`，
+    组内按 `updatedAt` 倒序、剔除子代理会话，项目按置顶 → 最近打开 → 名称排序。
+  - 删掉第七稿的 `DrawerProjectsPane` / `ProjectRow` / `projectDrawerSessions` / `projectRowSubtitle`
+    （被同一条渲染取代，留着就是第二份实现）。
+  - 修**分段条文字不居中**：选择块是 `drawBehind` 按「宽度减掉 `DRAWER_BAR_PAD`」画的，
+    而格子 `Row` 是从 0 开始铺满，于是文字整体偏上 3dp、外侧两格各偏约 1dp。
+    现在 `Box(contentAlignment = Center)` + 格子行补 `padding(horizontal = DRAWER_BAR_PAD)`，
+    文字与选择块同心。
+  - 单测 268（新增 `ProjectGroupsTest` 6 条：kind 切分、空项目保留、组内倒序/去子代理、
+    置顶优先、项目名回退目录名）。
 ## 0.5.36 — 2026-11-06
 
 **新建页加思考胶囊；统计行改用宿主结算的节奏数据。**

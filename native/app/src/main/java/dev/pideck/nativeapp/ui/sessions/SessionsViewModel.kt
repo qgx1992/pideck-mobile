@@ -31,6 +31,47 @@ data class SessionGroup(
     val sessions: List<Session>,
 )
 
+/**
+ * 桌面端把项目分成两类：`kind === "chat"` 的是「聊天」项目（侧栏 `chats` 段），
+ * 其余是工作区（`projects` 段）。判定就这一个字段，别再自己猜名字/路径。
+ */
+internal fun isChatProject(project: dev.pideck.nativeapp.data.Project?): Boolean =
+    project?.kind == "chat"
+
+/**
+ * 按项目分好组的会话列表（抽屉「聊天」与「项目」两段共用）。
+ *
+ * 桌面端这两段是**同一套渲染、不同的项目集合**：`chats` = `chatProjects`，`projects` = `workspaceProjects`；
+ * 两段都是「项目头 + 该项目下的会话树」。手机照同一个口径切。
+ *
+ * 只算顶层会话（子代理会话挂在父会话下，展开分组时再出现一次就乱了），按 `updatedAt` 倒序；
+ * 没有会话的项目也保留 —— 桌面端的「项目」段就是要把空工作区也列出来。
+ */
+internal fun projectGroupsOf(
+    projects: List<dev.pideck.nativeapp.data.Project>,
+    sessions: List<Session>,
+    chat: Boolean,
+): List<SessionGroup> {
+    val byProject = sessions
+        .filter { it.parentSessionId == null }
+        .groupBy { it.projectId }
+    return projects
+        .filter { isChatProject(it) == chat }
+        .sortedWith(
+            compareByDescending<dev.pideck.nativeapp.data.Project> { it.pinned }
+                .thenByDescending { it.lastOpenedAt }
+                .thenBy { it.name },
+        )
+        .map { project ->
+            SessionGroup(
+                projectId = project.id,
+                projectName = project.name.ifBlank { project.path.substringAfterLast('/').ifBlank { project.path } },
+                projectPath = project.path.ifBlank { null },
+                sessions = byProject[project.id].orEmpty().sortedByDescending { it.updatedAt },
+            )
+        }
+}
+
 @HiltViewModel
 class SessionsViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -137,6 +178,10 @@ class SessionsViewModel @Inject constructor(
     /** 工作区列表（置顶优先、最近打开靠前）：抽屉「项目」段直接用，排序口径与列表页一致。 */
     val projects: List<dev.pideck.nativeapp.data.Project>
         get() = state?.projects.orEmpty()
+
+    /** 抽屉里那两段：`chat = true` 拿「聊天」项目，`false` 拿工作区。 */
+    fun projectGroups(chat: Boolean): List<SessionGroup> =
+        projectGroupsOf(projects, allSessions, chat)
 
     /** 项目名查表（会话行要显示它属于哪个工作区）。查不到给空串，调用方自己兜底。 */
     fun projectNameOf(projectId: String): String {

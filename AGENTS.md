@@ -495,6 +495,19 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   最终定稿是**图标在左、文字在右、条高 42dp**（`DRAWER_BAR_HEIGHT`），三段：活动 / 聊天 / 项目；
   三段内容切换用 `AnimatedContent`（`SessionDrawer.kt`，位移取 1/3 屏宽 + 叠化），不要改回 if/else，
   否则切换是硬跳。
+  **「聊天」与「项目」是同一套渲染、不同项目集合**（用户 0.5.37 第八稿纠正过一次）：桌面端
+  `chatProjects = rootProjects.filter(isChatProject)`、`workspaceProjects = rootProjects.filter(p => !isChatProject(p))`，
+  而 `isChatProject(project) === project.kind === "chat"`；两段都渲染 `renderProject`（项目头 + `SessionTree`）。
+  所以手机这边只有一份 `private fun DrawerGroupList(...)`（`SessionDrawer.kt`），调用方传
+  `viewModel.projectGroups(chat = true / false)`。口径在 `ui/sessions/SessionsViewModel.kt` 的纯函数
+  `projectGroupsOf(projects, sessions, chat)` + `isChatProject(project)`：组内只放顶层会话
+  （`parentSessionId == null`）、按 `updatedAt` 倒序，项目按置顶 → 最近打开 → 名称排序，
+  **没有会话的项目也要留在「项目」段**（桌面端就是这个用意：本机 9 个项目里 8 个是工作区）。
+  别再做成「项目行点开才展开会话」那一版（`DrawerProjectsPane` 已删），那是第七稿的错解。
+  选择块的坐标是按 `(高度 - DRAWER_BAR_PAD*2)` / `DRAWER_BAR_PAD` 用 `drawBehind` 画的，
+  格子行必须 `contentAlignment = Center` + `padding(horizontal = DRAWER_BAR_PAD)`，否则文字
+  整体偏上 3dp、外侧两格各偏 1dp（用户报「文本在遮罩里不够居中」）。
+  守门测试 `native/app/src/test/java/dev/pideck/nativeapp/ui/sessions/ProjectGroupsTest.kt`（6 条）。
 
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
