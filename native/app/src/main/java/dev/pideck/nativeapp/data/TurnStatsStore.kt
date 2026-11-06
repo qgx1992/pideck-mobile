@@ -80,7 +80,7 @@ object TurnStatsStore {
 
     private fun decode(line: String): Pair<String, TurnStats>? {
         val parts = line.split('\t')
-        if (parts.size != 7) return null
+        if (parts.size != 8) return null
         fun long(i: Int): Long? = parts[i].toLongOrNull()
         fun int(i: Int): Int? = parts[i].toIntOrNull()
         fun double(i: Int): Double? = parts[i].toDoubleOrNull()
@@ -90,7 +90,8 @@ object TurnStatsStore {
             outputTokens = int(3),
             tps = double(4),
             endToEndTps = double(5),
-            cacheHit = double(6),
+            averageTps = double(6),
+            cacheHit = double(7),
         )
         return if (stats.isEmpty) null else parts[0] to stats
     }

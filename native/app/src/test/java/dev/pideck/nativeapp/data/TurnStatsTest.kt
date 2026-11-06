@@ -112,15 +112,16 @@ class TurnStatsTest {
             outputTokens = 640,
             tps = 152.0,
             endToEndTps = 96.0,
+            averageTps = 197.4,
             cacheHit = 99.44,
         )
         assertEquals(
-            "首字 2.8s · 生成 152 tok/s · 全程 96 tok/s · 命中 99%",
+            "首字 2.8s · 流式 152 tok/s · 匀速 197 tok/s · 命中 99%",
             formatTurnStats(stats),
         )
         // 小数位只给小数值（0.4% 那种），整数部分不四舍五入成 0%
         assertEquals(
-            "首字 — · 生成 — tok/s · 全程 — tok/s · 命中 0.4%",
+            "首字 — · 流式 — tok/s · 匀速 — tok/s · 命中 0.4%",
             formatTurnStats(TurnStats(cacheHit = 0.42)),
         )
     }
@@ -138,8 +139,8 @@ class TurnStatsTest {
     fun `acp 那种什么都没有的回合也留一行占位，不隐藏`() {
         val stats = turnStatsFromMeta(meta = null, clock = null)
         assertTrue(stats.isEmpty)
-        assertEquals("首字 — · 生成 — tok/s · 全程 — tok/s · 命中 —", formatTurnStats(stats))
-        assertEquals("统计行本身为空也不该消失", "首字 — · 生成 — tok/s · 全程 — tok/s · 命中 —", formatTurnStats(null))
+        assertEquals("首字 — · 流式 — tok/s · 匀速 — tok/s · 命中 —", formatTurnStats(stats))
+        assertEquals("统计行本身为空也不该消失", "首字 — · 流式 — tok/s · 匀速 — tok/s · 命中 —", formatTurnStats(null))
     }
 
     @Test
@@ -165,7 +166,7 @@ class TurnStatsTest {
         assertEquals(90, stats.outputTokens)
         assertNull(stats.totalMs)
         assertNull(stats.tps)
-        assertEquals("首字 — · 生成 — tok/s · 全程 — tok/s · 命中 —", formatTurnStats(stats))
+        assertEquals("首字 — · 流式 — tok/s · 匀速 — tok/s · 命中 —", formatTurnStats(stats))
     }
 
     @Test
@@ -178,18 +179,18 @@ class TurnStatsTest {
             endToEndTps = 240.0,
         )
         assertEquals(
-            "首字 1.0s · 生成 300 tok/s · 全程 240 tok/s · 命中 —",
+            "首字 1.0s · 流式 300 tok/s · 匀速 — tok/s · 命中 —",
             formatTurnStats(stats),
         )
     }
 
     @Test
     fun `毫秒与长耗时各用各的单位`() {
-        assertEquals("首字 640 ms · 生成 — tok/s · 全程 — tok/s · 命中 —", formatTurnStats(TurnStats(ttftMs = 640L)))
-        assertEquals("首字 12s · 生成 — tok/s · 全程 — tok/s · 命中 —", formatTurnStats(TurnStats(ttftMs = 12_300L)))
+        assertEquals("首字 640 ms · 流式 — tok/s · 匀速 — tok/s · 命中 —", formatTurnStats(TurnStats(ttftMs = 640L)))
+        assertEquals("首字 12s · 流式 — tok/s · 匀速 — tok/s · 命中 —", formatTurnStats(TurnStats(ttftMs = 12_300L)))
         // 一位小数的速度
         assertEquals(
-            "首字 — · 生成 9.6 tok/s · 全程 — tok/s · 命中 —",
+            "首字 — · 流式 9.6 tok/s · 匀速 — tok/s · 命中 —",
             formatTurnStats(TurnStats(outputTokens = 96, tps = 9.55)),
         )
     }
@@ -284,12 +285,14 @@ class TurnStatsTest {
         val stats = deriveTurnStats(
             clock = clock(1_000L, 3_000L, 9_000L, requestSentAt = 1_100L),
             outputTokens = 1_248,
-            host = HostTurnPerf(ttftMs = 2_800L, totalMs = 10_591L, tps = 150.0, endToEndTps = 117.82),
+            host = HostTurnPerf(ttftMs = 2_800L, totalMs = 10_591L, tps = 150.0, endToEndTps = 117.82, sessionTps = 197.4),
         )
         assertEquals(2_800L, stats.ttftMs)
         assertEquals(10_591L, stats.totalMs)
         assertEquals(1_248, stats.outputTokens)
         assertEquals(117.8, stats.endToEndTps!!, 0.05)
+        // 「匀速」用会话级的平均流式速度，不是本轮端到端
+        assertEquals(197.4, stats.averageTps!!, 0.001)
     }
 
     @Test
@@ -307,10 +310,11 @@ class TurnStatsTest {
 
     @Test
     fun `宿主 perf 解析：四件套齐全才算有，空对象返回 null`() {
-        val perf = parseHostTurnPerf(meta("""{"ttftMs":2800,"totalMs":10591,"tps":150.2,"endToEndTps":117.8,"perfAt":1793953850056}"""))
+        val perf = parseHostTurnPerf(meta("""{"ttftMs":2800,"totalMs":10591,"tps":150.2,"endToEndTps":117.8,"sessionTps":197.4,"perfAt":1793953850056}"""))
         assertEquals(2_800L, perf?.ttftMs)
         assertEquals(10_591L, perf?.totalMs)
         assertEquals(150.2, perf!!.tps!!, 0.001)
+        assertEquals(197.4, perf.sessionTps!!, 0.001)
         assertEquals(1793953850056L, perf.at)
         assertNull(parseHostTurnPerf(meta("""{}""")))
         assertNull(parseHostTurnPerf(null))

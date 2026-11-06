@@ -29,6 +29,9 @@ data class TurnStats(
     val outputTokens: Int? = null,
     val tps: Double? = null,
     val endToEndTps: Double? = null,
+    /** 整段会话的平均流式速度（宿主 `sessionTps`，桌面端「会话平均流式 TPS」）。 */
+    val averageTps: Double? = null,
+
     /** 缓存命中率（`runtime/state` 的 `cacheHitPercent`，宿主按最近一次回复算的）。 */
     val cacheHit: Double? = null,
 ) {
@@ -161,6 +164,7 @@ fun deriveTurnStats(
         } else {
             host?.endToEndTps
         },
+        averageTps = host?.sessionTps,
         cacheHit = cacheHit?.takeIf { it >= 0.0 },
     )
 }
@@ -208,10 +212,11 @@ fun turnStatsFromMeta(
 fun formatTurnStats(stats: TurnStats?): String {
     val ttft = stats?.ttftMs?.let(::formatMs) ?: "—"
     val tps = stats?.tps?.let(::formatTps) ?: "—"
-    val e2e = stats?.endToEndTps?.let(::formatTps) ?: "—"
+    // 「匀速」不是本轮端到端，而是**整段会话**的平均流式速度（桌面端「会话平均流式 TPS」）：
+    // 用户要的就是那个数，缺了宁可显示 — 也别拿另一套口径顶上去。
+    val average = stats?.averageTps?.let(::formatTps) ?: "—"
     val hit = stats?.cacheHit?.let(::formatPercent) ?: "—"
-    // 从左到右：等首字多久 → 吐字多快 → 整轮平均 → 这份上下文有多省（缓存命中）。
-    return "首字 $ttft · 生成 $tps tok/s · 全程 $e2e tok/s · 命中 $hit"
+    return "首字 $ttft · 流式 $tps tok/s · 匀速 $average tok/s · 命中 $hit"
 }
 
 /** 命中率：≥10% 取整（96%），小数值留一位（0.4%），与上下文弹层同一口径。 */

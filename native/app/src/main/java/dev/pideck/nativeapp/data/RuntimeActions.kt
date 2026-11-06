@@ -68,9 +68,12 @@ data class HostTurnPerf(
     val totalMs: Long? = null,
     val tps: Double? = null,
     val endToEndTps: Double? = null,
+    /** 整段会话的平均流式速度（桌面端上下文弹层里那行「会话平均流式 TPS」，`sessionTps`）。 */
+    val sessionTps: Double? = null,
     val at: Long = 0L,
 ) {
-    val known: Boolean get() = ttftMs != null || totalMs != null || tps != null || endToEndTps != null
+    val known: Boolean get() =
+        ttftMs != null || totalMs != null || tps != null || endToEndTps != null || sessionTps != null
 }
 
 /** 运行时状态 → [RuntimeSnapshot]；任何字段缺失都当没有，不猜。 */
@@ -96,6 +99,7 @@ fun parseHostTurnPerf(root: JsonElement?): HostTurnPerf? {
         totalMs = ms("totalMs"),
         tps = num("tps")?.takeIf { it > 0.0 },
         endToEndTps = num("endToEndTps")?.takeIf { it > 0.0 },
+        sessionTps = num("sessionTps")?.takeIf { it > 0.0 },
         at = ms("perfAt") ?: 0L,
     )
     return perf.takeIf { it.known }

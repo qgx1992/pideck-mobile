@@ -1249,6 +1249,8 @@ class ChatViewModel @Inject constructor(
                 null
             },
             endToEndTps = if (tokens != null && total >= 100L) tokens / (total / 1000.0) else null,
+            // 「匀速」= 整段会话的平均流式速度，宿主每拍都给，刷新时跟着一起更新。
+            averageTps = snapshot.perf?.sessionTps,
             cacheHit = hit,
         )
     }

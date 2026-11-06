@@ -404,10 +404,12 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   「每 2 秒按字数估 token」已经删掉（`estimateOutputTokens` 也一并删了）——估出来的 `≈` 数
   会在收尾时跳一下，用户明确不要。代价是长文本单步跑到一半这一行不动，宿主本来也是落一步
   才结算一次。
-  **这一行不显示 tok 数**：从左到右是 首字 · 生成 tok/s · 全程 tok/s · 命中率
-  （`formatTurnStats`，缺项一律 `—`）。tokens 只作为算速度的中间量（`TurnStats.outputTokens`），
-  不往屏幕上放；命中率取 `runtime/state` 的 `cacheHitPercent`（宿主按最近一次回复算的，
-  与桌面端同源），拿不到显示 `—`。
+  **这一行的四段**（`formatTurnStats`，缺项一律 `—`）：`首字 X · 流式 Y tok/s · 匀速 Z tok/s · 命中 H`
+  - `流式` = `perf.tps`（本轮生成速度，桌面端「流式 TPS」）；
+  - `匀速` = `perf.sessionTps`（**整段会话**的平均流式速度，桌面端上下文弹层里「会话平均流式 TPS」那行
+    197 tok/s 就是它）。**不是**本轮的 `endToEndTps` —— 别再拿端到端顶上去（用户 0.5.36 明确换掉的）；
+  - `命中` = `usage.cacheHitPercent`（宿主按最近一次回复算的）；
+  - **不显示 tok 数**：tokens 只是算速度的中间量（`TurnStats.outputTokens`），不往屏幕上放。
   **收尾的真值优先取宿主自己结算的那份**（0.5.36 起）：`POST /api/sessions/:id/runtime/state`
   里带着 perf 四件套 `{ttftMs, totalMs, tps, endToEndTps, perfAt}`，就是桌面端屏幕上那几个数
   （`data/RuntimeActions.kt` 的 `parseHostTurnPerf`）。`deriveTurnStats(host = …)` 会用它，
