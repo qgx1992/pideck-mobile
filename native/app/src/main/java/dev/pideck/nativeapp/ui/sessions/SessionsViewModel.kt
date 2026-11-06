@@ -125,6 +125,20 @@ class SessionsViewModel @Inject constructor(
             return ordered + orphans
         }
 
+    /**
+     * 全部会话铺平一行（不含子会话），按最近活动倒序 —— 侧栏「活动」段用。
+     *
+     * 不另起一个接口：`/api/state` 已经带全部会话，`groups` 也是从它派生的。
+     */
+    val allSessions: List<dev.pideck.nativeapp.data.Session>
+        get() = groups.flatMap { it.sessions }.sortedByDescending { it.updatedAt }
+
+    /** 项目名查表（会话行要显示它属于哪个工作区）。查不到给空串，调用方自己兜底。 */
+    fun projectNameOf(projectId: String): String {
+        val snapshot = state ?: return ""
+        return snapshot.projects.firstOrNull { it.id == projectId }?.name.orEmpty()
+    }
+
     fun isRunning(sessionId: String): Boolean =
         state?.runtimes?.any { it.sessionId == sessionId && it.isRunning } == true
 

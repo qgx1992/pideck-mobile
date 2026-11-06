@@ -169,10 +169,23 @@ fun SessionDrawer(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
 
+        // 分段（活动 / 聊天）：桌面端左侧栏顶上那排 pill 的移动版。
+        // 只切这一个列表，「新会话 / 切换设备 / 搜索」在所有段里都保留。
+        DrawerSectionBar()
+
         // 展开后每组先露 5 条，剩下的收进「显示其余 N 个」：项目一多整列就翻不到头
         var expandedRest by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
 
-        LazyColumn(
+        if (DrawerTabState.current == DrawerSection.Active) {
+            DrawerActivePane(
+                sessions = viewModel.allSessions,
+                currentSessionId = currentSessionId,
+                projectNameOf = viewModel::projectNameOf,
+                onPickSession = onPickSession,
+                onLongClickSession = { actions.menuSession = it },
+                modifier = Modifier.weight(1f),
+            )
+        } else LazyColumn(
             modifier = Modifier.weight(1f),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
                 start = 10.dp,

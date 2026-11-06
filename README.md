@@ -8,16 +8,16 @@
 > 这个仓库只是手机端。Agent 行为、模型调用、会话读写全部由电脑上的 pi 负责，
 > 手机只是一个「连着它的遥控器 + 阅读器」。
 
-当前版本 **0.5.36**（`versionCode 536`），包名 `top.caoayu.pideck`，
+当前版本 **0.5.37**（`versionCode 537`），包名 `top.caoayu.pideck`，
 Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
-> **适配的桌面端版本：0.10.0**（截至 0.5.36 对过一遍路由、字段与流帧）。
+> **适配的桌面端版本：0.10.0**（截至 0.5.37 对过一遍路由、字段与流帧）。
 > 桌面端升级后会先跑探针与单测再跟；版本低于 0.10.0 时设置页会给一行提示，
 > 见下表「兼容性」一行。
 
 ```bash
 cd native
-./gradlew :app:testDebugUnitTest    # 247 条 JVM 单测
+./gradlew :app:testDebugUnitTest    # 254 条 JVM 单测
 ./gradlew :app:assembleRelease      # app/build/outputs/apk/release/app-release.apk
 ```
 

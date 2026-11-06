@@ -452,6 +452,19 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   刷新时机只有「打开上下文弹层 / 点重新读取」，不跟着每轮跑：翻完一个会话最多 10 页请求，
   而命中率一轮才变一次。字段全缺（acp 的 meta 是 null）时显示 `—`，**有输入但没 cacheRead 是真 0%**，
   两者要分开（`cacheHitOf()` 返回 null vs 0.0）。
+- **侧栏「活动」段**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/DrawerActivePane.kt`，
+  0.5.37）：抽屉顶上一排 pill 分「活动 / 聊天」两段，对应桌面端左侧栏那个 `Tabs`
+  （`active` / `chats`，`projects` 还没做）。`DrawerTabState` 是**单例**不是 `rememberSaveable` ——
+  抽屉每次开合都是新组合，会话列表页与聊天页又是两个 ViewModel 实例（同 `GroupCollapse` 的理由）。
+  「活动」= 上半「运行中」（`SessionActivity.statusOf` 的 Running / Waiting，等回答的排前面）
+  + 下半「最近会话」（`updatedAt` 倒序，先露 12 条，点「显示更多」每次 +12）。
+  **只到会话级**：桌面端那栏是 agent 级（子代理单列一行），手机要 `/api/sessions/:id/subagents`
+  逐会话查，子代理明细已经在会话页右侧工作区里了。
+  行是独立组件 `ActiveSessionRow`，**不要**去改 `DrawerSessionRow` / `SessionRow` / `RecentSessionRow`
+  —— 那三处各自安静（见上面「会话行有三份布局」）。纯函数 `activeDrawerSessions` /
+  `recentDrawerSessions` 有单测 `DrawerActivePaneTest`（7 条）。
+  桌面端的插件分组区（`desktopApi.sessionGroups.list()`）走 IPC，手机拿不到，这一段不接受复刻。
+
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
   不做「有一张卡但不知道在问什么」。展开内容走 `AnimatedVisibility`，选项列仍是 `heightIn(max = 320.dp)` 内部滚动。
