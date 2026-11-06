@@ -463,6 +463,13 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   行是独立组件 `ActiveSessionRow`，**不要**去改 `DrawerSessionRow` / `SessionRow` / `RecentSessionRow`
   —— 那三处各自安静（见上面「会话行有三份布局」）。纯函数 `activeDrawerSessions` /
   `recentDrawerSessions` 有单测 `DrawerActivePaneTest`（7 条）。
+  **运行态必须自己轮询**：`SessionActivity.observe()` 只在 `SessionsViewModel.refresh()`（`/api/state`，
+  56KB 且带 ETag，只在 ViewModel init 跑一次）与 `ChatViewModel` 切会话/发消息时调 —— 抽屉打开后不会自己重拉，
+  于是「别处刚开跑的会话」在手机上一直显示空闲（0.5.37 第一稿就是这样，活动段永远空）。
+  现在 `SessionActivity.observeRuntimes(runtimes)` 吃轻量的 `/api/sessions/runtimes`（约 3KB），
+  `SessionsViewModel.refreshRuntimes()` 拉它：进抽屉 `LaunchedEffect(Unit)` 打一次、活动段
+  `DrawerActivePane` 里每 5 秒（`RUNTIMES_POLL_MS`）再打一次，离开该段随组合注销即停。
+  轻量接口没有 `pendingUiRequests`，`waiting` 传 null 时沿用 `lastWaiting`，别当成空集合。
   桌面端的插件分组区（`desktopApi.sessionGroups.list()`）走 IPC，手机拿不到，这一段不接受复刻。
 
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
