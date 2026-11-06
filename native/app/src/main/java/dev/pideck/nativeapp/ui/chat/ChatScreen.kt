@@ -560,7 +560,7 @@ fun ChatScreen(
                         onClose = { viewModel.closeParallelAsk() },
                     )
                 }
-                TurnStatsLine(stats = viewModel.turnStats, streaming = viewModel.streaming)
+                TurnStatsLine(stats = viewModel.turnStats)
                 Composer(
                 value = draft,
                 onValueChange = { text ->
@@ -1578,16 +1578,15 @@ private fun BusySendPicker(
 }
 
 /**
- * 一轮回复的统计行（桌面端 `ComposerStatsLine` 的移动版）：首字等待 · 输出 tokens · 两档 tok/s。
+ * 一轮回复的统计行（桌面端 `ComposerStatsLine` 的移动版）：首字等待 · 两档 tok/s · 缓存命中。
  *
- * 数据由壳自己打点（见 `data/TurnStats.kt`）：桌面端那组数是主进程现测的，
- * 不在消息 meta 里，手机拿不到。没有可显示的数时整行不渲染（否则会把输入条往下顶）。
+ * 数来自宿主（`runtime/state` 的 perf + 命中率，与桌面端同源），本端秒表只在拿不到时兜底。
+ * 常驻一行：没有数就显示破折号，别让它忽隐忽现把输入条顶来顶去。
  */
 @Composable
-private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean) {
-    // 常驻一行：没有数就显示破折号，别让它忽隐忽现把输入条顶来顶去。
+private fun TurnStatsLine(stats: TurnStats?) {
     Text(
-        text = formatTurnStats(stats, streaming = streaming),
+        text = formatTurnStats(stats),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier

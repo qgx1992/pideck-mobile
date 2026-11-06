@@ -398,12 +398,16 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   与 `firstDeltaAt`（任意，给生成速度），`ChatViewModel.markTurnFirstContent()` 两个都打点。
   桌面那行里的「均速」（`sessionStreamingTps`）是**整段会话**的平均流式速度，不是本轮，
   别拿它跟手机的「全程」对账。
-  **流式期间每 2 秒刷一次行**（`ChatViewModel.startLiveStats()`，`LIVE_STATS_INTERVAL_MS = 2_000L`，
-  用户 0.5.32 这批要求的）：全程是真实墙钟（请求发出 → 现在），tokens 只能**按字数估**
-  （`data/TurnStats.kt` 的 `estimateOutputTokens()`：流里没有 usage，`webExternalStream` 的帧只有
-  text/thinking/tool 增量）。系数由本机 66 条 assistant 消息最小二乘拟合：CJK ≈0.9 token/字、
-  其余 ≈0.17 token/字符，工具入参（模型自己生成的输出）也计入；中位误差约 15%，所以直播文案
-  一律带 `≈`，收尾后换真值。
+  **实时刷新只跟宿主的新值走**（0.5.36 用户要求，别再加固定节拍重算）：`ChatViewModel.startHostStatsWatch()`
+  每秒读一次 `runtime/state`，把 `perf.perfAt`、会话累计 `outputTokens` 的增量、`cacheHitPercent`
+  拼成签名，**签名变了才动这一行**（`lastHostStatsKey`），没变就一个字都不刷新。之前那套
+  「每 2 秒按字数估 token」已经删掉（`estimateOutputTokens` 也一并删了）——估出来的 `≈` 数
+  会在收尾时跳一下，用户明确不要。代价是长文本单步跑到一半这一行不动，宿主本来也是落一步
+  才结算一次。
+  **这一行不显示 tok 数**：从左到右是 首字 · 生成 tok/s · 全程 tok/s · 命中率
+  （`formatTurnStats`，缺项一律 `—`）。tokens 只作为算速度的中间量（`TurnStats.outputTokens`），
+  不往屏幕上放；命中率取 `runtime/state` 的 `cacheHitPercent`（宿主按最近一次回复算的，
+  与桌面端同源），拿不到显示 `—`。
   **收尾的真值优先取宿主自己结算的那份**（0.5.36 起）：`POST /api/sessions/:id/runtime/state`
   里带着 perf 四件套 `{ttftMs, totalMs, tps, endToEndTps, perfAt}`，就是桌面端屏幕上那几个数
   （`data/RuntimeActions.kt` 的 `parseHostTurnPerf`）。`deriveTurnStats(host = …)` 会用它，

@@ -51,7 +51,7 @@ import dev.pideck.nativeapp.data.TurnClock
 import dev.pideck.nativeapp.data.TurnStats
 import dev.pideck.nativeapp.data.deriveTurnStats
 import dev.pideck.nativeapp.data.HostTurnPerf
-import dev.pideck.nativeapp.data.estimateOutputTokens
+import dev.pideck.nativeapp.data.RuntimeSnapshot
 import dev.pideck.nativeapp.data.turnStatsFromMeta
 import dev.pideck.nativeapp.data.TurnStatsStore
 import dev.pideck.nativeapp.data.turnUsageOf
@@ -178,12 +178,16 @@ class ChatViewModel @Inject constructor(
     /** 本轮开始时宿主累计的 outputTokens（会话级累计），用来算直播期间的真实增量。 */
     private var turnHostOutputBase: Long? = null
 
+    /** 上一次拿去刷新的宿主值签名（perfAt|tokens|命中率）：一样就不动这一行。 */
+    private var lastHostStatsKey: String? = null
+
     /** 流式直播节拍器（每 2s 刷一次统计行）；收尾/取消时停。 */
     private var liveStatsJob: Job? = null
 
     private companion object {
         /** 直播节拍：2s 一次（用户 0.5.33 要求）。 */
-        const val LIVE_STATS_INTERVAL_MS = 2_000L
+        /** 统计行问宿主要的节拍：只用来「看有没有新值」，不按这个间隔重排。 */
+        const val HOST_STATS_POLL_MS = 1_000L
 
         /** 宿主 perf 超过这个岁数就不认了（没有 `endedAt` 可对账时的兜底）。 */
         const val HOST_PERF_FRESH_MS = 120_000L
@@ -1211,26 +1215,32 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * 流式直播的节拍器：每 [LIVE_STATS_INTERVAL_MS] 重算一次统计行。
+     * 统计行的活水：**宿主那边有新值才刷新**。
      *
-     * **全程**是真实的墙钟（请求发出 → 现在），**tokens 是估的**（流里没有 usage），
-     * 所以直播文案带 `≈`；收尾后 `settleTurnStats()` 用 `meta.usage` 换成真值。
+     * 老做法是每 2 秒按字数估一次 token 再重排整行 —— 屏幕上是一串自己猜的数，收尾还要跳一下。
+     * 现在只做一件事：读 `runtime/state`，宿主给的 perf / 会话累计 `outputTokens` / 命中率
+     * 里任何一项变了才动这一行，没变就一个字都不刷新（0.5.36 用户要求）。
+     * 代价是长文本单步跑到一半时这一行不动 —— 宿主本来也是落一步才结算一次。
      */
-    private suspend fun publishLiveStats() {
-        val base = turnRequestSentAt
-        if (turnStartedAt <= 0L || base <= 0L) return
+    private suspend fun publishHostStats() {
+        if (turnStartedAt <= 0L || turnRequestSentAt <= 0L) return
+        val snapshot = hostSnapshot() ?: return
+        val cumulative = snapshot.usage.outputTokens
+        val base = turnHostOutputBase ?: cumulative.also { turnHostOutputBase = it }
+        val tokens = (cumulative - base).toInt().takeIf { it > 0 }
+        val hit = snapshot.usage.cacheHitPercent
+        val perfAt = snapshot.perf?.at ?: 0L
+        // 判据就这一句：宿主没给新东西，这一行不刷新。
+        val key = "${perfAt}|$tokens|$hit"
+        if (key == lastHostStatsKey) return
+        lastHostStatsKey = key
         val now = System.currentTimeMillis()
-        val total = (now - base).coerceAtLeast(0L)
-        val firstText = turnFirstTextAt
-        val firstAny = turnFirstAnyAt
-        val first = if (firstText > 0L) firstText else firstAny
-        // 优先用宿主累计量的增量（真值，但只在每次模型步结束时跳一下），
-        // 拿不到才退回按字数估 —— 直播文案的 `≈` 跟着这个来源走。
-        val hostTokens = liveHostTokens()
-        val tokens = hostTokens ?: live?.let { estimateOutputTokens(it.parts) }?.takeIf { it > 0 }
-        val decodeStart = if (firstAny > 0L) firstAny else first
+        val base0 = turnRequestSentAt
+        val total = (now - base0).coerceAtLeast(0L)
+        val first = if (turnFirstTextAt > 0L) turnFirstTextAt else turnFirstAnyAt
+        val decodeStart = if (turnFirstAnyAt > 0L) turnFirstAnyAt else first
         turnStats = TurnStats(
-            ttftMs = if (first > 0L) first - base else null,
+            ttftMs = if (first > 0L) first - base0 else null,
             totalMs = total,
             outputTokens = tokens,
             tps = if (tokens != null && decodeStart > 0L && now - decodeStart >= 100L) {
@@ -1239,44 +1249,29 @@ class ChatViewModel @Inject constructor(
                 null
             },
             endToEndTps = if (tokens != null && total >= 100L) tokens / (total / 1000.0) else null,
-            estimated = hostTokens == null,
+            cacheHit = hit,
         )
     }
 
-    /**
-     * 本轮真实 token 数：宿主 `runtime/state` 里会话级累计的 `outputTokens` 减本轮起点。
-     *
-     * pi 的累计量按**模型步**更新（一步跑完才加），所以一次长文本回复的中段可能是 0 ——
-     * 那时返回 null 让调用方退回按字数估，别把 0 显示出去。
-     */
-    private suspend fun liveHostTokens(): Int? {
-        val target = device ?: return null
-        val runtime = runtimeTarget() ?: return null
-        val cumulative = runCatching {
-            api.runtimeState(target, token, runtime).usage.outputTokens
-        }.getOrNull() ?: return null
-        val base = turnHostOutputBase
-        if (base == null) {
-            // 第一拍才拿到基准：这一拍还没有可比的增量
-            turnHostOutputBase = cumulative
-            return null
-        }
-        return (cumulative - base).toInt().takeIf { it > 0 }
-    }
-
-    private fun startLiveStats() {
+    private fun startHostStatsWatch() {
         liveStatsJob?.cancel()
         liveStatsJob = viewModelScope.launch {
             while (isActive) {
-                delay(LIVE_STATS_INTERVAL_MS)
-                publishLiveStats()
+                delay(HOST_STATS_POLL_MS)
+                publishHostStats()
             }
         }
     }
 
-    private fun stopLiveStats() {
+    private fun stopHostStatsWatch() {
         liveStatsJob?.cancel()
         liveStatsJob = null
+    }
+
+    private suspend fun hostSnapshot(): RuntimeSnapshot? {
+        val target = device ?: return null
+        val runtime = runtimeTarget() ?: return null
+        return runCatching { api.runtimeState(target, token, runtime) }.getOrNull()
     }
 
     /**
@@ -1286,10 +1281,11 @@ class ChatViewModel @Inject constructor(
      * 只认「刚刚」结算的：翻历史时 runtime 里留的是很久以前的数，用它反而会把上一轮的节奏
      * 贴到这一轮上。
      */
-    private suspend fun hostPerfFor(messages: List<ChatMessage>): HostTurnPerf? {
-        val target = device ?: return null
-        val runtime = runtimeTarget() ?: return null
-        val perf = runCatching { api.runtimeState(target, token, runtime).perf }.getOrNull() ?: return null
+    private suspend fun hostPerfFor(messages: List<ChatMessage>): HostTurnPerf? =
+        hostPerfOf(hostSnapshot(), messages)
+
+    private fun hostPerfOf(snapshot: RuntimeSnapshot?, messages: List<ChatMessage>): HostTurnPerf? {
+        val perf = snapshot?.perf ?: return null
         if (perf.at <= 0L) return null
         // 认「是不是这一轮」靠时刻对账，而不是靠「多久以前」：这一轮 assistant 落盘的 endedAt
         // 与宿主 perf 的 perfAt 是同一个瞬间。仅凭年龄判断的话，切会话超过两分钟就认不出来，
@@ -1319,6 +1315,7 @@ class ChatViewModel @Inject constructor(
         turnFirstAnyAt = 0L
         turnEndedAt = 0L
         turnHostOutputBase = null
+        lastHostStatsKey = null
         turnStats = null
     }
 
@@ -1356,7 +1353,7 @@ class ChatViewModel @Inject constructor(
      * `durationMs`（只有 pi 后端有）算端到端速度，首字无从得知。
      */
     private suspend fun settleTurnStats(messages: List<ChatMessage>) {
-        stopLiveStats()
+        stopHostStatsWatch()
         val last = messages.lastOrNull { it.role == "assistant" } ?: return
         if (last.id == statsForMessageId) return
         val clock = if (turnStartedAt > 0L && turnEndedAt > 0L) {
@@ -1371,6 +1368,8 @@ class ChatViewModel @Inject constructor(
             null
         }
         statsForMessageId = last.id
+        // 命中率跟 perf 一起从 runtime/state 取：宿主算的就是桌面端那个数。
+        val snapshot = hostSnapshot()
         // 已经结算过这一轮就照原样显示：秒表已经清了、宿主 perf 也可能过期，
         // 重新算出来的数会和刚跑完时不一样（tok 变多、时间变短），用户看到的就是「切换会话后数值变了」。
         val cached = TurnStatsStore.recall(sessionId, last.id)
@@ -1380,9 +1379,10 @@ class ChatViewModel @Inject constructor(
         val computed = turnStatsFromMeta(
             last.meta,
             clock,
-            hostPerfFor(messages),
+            hostPerfOf(snapshot, messages),
             usage?.outputTokens,
             usage?.spanMs,
+            snapshot?.usage?.cacheHitPercent,
         )
             .takeIf { !it.isEmpty }
         turnStats = cached ?: computed
@@ -1505,7 +1505,7 @@ class ChatViewModel @Inject constructor(
         images = emptyList()
         // 秒表从「按下发送」开始（含排队与建连），与桌面端「请求发出」的口径一致。
         resetTurnClock()
-        startLiveStats()
+        startHostStatsWatch()
         // 前台起服务是稳的（后台启动会被系统拒），run 一结束服务自己退出。
         RunWatcher.start(context)
         merger = ReplyMerger()
@@ -1557,7 +1557,7 @@ class ChatViewModel @Inject constructor(
             } finally {
                 sending = false
                 live = null
-                stopLiveStats()
+                stopHostStatsWatch()
                 if (turnEndedAt == 0L) turnEndedAt = System.currentTimeMillis()
                 refreshHistory()
                 // 落盘比收尾帧略晚：第一次重拉可能还没这条 assistant 消息，

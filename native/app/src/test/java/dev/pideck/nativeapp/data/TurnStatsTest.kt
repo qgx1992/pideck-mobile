@@ -105,43 +105,23 @@ class TurnStatsTest {
     }
 
     @Test
-    fun `直播估算：中文按 0_9 token 每字、其余按 0_17`() {
-        // 2 个汉字 = 1.8，10 个半角 = 1.7，合计 3.5 → 四舍五入 4
-        assertEquals(4, estimateOutputTokens(listOf(ReplyPart.Text("你好abcdefghij"))))
-        // 空内容不报数（否则直播里会出现 ≈0 tok）
-        assertEquals(0, estimateOutputTokens(listOf(ReplyPart.Text(""))))
-        assertEquals(0, estimateOutputTokens(emptyList()))
-    }
-
-    @Test
-    fun `直播估算：思考与工具入参也算输出 tokens`() {
-        val parts = listOf(
-            ReplyPart.Reasoning("先想一下", done = true),
-            ReplyPart.Text("答案"),
-            ReplyPart.Tool("t1", "bash", "input-available", input = kotlinx.serialization.json.JsonPrimitive("abcdefghij")),
-        )
-        val estimated = estimateOutputTokens(parts)
-        // 4 汉字≈3.6 + 2 汉字≈1.8 + 12 个带引号的半角字符≈2.04 → 7.44 → 7
-        assertEquals(7, estimated)
-    }
-
-    @Test
-    fun `直播文案：带 ≈ 且四段都出，无估算值时退回生成中`() {
-        val live = TurnStats(
+    fun `命中率放在行尾，与上下文弹层同一口径`() {
+        val stats = TurnStats(
             ttftMs = 2_800L,
             totalMs = 6_000L,
             outputTokens = 640,
             tps = 152.0,
             endToEndTps = 96.0,
-            estimated = true,
+            cacheHit = 99.44,
         )
         assertEquals(
-            "首字 2.8s · ≈640 tok · 生成 152 tok/s · 全程 96 tok/s",
-            formatTurnStats(live, streaming = true),
+            "首字 2.8s · 生成 152 tok/s · 全程 96 tok/s · 命中 99%",
+            formatTurnStats(stats),
         )
+        // 小数位只给小数值（0.4% 那种），整数部分不四舍五入成 0%
         assertEquals(
-            "首字 2.8s · 生成中…",
-            formatTurnStats(TurnStats(ttftMs = 2_800L, totalMs = 6_000L), streaming = true),
+            "首字 — · 生成 — tok/s · 全程 — tok/s · 命中 0.4%",
+            formatTurnStats(TurnStats(cacheHit = 0.42)),
         )
     }
 
@@ -158,8 +138,8 @@ class TurnStatsTest {
     fun `acp 那种什么都没有的回合也留一行占位，不隐藏`() {
         val stats = turnStatsFromMeta(meta = null, clock = null)
         assertTrue(stats.isEmpty)
-        assertEquals("首字 — · — tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(stats))
-        assertEquals("统计行本身为空也不该消失", "首字 — · — tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(null))
+        assertEquals("首字 — · 生成 — tok/s · 全程 — tok/s · 命中 —", formatTurnStats(stats))
+        assertEquals("统计行本身为空也不该消失", "首字 — · 生成 — tok/s · 全程 — tok/s · 命中 —", formatTurnStats(null))
     }
 
     @Test
@@ -185,17 +165,7 @@ class TurnStatsTest {
         assertEquals(90, stats.outputTokens)
         assertNull(stats.totalMs)
         assertNull(stats.tps)
-        assertEquals("首字 — · 90 tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(stats))
-    }
-
-    @Test
-    fun `流式期间只报首字等待`() {
-        val stats = TurnStats(ttftMs = 1_240L)
-        assertEquals("首字 1.2s · 生成中…", formatTurnStats(stats, streaming = true))
-        // 收尾式调用时没有 tokens / 速度，缺项用破折号占位
-        assertEquals("首字 1.2s · — tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(stats))
-        // 还没收到首帧（ttft 为空）时也在流式态，不能把整行抹掉
-        assertEquals("首字 — · 生成中…", formatTurnStats(null, streaming = true))
+        assertEquals("首字 — · 生成 — tok/s · 全程 — tok/s · 命中 —", formatTurnStats(stats))
     }
 
     @Test
@@ -208,18 +178,18 @@ class TurnStatsTest {
             endToEndTps = 240.0,
         )
         assertEquals(
-            "首字 1.0s · 1200 tok · 生成 300 tok/s · 全程 240 tok/s",
+            "首字 1.0s · 生成 300 tok/s · 全程 240 tok/s · 命中 —",
             formatTurnStats(stats),
         )
     }
 
     @Test
     fun `毫秒与长耗时各用各的单位`() {
-        assertEquals("首字 640 ms · — tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(TurnStats(ttftMs = 640L)))
-        assertEquals("首字 12s · — tok · 生成 — tok/s · 全程 — tok/s", formatTurnStats(TurnStats(ttftMs = 12_300L)))
+        assertEquals("首字 640 ms · 生成 — tok/s · 全程 — tok/s · 命中 —", formatTurnStats(TurnStats(ttftMs = 640L)))
+        assertEquals("首字 12s · 生成 — tok/s · 全程 — tok/s · 命中 —", formatTurnStats(TurnStats(ttftMs = 12_300L)))
         // 一位小数的速度
         assertEquals(
-            "首字 — · 96 tok · 生成 9.6 tok/s · 全程 — tok/s",
+            "首字 — · 生成 9.6 tok/s · 全程 — tok/s · 命中 —",
             formatTurnStats(TurnStats(outputTokens = 96, tps = 9.55)),
         )
     }

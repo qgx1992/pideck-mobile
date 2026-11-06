@@ -24,6 +24,8 @@ data class ContextUsage(
     val overflow: Boolean = false,
     val inputTokens: Long = 0,
     val outputTokens: Long = 0,
+    /** 最近一次回复的缓存命中率（宿主按 `cacheRead ÷ (input + cacheRead + cacheWrite)` 算的）。 */
+    val cacheHitPercent: Double? = null,
     val permissionPreset: String? = null,
     val provider: String? = null,
 ) {
@@ -238,6 +240,8 @@ fun parseContextUsage(root: JsonElement?): ContextUsage {
         overflow = (obj["contextOverflow"] as? JsonPrimitive)?.booleanOrNull ?: false,
         inputTokens = long("inputTokens"),
         outputTokens = long("outputTokens"),
+        // 宿主把「最近一次回复」的命中率算好了放在这里（`cacheHitPercent`，没有就是 null）
+        cacheHitPercent = (obj["cacheHitPercent"] as? JsonPrimitive)?.doubleOrNull,
         permissionPreset = str("permissionPreset"),
         provider = str("provider"),
     )
