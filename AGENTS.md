@@ -527,6 +527,13 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   先对存着的设备打一次 `/api/state`（3 秒超时），401/403 就落设备页 + `data/AuthNotice.kt` 的常驻提示
   （「授权已失效，重新配对」），别进首页给一屏红字（用户只会反复重进）。`describeConnectionError` 撞到 401/403
   也会写这条提示。
+- **令牌库（EncryptedSharedPreferences）必须自带重建**（`native/app/src/main/java/dev/pideck/nativeapp/data/DeviceRepository.kt`）：
+  换签名重装 / 恢复备份 / ROM 清 Keystore 之后旧密文解不开（`AEADBadTagException`），而 AndroidX 的实现在
+  **打开时**就建好、每次读写都过 GCM 校验 —— 只要不清 `pideck_tokens` prefs **和** `_androidx_security_master_key_`
+  密钥别名，连重新配对写令牌都会失败，用户看到的是「怎么连都连不上」。现在 `tokenOf` / `writeToken` / `removeToken`
+  都 `repeat(2)`：第一次失败 `resetStore()`（删 prefs + 删别名 + 置 `tokenReadFailed`）再来一次，写令牌用 `commit()`
+  而不是 `apply()`（否则失败无声）。启动页看到 `tokenReadFailed` 就落设备页 + `AuthNotice.TOKEN_LOST`。
+  **别把这里改回 `runCatching { tokens.getString }` 就完事** —— 那只挡住了崩溃，没修好「写不进新令牌」。
 - **闪退留现场**：`native/app/src/main/java/dev/pideck/nativeapp/data/CrashLog.kt` 在 `PiDeckApp.onCreate`
   最早装未捕获处理器，栈写 `filesDir/last-crash.txt`（含版本 / 系统 / 机型），设置页「诊断」段可看/复制/清除。
   另外读令牌（EncryptedSharedPreferences，Keystore 主密钥可能失效）**全部 runCatching** —— 以前

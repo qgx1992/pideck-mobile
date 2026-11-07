@@ -17,6 +17,12 @@
   而不是进首页看一屏红字、退出重进还一样。会话里撞到 401 也会留这条提示。
 - **闪退可诊断**：`Application` 里装了未捕获异常处理器，栈写进 `filesDir/last-crash.txt`
   （含版本 / 系统 / 机型）。设置页新增「诊断」一段，可以直接看、复制、清除。
+- **密钥库坏了自己修**（同版第二稿，真机上撞到的）：换签名重装 / 恢复备份 / 系统清理 Keystore 之后，
+  令牌密文解不开（`AEADBadTagException`），而 `EncryptedSharedPreferences` 打开时就建好、每次读写都过
+  GCM 校验 —— 不清掉「prefs 文件 + `_androidx_security_master_key_`」这两样，**重新配对也写不进去**，
+  表现就是「怎么连都连不上」。现在 `DeviceRepository` 读/写令牌失败会自动 `resetStore()` 重建一次
+  （删 prefs + 删密钥别名 + 新建空库），写令牌改用 `commit()` 以便感知失败；重建后能读到就照常用，
+  读不到才在设备页提示「删掉这台、重新配对」。
 - 顺带加固：读令牌（EncryptedSharedPreferences / Keystore）全部 `runCatching`，
   主密钥失效不再把进程崩掉，只表现为「没令牌 → 401 → 提示重新配对」；后台看护服务的
   轮询整轮兜底，异常只记日志不再走进程级崩溃。

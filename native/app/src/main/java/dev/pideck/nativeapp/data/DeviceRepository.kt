@@ -38,17 +38,110 @@ class DeviceRepository(private val context: Context) {
 
     private val devicesKey = stringPreferencesKey("devices")
 
-    private val tokens by lazy {
+    private companion object {
+        const val TOKEN_STORE = "pideck_tokens"
+
+        /** AndroidX Security 默认的主密钥别名；重建令牌库时要连它一起删。 */
+        const val MASTER_KEY_ALIAS = "_androidx_security_master_key_"
+    }
+
+    /**
+     * 令牌库（EncryptedSharedPreferences，主密钥在 Android Keystore 里）。
+     *
+     * 这块最容易「一次坏就一直坏」：换签名重装、系统恢复备份、部分 ROM 清理 keystore 之后，
+     * 主密钥没了/换了，旧密文解出来就是 `AEADBadTagException`。而 AndroidX 的实现是**打开时**
+     * 就建好、之后每次读写都过 GCM 校验 —— 不清理那两条东西（prefs 文件 + 密钥别名），
+     * 连「重新配对」的写入都会失败，表现就是「一直连不上，怎么重配都不行」。
+     *
+     * 所以读/写失败时都走 [resetStore] 重建一次，再失败才认命（[tokenReadFailed] = true，
+     * 启动页据此把用户送到设备页让他重配）。
+     */
+    @Volatile
+    private var tokensRef: android.content.SharedPreferences? = null
+
+    /** 令牌区不可用（且重建过也没救回来）。启动页要据此落到设备页，而不是装没事进首页。 */
+    @Volatile
+    var tokenReadFailed: Boolean = false
+        private set
+
+    private fun buildTokens(): android.content.SharedPreferences {
         val masterKey = MasterKey.Builder(context)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
-        EncryptedSharedPreferences.create(
+        return EncryptedSharedPreferences.create(
             context,
-            "pideck_tokens",
+            TOKEN_STORE,
             masterKey,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
         )
+    }
+
+    private fun openTokens(): android.content.SharedPreferences =
+        tokensRef ?: synchronized(this) {
+            tokensRef ?: buildTokens().also { tokensRef = it }
+        }
+
+    /** 主密钥与密文一起清掉再建一份空的：旧密文已经解不开了，留着只会挡住写入。 */
+    private fun resetStore() {
+        tokensRef = null
+        runCatching { context.deleteSharedPreferences(TOKEN_STORE) }
+        runCatching {
+            val keystore = java.security.KeyStore.getInstance("AndroidKeyStore")
+            keystore.load(null)
+            keystore.deleteEntry(MASTER_KEY_ALIAS)
+        }
+        tokenReadFailed = true
+    }
+
+    /**
+     * 读令牌。失败时重建一次令牌库；仍然失败就返回 null 并置 [tokenReadFailed]。
+     *
+     * 以前这里直接抛 —— 调用点全在 `viewModelScope.launch` 里，一次异常就把进程带走，
+     * 表现正是「冷启动闪退」。
+     */
+    fun tokenOf(deviceId: String): String? {
+        repeat(2) { attempt ->
+            try {
+                return openTokens().getString(deviceId, null)
+            } catch (e: Throwable) {
+                if (attempt == 0) resetStore() else logTokenFailure(e)
+            }
+        }
+        return null
+    }
+
+    /** 写令牌。同样自带一次重建重试 —— 否则修好之前「重新配对」也存不进去。 */
+    private fun writeToken(deviceId: String, token: String) {
+        repeat(2) { attempt ->
+            try {
+                // 用 commit 而不是 apply：密文写失败要让调用方看见（apply 把它丢进后台队列就无声了）
+                if (openTokens().edit().putString(deviceId, token).commit()) {
+                    tokenReadFailed = false
+                    return
+                }
+            } catch (e: Throwable) {
+                if (attempt == 0) resetStore() else logTokenFailure(e)
+                return@repeat
+            }
+            if (attempt == 0) resetStore()
+        }
+    }
+
+    private fun removeToken(deviceId: String) {
+        repeat(2) { attempt ->
+            try {
+                if (openTokens().edit().remove(deviceId).commit()) return
+            } catch (e: Throwable) {
+                if (attempt == 0) resetStore() else logTokenFailure(e)
+                return@repeat
+            }
+            if (attempt == 0) resetStore()
+        }
+    }
+
+    private fun logTokenFailure(e: Throwable) {
+        android.util.Log.w("PiDeckTokens", "令牌库不可用：${e::class.java.simpleName}: ${e.message}")
     }
 
     val devices: Flow<List<Device>> = context.deviceStore.data.map { prefs ->
@@ -56,28 +149,6 @@ class DeviceRepository(private val context: Context) {
         runCatching {
             PideckJson.decodeFromString(ListSerializer(Device.serializer()), raw)
         }.getOrDefault(emptyList())
-    }
-
-    /**
-     * 取令牌。
-     *
-     * EncryptedSharedPreferences 在 Keystore 主密钥失效时会抛异常（换签名重装、系统恢复备份、
-     * 部分 ROM 清理 keystore），而调用点全在协程里 —— 以前直接把进程带走，表现就是
-     * 「冷启动闪退」。拿不到令牌就当没有：上层收到 401 会提示重新配对，而不是崩掉。
-     */
-    /**
-     * 令牌读取是否出过错（Keystore 主密钥被重建）。
-     *
-     * 与「这台设备没存过令牌」要分开：前者重配一次就好，后者是配对流程没走完。
-     */
-    var tokenReadFailed: Boolean = false
-        private set
-
-    fun tokenOf(deviceId: String): String? = try {
-        tokens.getString(deviceId, null)
-    } catch (e: Throwable) {
-        tokenReadFailed = true
-        null
     }
 
     /** 配对：同 baseUrl 视为同一台设备，重复添加只更新名字与令牌。 */
@@ -91,13 +162,13 @@ class DeviceRepository(private val context: Context) {
             )
         val next = current.filterNot { it.id == record.id }.filterNot { it.baseUrl == record.baseUrl } + record
         writeDevices(next)
-        if (!token.isNullOrBlank()) tokens.edit().putString(record.id, token).apply()
+        if (!token.isNullOrBlank()) writeToken(record.id, token)
         record
     }
 
     suspend fun remove(deviceId: String) = withContext(Dispatchers.IO) {
         writeDevices(readDevices().filterNot { it.id == deviceId })
-        tokens.edit().remove(deviceId).apply()
+        removeToken(deviceId)
     }
 
     /** 改名：只动清单里的名字；空名字/只空白的直接忽略，别把显示名弄成空行。 */
