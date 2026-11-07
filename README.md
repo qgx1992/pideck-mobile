@@ -8,6 +8,8 @@
 > 这个仓库只是手机端。Agent 行为、模型调用、会话读写全部由电脑上的 pi 负责，
 > 手机只是一个「连着它的遥控器 + 阅读器」。
 
+**本项目全程由 AI 开发**（从第一行 Compose 代码到最后那个 APK），感兴趣可以点个 ⭐。
+
 当前版本 **0.5.39**（`versionCode 539`），包名 `top.caoayu.pideck`，
 Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
