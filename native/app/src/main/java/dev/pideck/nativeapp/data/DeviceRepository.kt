@@ -65,7 +65,20 @@ class DeviceRepository(private val context: Context) {
      * 部分 ROM 清理 keystore），而调用点全在协程里 —— 以前直接把进程带走，表现就是
      * 「冷启动闪退」。拿不到令牌就当没有：上层收到 401 会提示重新配对，而不是崩掉。
      */
-    fun tokenOf(deviceId: String): String? = runCatching { tokens.getString(deviceId, null) }.getOrNull()
+    /**
+     * 令牌读取是否出过错（Keystore 主密钥被重建）。
+     *
+     * 与「这台设备没存过令牌」要分开：前者重配一次就好，后者是配对流程没走完。
+     */
+    var tokenReadFailed: Boolean = false
+        private set
+
+    fun tokenOf(deviceId: String): String? = try {
+        tokens.getString(deviceId, null)
+    } catch (e: Throwable) {
+        tokenReadFailed = true
+        null
+    }
 
     /** 配对：同 baseUrl 视为同一台设备，重复添加只更新名字与令牌。 */
     suspend fun upsert(device: Device, token: String?) = withContext(Dispatchers.IO) {

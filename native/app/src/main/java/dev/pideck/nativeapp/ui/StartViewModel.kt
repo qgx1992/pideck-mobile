@@ -46,6 +46,13 @@ class StartViewModel @Inject constructor(
                 startRoute = Routes.DEVICES
                 return@launch
             }
+            // 令牌读不出来（Keystore 主密钥被重建 / 换签名重装）＝ 本机的授权已经没了，
+            // 这不是网络问题，验也没得验：直接落设备页让他重配。
+            if (repository.tokenReadFailed) {
+                AuthNotice.show(AuthNotice.TOKEN_LOST)
+                startRoute = Routes.DEVICES
+                return@launch
+            }
             // 冷启动先验一次授权：令牌被撤销的话，进首页只会是一屏红字，退出重进还是一样。
             // 验不过（401/403）就落到设备页，并把「授权失效」写成常驻提示 —— 用户才知道要重新配对。
             when (probe(device)) {

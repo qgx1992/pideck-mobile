@@ -27,6 +27,10 @@ object AuthNotice {
         message = null
     }
 
+    const val TOKEN_LOST: String =
+        "本机保存的令牌读不出来了（系统密钥库被重建过，或者 App 换了签名重装）。" +
+            "到「设备」页删掉这台，用桌面端连接面板里的链接重新配对一次就好。"
+
     const val DEFAULT: String =
         "这台设备的授权已经失效（桌面端撤销过令牌，或者桌面端重置了 Web 服务）。" +
             "回「设备」页删掉这台、用新令牌重新配对。"
