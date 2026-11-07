@@ -31,8 +31,8 @@ android {
         targetSdk = 35
         // 原生版接管 PiDeck 之后从 0.5.0 重新起线（versionCode = major*1000 + minor*100 + patch）；
         // 必须高于壳最后的 412，否则 Android 拒绝覆盖安装。
-        versionCode = 537
-        versionName = "0.5.37"
+        versionCode = 538
+        versionName = "0.5.38"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
