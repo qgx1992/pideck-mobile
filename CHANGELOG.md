@@ -8,15 +8,22 @@
   手机改了桌面端立刻是新的；扩展的开关在会话重启后生效，页面上有这句提示。
   只能开关、不能新建/删除 —— 增删技能与安装扩展在桌面端走 Electron IPC，HTTP 没有路由。
   顺带撤掉了设置页那句「技能扩展回桌面端看」的旧判断（那是只有 dsh 私有用例时的结论）。
-- **提示词库**（输入框左下的书本按钮 → `ui/chat/PromptLibrarySheet.kt`）：搜索（`?search=`，
-  退抖 300ms）、按分类过滤、滚到底自动翻页；点一条按 slug 取回正文
-  （`/api/prompts/:slug`）后**追加到输入框末尾**，与 `/` 命令插入同一套语义。
-  取不到内容会在输入框上方给一句提示，不会把已写的内容清掉。
+- **输入区左下书本按钮 → 面板**（`ui/chat/ComposerPanelSheet.kt`），两段：
+  - **提示词库**：搜索（`?search=`，退抖 300ms）、按分类过滤、滚到底自动翻页
+    （`total` 存在时按总数判下一页，不再靠「这一页填满了」猜）。**点一条先显示模板正文**
+    （`GET /api/prompts/:slug?category=` 的 `promptContent`，等宽字体、可滚动），
+    看清了再「插入到输入框」；模板里常有 `{{变量}}` 与多段说明，直接塞进去会不知道自己在发什么。
+    插入是**追加**到已有草稿后面（空一行接上），不覆盖写到一半的内容。
+  - **快捷消息**：一句话清单，点一条插进输入框、右侧箭头直接发出去（走当前投递档位），
+    右侧 × 删除，顶部输入框可新增（去重 / 每条限 200 字 / 上限 30 条）。
+    **这份清单存在手机上**：桌面端的快捷消息在 `userData/quick-messages.json`、
+    只有 `quick-messages:get|save` 两个 IPC 通道，HTTP 侧没有路由，手机读不到。
 - **工作区「改动」页**：顶部显示分支名（原本就有，空改动时也保留），底部追加
   「最近提交 · N 条」（`/api/git/log?limit=15`），每条显示标题、短哈希、相对时间与分支引用。
   不是 git 仓库、或拿不到 log 时这一块直接不出现，不影响改动列表。
 - 解析层放在 `data/SkillsAndPrompts.kt` 与 `data/Workspace.kt` 的 `GitLogParser`，
-  单测 `data/SkillsAndPromptsTest.kt`（12 条）。总单测 268 → 278。
+  快捷消息在 `data/QuickMessages.kt`；单测 `data/SkillsAndPromptsTest.kt`（13 条）
+  + `data/QuickMessagesTest.kt`（4 条）。总单测 268 → 283。
 
 ## 0.5.38 — 2026-11-07
 

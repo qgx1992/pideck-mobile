@@ -216,7 +216,7 @@ interface PideckApi {
         pageSize: Int = 20,
     ): PromptsPage
 
-    /** 取一条提示词的正文（`GET /api/prompts/:slug?category=`），用来塞进输入框。 */
+    /** 取一条提示词的正文（`GET /api/prompts/:slug?category=`），预览与插入都用它。 */
     suspend fun promptContent(
         device: Device,
         token: String?,

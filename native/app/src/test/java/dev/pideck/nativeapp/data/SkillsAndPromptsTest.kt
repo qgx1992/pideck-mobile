@@ -104,6 +104,18 @@ class SkillsAndPromptsTest {
     }
 
     @Test
+    fun `宿主给了 total 就按总数判还有没有下一页`() {
+        val json = """
+            {"categories":[],"prompts":[{"slug":"a","title":"A"},{"slug":"b","title":"B"}],
+             "total":2,"page":1,"pageSize":2}
+        """.trimIndent()
+        // 这一页正好填满，但总数就是 2 → 不该再自动翻页（否则会无限空转）
+        assertFalse(PromptsParse.page(json).hasMore)
+        val more = json.replace("\"total\":2", "\"total\":7")
+        assertTrue(PromptsParse.page(more).hasMore)
+    }
+
+    @Test
     fun `空库时不会显示还有下一页`() {
         val page = PromptsParse.page("""{"categories":[],"prompts":[],"page":1,"pageSize":20}""")
         assertTrue(page.prompts.isEmpty())

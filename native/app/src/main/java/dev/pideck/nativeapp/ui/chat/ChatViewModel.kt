@@ -29,6 +29,7 @@ import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.PrivilegeControl
 import dev.pideck.nativeapp.data.PromptSummary
+import dev.pideck.nativeapp.data.QuickMessages
 import dev.pideck.nativeapp.data.SecurityState
 import dev.pideck.nativeapp.data.parseSecurityState
 import dev.pideck.nativeapp.data.privilegeControlFor
@@ -1062,6 +1063,27 @@ class ChatViewModel @Inject constructor(
     /** 插入失败的一句提示（输入框旁边一行小字，别用 Toast：会盖住键盘上方）。 */
     var promptInsertError by mutableStateOf<String?>(null)
 
+    /**
+     * 预览中的那条提示词（点列表行 → 先看模板正文，再决定插不插入）。
+     *
+     * 桌面端点一条也是「先展开正文」：模板里常有 `{{变量}}` 与多段说明，
+     * 直接塞进输入框会让人不知道自己在发什么。
+     */
+    var promptPreview by mutableStateOf<PromptSummary?>(null)
+        private set
+
+    var promptPreviewBody by mutableStateOf<String?>(null)
+        private set
+
+    var promptPreviewBusy by mutableStateOf(false)
+        private set
+
+    /** 快捷消息（本机清单，见 `data/QuickMessages.kt`）。 */
+    var quickMessages by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    var quickDraft by mutableStateOf("")
+
     private var promptPage = 1
     private var promptsHasMore = false
 
@@ -1129,6 +1151,47 @@ class ChatViewModel @Inject constructor(
                 promptsBusy = false
             }
         }
+    }
+
+    fun previewPrompt(prompt: PromptSummary) {
+        promptPreview = prompt
+        promptPreviewBody = null
+        promptPreviewBusy = true
+        viewModelScope.launch {
+            try {
+                promptPreviewBody = promptBody(prompt)
+                if (promptPreviewBody == null) {
+                    promptInsertError = "这条提示词取不到内容（可能已经在桌面端删掉了）"
+                }
+            } finally {
+                promptPreviewBusy = false
+            }
+        }
+    }
+
+    fun closePromptPreview() {
+        promptPreview = null
+        promptPreviewBody = null
+        promptPreviewBusy = false
+    }
+
+    fun loadQuickMessages() {
+        quickMessages = QuickMessages.load()
+    }
+
+    fun updateQuickDraft(text: String) {
+        quickDraft = text
+    }
+
+    fun addQuickMessage() {
+        val text = quickDraft.trim()
+        if (text.isBlank()) return
+        quickMessages = QuickMessages.add(text)
+        quickDraft = ""
+    }
+
+    fun removeQuickMessage(text: String) {
+        quickMessages = QuickMessages.remove(text)
     }
 
     /** 取正文（列表只有摘要）。取不到返回 null，调用方给一句提示、不要把输入框清空。 */

@@ -276,6 +276,32 @@ fun ChatScreen(
     ) { uris -> viewModel.addImages(uris) }
     var showAttachSheet by remember { mutableStateOf(false) }
     var showPrompts by remember { mutableStateOf(false) }
+    var panelTab by remember { mutableStateOf(ComposerPanelTab.Prompts) }
+
+    /**
+     * 真正「发出去」的那一步：输入框的发送键与快捷消息的「直接发送」共用。
+     *
+     * 客户端接管的斜杠命令不发给宿主：`/compact` 交给运行时压缩、`/new` 回首页选工作区。
+     */
+    val submitText: (String, BusySendMode) -> Unit = { text, mode ->
+        when {
+            slashIntent(text)?.id == "compact" ->
+                viewModel.compact(slashArgument(text, slashIntent(text)!!).ifBlank { null })
+
+            slashIntent(text)?.id == "new" -> onOpenHome()
+            // 还在跑：按用户选的档位投递（加入当前回合 / 排队 / 并行问）
+            viewModel.streaming -> if (text.isNotBlank()) viewModel.sendWhileBusy(text, mode)
+            else -> viewModel.send(text)
+        }
+    }
+    val sendText: (String) -> Unit = { text -> if (text.isNotBlank()) submitText(text, viewModel.effectiveBusyMode) }
+
+    // 往输入框塞东西（提示词模板 / 快捷消息）：已有内容就和它空一行接上，不要覆盖用户写到一半的草稿
+    val insertIntoDraft: (String) -> Unit = { text ->
+        val merged = if (draft.isBlank()) text else draft.trimEnd() + System.lineSeparator() + System.lineSeparator() + text
+        draft = merged
+        ChatDrafts.put(viewModel.sessionId, merged)
+    }
 
     // 长按消息 → 复制全文 / 复制代码块 / 自由复制
     var actionTarget by remember { mutableStateOf<TimelineItem?>(null) }
@@ -604,16 +630,7 @@ fun ChatScreen(
                     draft = ""
                     ChatDrafts.clear(viewModel.sessionId)
                     atBottom = true
-                    // 客户端接管的斜杠命令不发出去：`/compact` 交给运行时压缩，`/new` 回首页选工作区
-                    val command = slashIntent(text)
-                    when {
-                        command?.id == "compact" ->
-                            viewModel.compact(slashArgument(text, command).ifBlank { null })
-                        command?.id == "new" -> onOpenHome()
-                        // 还在跑：按用户选的档位投递（加入当前回合 / 排队 / 并行问）
-                        viewModel.streaming -> if (text.isNotBlank()) viewModel.sendWhileBusy(text, mode)
-                        else -> viewModel.send(text)
-                    }
+                    submitText(text, mode)
                 },
                 onStop = { viewModel.stop() },
                 mentionFiles = viewModel.mentionFiles,
@@ -621,7 +638,12 @@ fun ChatScreen(
                 hostCommands = viewModel.hostCommands,
                 onNeedMention = { viewModel.buildMentionIndex() },
                 onNeedCommands = { viewModel.ensureCommands() },
-                onOpenPrompts = { showPrompts = true },
+                onOpenPrompts = {
+                    viewModel.closePromptPreview()
+                    viewModel.openPromptLibrary()
+                    viewModel.loadQuickMessages()
+                    showPrompts = true
+                },
                 promptError = viewModel.promptInsertError,
                 onDismissPromptError = { viewModel.promptInsertError = null },
                 onCommand = { entry ->
@@ -778,7 +800,9 @@ fun ChatScreen(
     }
 
     if (showPrompts) {
-        PromptLibrarySheet(
+        ComposerPanelSheet(
+            tab = panelTab,
+            onTabChange = { panelTab = it },
             prompts = viewModel.prompts,
             categories = viewModel.promptCategories,
             category = viewModel.promptCategory,
@@ -786,23 +810,35 @@ fun ChatScreen(
             loading = viewModel.promptsBusy,
             error = viewModel.promptsError,
             hasMore = viewModel.promptsHasMorePages,
+            preview = viewModel.promptPreview,
+            previewBody = viewModel.promptPreviewBody,
+            previewBusy = viewModel.promptPreviewBusy,
             onQueryChange = viewModel::searchPrompts,
             onCategoryChange = viewModel::pickPromptCategory,
             onLoadMore = viewModel::loadMorePrompts,
-            onPick = { prompt ->
+            onPreview = { prompt -> viewModel.previewPrompt(prompt) },
+            onBackFromPreview = { viewModel.closePromptPreview() },
+            onInsertPreview = { body ->
+                insertIntoDraft(body)
                 showPrompts = false
-                scope.launch {
-                    val body = viewModel.promptBody(prompt)
-                    if (body.isNullOrBlank()) {
-                        viewModel.promptInsertError = "这条提示词取不到内容（可能已经在桌面端删掉了）"
-                    } else {
-                        val merged = if (draft.isBlank()) body else draft.trimEnd() + System.lineSeparator() + System.lineSeparator() + body
-                        draft = merged
-                        ChatDrafts.put(viewModel.sessionId, merged)
-                    }
-                }
             },
-            onDismiss = { showPrompts = false },
+            quickMessages = viewModel.quickMessages,
+            quickDraft = viewModel.quickDraft,
+            onQuickDraftChange = viewModel::updateQuickDraft,
+            onAddQuick = { viewModel.addQuickMessage() },
+            onRemoveQuick = { viewModel.removeQuickMessage(it) },
+            onInsertQuick = { text ->
+                insertIntoDraft(text)
+                showPrompts = false
+            },
+            onSendQuick = { text ->
+                showPrompts = false
+                sendText(text)
+            },
+            onDismiss = {
+                showPrompts = false
+                viewModel.closePromptPreview()
+            },
         )
     }
 

@@ -149,8 +149,11 @@ data class PromptsPage(
     val prompts: List<PromptSummary>,
     val page: Int,
     val pageSize: Int,
+    /** 宿主给了总数就用总数判「还有没有下一页」，没给才退回「这一页填满了就还有」。 */
+    val total: Int? = null,
 ) {
-    val hasMore: Boolean get() = prompts.size >= pageSize && pageSize > 0
+    val hasMore: Boolean
+        get() = total?.let { page * pageSize < it } ?: (pageSize > 0 && prompts.size >= pageSize)
 }
 
 object PromptsParse {
@@ -173,7 +176,14 @@ object PromptsParse {
         }
         val page = (root["page"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: 1
         val pageSize = (root["pageSize"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: 20
-        return PromptsPage(categories = categories, prompts = prompts, page = page, pageSize = pageSize)
+        val total = (root["total"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+        return PromptsPage(
+            categories = categories,
+            prompts = prompts,
+            page = page,
+            pageSize = pageSize,
+            total = total,
+        )
     }
 
     /** `{"detail":{"title","description","promptContent"}}` → 正文；取不到给 null。 */
