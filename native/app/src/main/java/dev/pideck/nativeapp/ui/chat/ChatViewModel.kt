@@ -29,6 +29,7 @@ import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.PrivilegeControl
 import dev.pideck.nativeapp.data.PromptSummary
+import dev.pideck.nativeapp.data.LocalPrompts
 import dev.pideck.nativeapp.data.QuickMessages
 import dev.pideck.nativeapp.data.SecurityState
 import dev.pideck.nativeapp.data.parseSecurityState
@@ -1192,6 +1193,60 @@ class ChatViewModel @Inject constructor(
 
     fun removeQuickMessage(text: String) {
         quickMessages = QuickMessages.remove(text)
+    }
+
+    /**
+     * 本机模板（`data/LocalPrompts.kt`）。
+     *
+     * 存在这一层的原因：桌面端「提示词」面板的模板在 `~/.pi/agent/prompts`，只有 IPC
+     * （`prompts:list` / `prompts:get`），Web 侧没有路由；`/api/prompts` 是另一个库。
+     * 宿主那个库没导入过东西时它就是空的，面板不能只长一个空列表。
+     */
+    var localPrompts by mutableStateOf<List<LocalPrompts.Prompt>>(emptyList())
+        private set
+
+    var localPromptTitle by mutableStateOf("")
+    var localPromptBody by mutableStateOf("")
+
+    var localPromptEditor by mutableStateOf(false)
+        private set
+
+    fun loadLocalPrompts() {
+        localPrompts = LocalPrompts.load()
+    }
+
+    fun openLocalPromptEditor() {
+        localPromptTitle = ""
+        localPromptBody = ""
+        localPromptEditor = true
+    }
+
+    fun closeLocalPromptEditor() {
+        localPromptEditor = false
+    }
+
+    fun saveLocalPrompt() {
+        if (localPromptBody.isBlank()) return
+        localPrompts = LocalPrompts.add(localPromptTitle, localPromptBody)
+        localPromptEditor = false
+        localPromptTitle = ""
+        localPromptBody = ""
+    }
+
+    fun removeLocalPrompt(id: String) {
+        localPrompts = LocalPrompts.remove(id)
+    }
+
+    /** 本机模板也走同一个预览态：先看正文再插入，行为与桌面端模板一致。 */
+    fun previewLocalPrompt(prompt: LocalPrompts.Prompt) {
+        promptPreview = PromptSummary(
+            slug = prompt.id,
+            title = prompt.title,
+            description = "",
+            category = "本机",
+        )
+        promptPreviewBody = prompt.body
+        promptPreviewBusy = false
     }
 
     /** 取正文（列表只有摘要）。取不到返回 null，调用方给一句提示、不要把输入框清空。 */

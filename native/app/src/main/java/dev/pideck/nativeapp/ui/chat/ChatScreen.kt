@@ -276,7 +276,7 @@ fun ChatScreen(
     ) { uris -> viewModel.addImages(uris) }
     var showAttachSheet by remember { mutableStateOf(false) }
     var showPrompts by remember { mutableStateOf(false) }
-    var panelTab by remember { mutableStateOf(ComposerPanelTab.Prompts) }
+    var panelTab by remember { mutableStateOf(ComposerPanelTab.Quick) }
 
     /**
      * 真正「发出去」的那一步：输入框的发送键与快捷消息的「直接发送」共用。
@@ -642,6 +642,7 @@ fun ChatScreen(
                     viewModel.closePromptPreview()
                     viewModel.openPromptLibrary()
                     viewModel.loadQuickMessages()
+                    viewModel.loadLocalPrompts()
                     showPrompts = true
                 },
                 promptError = viewModel.promptInsertError,
@@ -822,6 +823,17 @@ fun ChatScreen(
                 insertIntoDraft(body)
                 showPrompts = false
             },
+            localPrompts = viewModel.localPrompts,
+            localEditor = viewModel.localPromptEditor,
+            localTitle = viewModel.localPromptTitle,
+            localBody = viewModel.localPromptBody,
+            onLocalTitleChange = { viewModel.localPromptTitle = it },
+            onLocalBodyChange = { viewModel.localPromptBody = it },
+            onOpenLocalEditor = { viewModel.openLocalPromptEditor() },
+            onCloseLocalEditor = { viewModel.closeLocalPromptEditor() },
+            onSaveLocal = { viewModel.saveLocalPrompt() },
+            onRemoveLocal = { viewModel.removeLocalPrompt(it) },
+            onPreviewLocal = { viewModel.previewLocalPrompt(it) },
             quickMessages = viewModel.quickMessages,
             quickDraft = viewModel.quickDraft,
             onQuickDraftChange = viewModel::updateQuickDraft,

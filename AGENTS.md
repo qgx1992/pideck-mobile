@@ -516,11 +516,20 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   - 页面在 `ui/settings/SkillsExtensionsScreen.kt` + `ui/settings/SkillsViewModel.kt`，排序在
     `data/SkillsAndPrompts.kt` 的 `SkillsParse.sortedSkills/sortedExtensions`（失效沉底、启用在前），
     单测 `data/SkillsAndPromptsTest.kt`。
+  - **提示词库有两个来源，别混成一个**：`GET /api/prompts` 是桌面端那套云端提示词库
+    （本机 sqlite 的 `xueprompts` 表，没导入过就是空数组）；桌面端「提示词」面板里那些
+    `~/.pi/agent/prompts/*.md` 模板**只有 IPC**（`prompts:list` / `prompts:get`），Web 侧没有路由，
+    手机拿不到。所以面板第二段是本机模板（`data/LocalPrompts.kt`，用户自己存的长文本），
+    第三块才是宿主库 —— 别把「宿主库为空」当成加载失败，也别去猜别的接口。
+    库空时按「哪个库 + 要桌面端导入才有内容」写清楚原因，不要只给一句「没有匹配的提示词」。
   - 提示词库：列表 `GET /api/prompts?search=&category=&page=&pageSize=` 只给摘要（含 `total`）；
     **点一条先展开模板正文**（`GET /api/prompts/:slug?category=` 的 `promptContent`），再「插入到输入框」
     —— 桌面端也是先展开，模板里有 `{{变量}}`，直接塞进去用户不知道自己在发什么。
     插入一律**追加**到草稿后面（没有光标概念），取不到就提示，不要清空草稿。
-    面板 `ui/chat/ComposerPanelSheet.kt`，状态在 `ChatViewModel.openPromptLibrary/previewPrompt/searchPrompts`。
+    面板 `ui/chat/ComposerPanelSheet.kt`，状态在 `ChatViewModel.openPromptLibrary/previewPrompt/searchPrompts/
+    previewLocalPrompt/saveLocalPrompt`。
+  - 面板两段的顺序是**快捷消息在前、提示词库在后**（用户 0.5.39 明确要求）：一句话的常用，
+    长模板偶尔用，别让模板挡住常用入口。`ComposerPanelTab` 的枚举顺序就是界面上从左到右的顺序。
   - 快捷消息是**手机本地**的清单（`data/QuickMessages.kt`，SharedPreferences，上限 30 条 / 每条 200 字，
     无存储时给种子清单）：桌面端那份在 `userData/quick-messages.json`，只有 `quick-messages:get|save`
     两个 IPC 通道，HTTP 侧没有路由，**不要**去 `/api/*` 找一个不存在的东西，也别用 `/api/file-content`

@@ -44,14 +44,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.pideck.nativeapp.data.PromptSummary
+import dev.pideck.nativeapp.data.LocalPrompts
 import dev.pideck.nativeapp.data.QuickMessages
 import dev.pideck.nativeapp.ui.theme.SelectChip
 import kotlinx.coroutines.delay
 
-/** 面板的两段：提示词库（宿主上的模板）/ 快捷消息（本机的一句话清单）。 */
-internal enum class ComposerPanelTab(val label: String) { Prompts("提示词库"), Quick("快捷消息") }
+/**
+ * 面板的两段：快捷消息（一句话，随手点）/ 提示词库（长模板，先预览再插入）。
+ *
+ * 顺序是用户定的（0.5.39 修订）：快捷消息在前。日常用的是「继续」「总结」这种一句话，
+ * 模板是偶尔用一次的东西，别让它挡住常用入口。
+ */
+internal enum class ComposerPanelTab(val label: String) { Quick("快捷消息"), Prompts("提示词库") }
 
 /**
  * 输入区左下角那颗书本按钮打开的面板。
@@ -85,6 +92,18 @@ internal fun ComposerPanelSheet(
     onPreview: (PromptSummary) -> Unit,
     onBackFromPreview: () -> Unit,
     onInsertPreview: (String) -> Unit,
+    // ---- 提示词库 · 本机模板 ----
+    localPrompts: List<LocalPrompts.Prompt>,
+    localEditor: Boolean,
+    localTitle: String,
+    localBody: String,
+    onLocalTitleChange: (String) -> Unit,
+    onLocalBodyChange: (String) -> Unit,
+    onOpenLocalEditor: () -> Unit,
+    onCloseLocalEditor: () -> Unit,
+    onSaveLocal: () -> Unit,
+    onRemoveLocal: (String) -> Unit,
+    onPreviewLocal: (LocalPrompts.Prompt) -> Unit,
     // ---- 快捷消息 ----
     quickMessages: List<String>,
     quickDraft: String,
@@ -134,6 +153,17 @@ internal fun ComposerPanelSheet(
                         onCategoryChange = onCategoryChange,
                         onLoadMore = onLoadMore,
                         onPreview = onPreview,
+                        localPrompts = localPrompts,
+                        localEditor = localEditor,
+                        localTitle = localTitle,
+                        localBody = localBody,
+                        onLocalTitleChange = onLocalTitleChange,
+                        onLocalBodyChange = onLocalBodyChange,
+                        onOpenLocalEditor = onOpenLocalEditor,
+                        onCloseLocalEditor = onCloseLocalEditor,
+                        onSaveLocal = onSaveLocal,
+                        onRemoveLocal = onRemoveLocal,
+                        onPreviewLocal = onPreviewLocal,
                     )
 
                     ComposerPanelTab.Quick -> QuickMessageList(
@@ -170,80 +200,228 @@ private fun PromptList(
     onCategoryChange: (String?) -> Unit,
     onLoadMore: () -> Unit,
     onPreview: (PromptSummary) -> Unit,
+    localPrompts: List<LocalPrompts.Prompt>,
+    localEditor: Boolean,
+    localTitle: String,
+    localBody: String,
+    onLocalTitleChange: (String) -> Unit,
+    onLocalBodyChange: (String) -> Unit,
+    onOpenLocalEditor: () -> Unit,
+    onCloseLocalEditor: () -> Unit,
+    onSaveLocal: () -> Unit,
+    onRemoveLocal: (String) -> Unit,
+    onPreviewLocal: (LocalPrompts.Prompt) -> Unit,
 ) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        modifier = Modifier.fillMaxWidth(),
-        placeholder = { Text("搜索提示词…") },
-        singleLine = true,
-        shape = RoundedCornerShape(12.dp),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { }),
-    )
-    if (categories.isNotEmpty()) {
-        LazyRow(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            item(key = "cat-all") {
-                FilterChip(
-                    selected = category == null,
-                    onClick = { onCategoryChange(null) },
-                    label = { Text("全部分类") },
-                )
-            }
-            items(categories, key = { "cat-" + it }) { name ->
-                FilterChip(
-                    selected = category == name,
-                    onClick = { onCategoryChange(name) },
-                    label = { Text(name) },
-                )
-            }
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
+        contentPadding = PaddingValues(bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        // ---- 本机模板 ----
+        item(key = "local-header") {
+            SectionHeader(
+                title = "本机模板",
+                hint = "存在这台手机上",
+                action = if (localEditor) "取消" else "新建",
+                onAction = if (localEditor) onCloseLocalEditor else onOpenLocalEditor,
+            )
         }
-    }
-    error?.let {
-        Text(
-            it,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(bottom = 6.dp),
-        )
-    }
-    when {
-        loading && prompts.isEmpty() -> Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-            horizontalArrangement = Arrangement.Center,
-        ) {
-            CircularProgressIndicator(modifier = Modifier.size(22.dp))
-        }
-
-        prompts.isEmpty() -> Text(
-            "没有匹配的提示词",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(vertical = 24.dp),
-        )
-
-        else -> LazyColumn(
-            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
-            contentPadding = PaddingValues(bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            items(prompts, key = { it.slug }) { prompt ->
-                PromptRow(prompt = prompt, onPick = { onPreview(prompt) })
-            }
-            if (hasMore) {
-                item(key = "more") {
-                    LaunchedEffect(prompts.size) { delay(50); onLoadMore() }
+        if (localEditor) {
+            item(key = "local-editor") {
+                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                    OutlinedTextField(
+                        value = localTitle,
+                        onValueChange = onLocalTitleChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("标题（可留空，取正文第一行）") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = localBody,
+                        onValueChange = onLocalBodyChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("模板正文：可以多段、可以有 {{变量}}") },
+                        minLines = 4,
+                        maxLines = 8,
+                        shape = RoundedCornerShape(12.dp),
+                    )
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
-                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.End,
                     ) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                        TextButton(onClick = onSaveLocal, enabled = localBody.isNotBlank()) {
+                            Text("保存模板")
+                        }
                     }
                 }
             }
+        }
+        if (localPrompts.isEmpty() && !localEditor) {
+            item(key = "local-empty") {
+                Text(
+                    "还没有本机模板。桌面端「提示词」面板里的模板存在 pi 的配置目录" +
+                        "（~/.pi/agent/prompts），只有桌面端自己读得到，手机拿不到 —— " +
+                        "想在这里用，点「新建」把常用的存一份。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+            }
+        }
+        items(localPrompts, key = { "local-" + it.id }) { prompt ->
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().clickable { onPreviewLocal(prompt) },
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        prompt.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { onRemoveLocal(prompt.id) }, modifier = Modifier.size(34.dp)) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "删除这个模板",
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        // ---- 桌面端提示词库 ----
+        item(key = "host-header") {
+            SectionHeader(
+                title = "桌面端提示词库",
+                hint = "来自 GET /api/prompts",
+                action = null,
+                onAction = {},
+                extraTop = 10.dp,
+            )
+        }
+        item(key = "search") {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("搜索提示词…") },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { }),
+            )
+        }
+        if (categories.isNotEmpty()) {
+            item(key = "categories") {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    item(key = "cat-all") {
+                        FilterChip(
+                            selected = category == null,
+                            onClick = { onCategoryChange(null) },
+                            label = { Text("全部分类") },
+                        )
+                    }
+                    items(categories, key = { "cat-" + it }) { name ->
+                        FilterChip(
+                            selected = category == name,
+                            onClick = { onCategoryChange(name) },
+                            label = { Text(name) },
+                        )
+                    }
+                }
+            }
+        }
+        error?.let { message ->
+            item(key = "error") {
+                Text(
+                    message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+            }
+        }
+        when {
+            loading && prompts.isEmpty() -> item(key = "loading") {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp))
+                }
+            }
+
+            prompts.isEmpty() -> item(key = "host-empty") {
+                Text(
+                    text = if (query.isNotBlank() || category != null) {
+                        "没有匹配的提示词"
+                    } else {
+                        "这个库是空的：它对应桌面端「提示词库」那一套（本机 sqlite 的 xueprompts 表，" +
+                            "要在桌面端导入或更新才会有内容）。桌面端「提示词」面板里那些 .md 模板走的是" +
+                            "桌面端进程内的 IPC，Web 接口没有暴露，手机端读不到。"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 10.dp),
+                )
+            }
+
+            else -> {
+                items(prompts, key = { it.slug }) { prompt ->
+                    PromptRow(prompt = prompt, onPick = { onPreview(prompt) })
+                }
+                if (hasMore) {
+                    item(key = "more") {
+                        LaunchedEffect(prompts.size) { delay(50); onLoadMore() }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(
+    title: String,
+    hint: String,
+    action: String?,
+    onAction: () -> Unit,
+    extraTop: Dp = 0.dp,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = extraTop),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.width(6.dp))
+        Text(
+            hint,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (action != null) {
+            TextButton(onClick = onAction, modifier = Modifier.height(32.dp)) { Text(action) }
         }
     }
 }
