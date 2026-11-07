@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.DropdownMenu
@@ -109,6 +110,7 @@ fun SettingsScreen(
     onManageDevices: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     Scaffold(
         topBar = {
             TopAppBar(
@@ -199,6 +201,44 @@ fun SettingsScreen(
                 icon = Icons.Default.Dns,
                 fillWidth = true,
             )
+
+            Spacer(Modifier.height(12.dp))
+            SectionTitle("诊断")
+            // 闪退现场一没就只剩一句描述。这里给出栈，用户直接复制粘贴就能定位。
+            val crash = viewModel.crashLog
+            if (crash == null) {
+                InfoRow("崩溃记录", "没有记录（最近一次启动正常）")
+            } else {
+                Text(
+                    crash.lineSequence().take(14).joinToString(separator = "\n"),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                        )
+                        .padding(10.dp),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AppButton(
+                        text = "复制栈",
+                        onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(crash)) },
+                        style = AppButtonStyle.Ghost,
+                        icon = Icons.Default.ContentCopy,
+                    )
+                    AppButton(
+                        text = "清除",
+                        onClick = { viewModel.clearCrashLog() },
+                        style = AppButtonStyle.Ghost,
+                    )
+                }
+            }
 
             Spacer(Modifier.height(12.dp))
             SectionTitle("关于")

@@ -18,8 +18,12 @@ fun describeConnectionError(e: Throwable): String {
         val code = e.code
         return when {
             code == null -> e.message ?: "请求失败"
-            code == 401 || code == 403 ->
+            code == 401 || code == 403 -> {
+                // 401 是「这台设备的授权没了」，不是网络问题：留一条常驻提示，
+                // 回到设备页时能看到该怎么修（否则用户只会反复重进、以为是网络）。
+                AuthNotice.show()
                 "令牌不对或没填。桌面端「设置 → 连接面板」里复制带 ?token= 的那条完整链接，整条粘进来。"
+            }
             code == 404 ->
                 "能连上，但这个端口不是 PiDeck 的 Web 服务（404）。确认端口是 8765（下载页才是 8080）。"
             code in 500..599 -> "桌面端自己报错了（HTTP $code），看一眼电脑上 PiDeck 的日志。"

@@ -171,11 +171,14 @@ class HomeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val found = repository.devices.first { list -> list.any { it.id == deviceId } }
-                .firstOrNull { it.id == deviceId }
+            // 读盘失败（DataStore / Keystore 抽风）不能把进程带走：设备没了就当「回设备页」
+            val found = runCatching {
+                repository.devices.first { list -> list.any { it.id == deviceId } }
+                    .firstOrNull { it.id == deviceId }
+            }.getOrNull()
             if (found != null) {
                 device = found
-                token = repository.tokenOf(found.id)
+                token = runCatching { repository.tokenOf(found.id) }.getOrNull()
                 deviceName = found.name
             }
             // 列表页刚拉过的状态先垫上，首页不至于空着等网络

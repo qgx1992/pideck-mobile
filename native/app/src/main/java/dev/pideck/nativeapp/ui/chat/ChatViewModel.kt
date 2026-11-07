@@ -86,6 +86,7 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import javax.inject.Inject
 
@@ -246,11 +247,13 @@ class ChatViewModel @Inject constructor(
     init {
         restoreBusySendMode()
         viewModelScope.launch {
-            val found = repository.devices.first { list -> list.any { it.id == deviceId } }
-                .firstOrNull { it.id == deviceId }
+            val found = runCatching {
+                repository.devices.first { list -> list.any { it.id == deviceId } }
+                    .firstOrNull { it.id == deviceId }
+            }.getOrNull()
             if (found != null) {
                 device = found
-                token = repository.tokenOf(found.id)
+                token = runCatching { repository.tokenOf(found.id) }.getOrNull()
             }
             // 找不到设备也要放行：否则等信号的请求会永远挂着
             deviceReady.complete(Unit)
@@ -873,23 +876,120 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 切模型：**运行时活着就必须走 `runtime/model`**。
+     *
+     * `POST /api/sessions/:id/update` 只改 catalog 记录（宿主 `updateSessionRecord` 不碰 agent），
+     * 跑着的 run 用的还是旧模型 —— 表现是「胶囊变了、回答没变」，要等下次激活才生效。
+     * 桌面端顶栏走的就是 `runtime/model`，宿主 `setRuntimeModel` 会顺手把记录也更新掉
+     * （`out/main/index.js` 的 `sessionRuntimeCoordinator.setRuntimeModel`）。
+     */
     fun applyModel(model: SessionModel) {
-        patchSession(
-            buildJsonObject {
-                put(
-                    "model",
-                    buildJsonObject {
-                        put("provider", model.provider)
-                        put("modelId", model.modelId)
-                        put("modelName", model.modelName)
-                    },
-                )
-            },
-        ) { sessionModel = model }
+        val target = device ?: return
+        viewModelScope.launch {
+            deviceReady.await()
+            val runtime = runtimeTarget()
+            val applied = runtime?.let { target0 ->
+                runCatching {
+                    api.runtimeCommand(
+                        target,
+                        token,
+                        target0,
+                        "model",
+                        buildJsonObject {
+                            put("provider", model.provider)
+                            put("modelId", model.modelId)
+                            put("modelName", model.modelName)
+                        },
+                    )
+                }.getOrNull()
+            }
+            if (applied != null) {
+                adoptRuntimePrefs(applied)
+                sessionModel = model
+                liveModel = null
+                refreshStateQuietly(target)
+                return@launch
+            }
+            // 运行时没起来（冷会话）或宿主不认这条命令：退回改记录，下次激活时生效
+            patchSession(
+                buildJsonObject {
+                    put(
+                        "model",
+                        buildJsonObject {
+                            put("provider", model.provider)
+                            put("modelId", model.modelId)
+                            put("modelName", model.modelName)
+                        },
+                    )
+                },
+            ) { sessionModel = model }
+        }
     }
 
+    /**
+     * 切思考档位：同 [applyModel]，运行时活着走 `runtime/thinking` 才即时生效。
+     *
+     * pi 可能降档（模型不支持这么高档位），所以生效值以响应里的 `thinkingLevel` 为准。
+     */
     fun applyThinking(level: String) {
-        patchSession(buildJsonObject { put("thinkingLevel", level) }) { thinkingLevel = level }
+        val target = device ?: return
+        viewModelScope.launch {
+            deviceReady.await()
+            val runtime = runtimeTarget()
+            val applied = runtime?.let { target0 ->
+                runCatching {
+                    api.runtimeCommand(
+                        target,
+                        token,
+                        target0,
+                        "thinking",
+                        buildJsonObject { put("level", level) },
+                    )
+                }.getOrNull()
+            }
+            if (applied != null) {
+                thinkingLevel = level
+                liveThinking = null
+                adoptRuntimePrefs(applied)
+                refreshStateQuietly(target)
+                return@launch
+            }
+            patchSession(buildJsonObject { put("thinkingLevel", level) }) { thinkingLevel = level }
+        }
+    }
+
+    /**
+     * `runtime/model` / `runtime/thinking` 的响应里带着宿主**真正生效**的模型与档位
+     * （形状 `{"result":{provider,modelId,modelName,thinkingLevel}}`），照它更新展示值 ——
+     * 不然「选了但被降档」的情况界面上看不出来。
+     */
+    private fun adoptRuntimePrefs(body: String) {
+        val result = runCatching {
+            PideckJson.parseToJsonElement(body).jsonObject["result"]?.jsonObject
+        }.getOrNull() ?: return
+
+        fun text(key: String): String? {
+            val element = result[key] as? JsonPrimitive ?: return null
+            return if (element.isString) element.content else null
+        }
+
+        val provider = text("provider")
+        val modelId = text("modelId")
+        val modelName = text("modelName")
+        if (!provider.isNullOrBlank() && !modelId.isNullOrBlank()) {
+            sessionModel = SessionModel(provider, modelId, modelName ?: modelId)
+        }
+        text("thinkingLevel")?.let { level -> thinkingLevel = level.takeIf { it.isNotBlank() } }
+    }
+
+    /** 改完偏好把 `/api/state` 重拉一遍塞缓存：列表页与侧栏读的是同一份，不能只改聊天页内存。 */
+    private suspend fun refreshStateQuietly(target: Device) {
+        val fresh = runCatching { api.state(target, token, null) }.getOrNull()
+        if (fresh is StateFetch.Fresh) {
+            StateCache.put(deviceId, fresh.state)
+            adoptState(fresh.state)
+        }
     }
 
     /** 改偏好后把记录重拉一遍：列表页与侧栏读的是同一份缓存，不能只改聊天页的内存。 */
@@ -1572,14 +1672,25 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** 停止按钮：先让服务端停 runtime，本地流跟着结束（finally 里会重拉历史对齐）。 */
+    /**
+     * 停止按钮：发 `runtime/abort`，**不是** `runtime/stop`。
+     *
+     * 两者差在运行时死不死：`abort` 只中断当前这一轮（桌面端停止按钮就是这个），
+     * `stop` 会把整个运行时卸掉 —— 下次发消息要重新激活（几十秒，且丢掉上下文内的热状态）。
+     * 卸运行时只在并行/匿名会话收尾时用（见下面的 `stopAnonymous`）。
+     */
     fun stop() {
         val target = device ?: return
         val runtime = StateCache.runtime(deviceId, sessionId)
         viewModelScope.launch {
             try {
                 if (runtime != null) {
-                    api.stopRuntime(target, token, sessionId, runtime.agentId, runtime.runtimeGeneration.toLong())
+                    api.runtimeCommand(
+                        target,
+                        token,
+                        RuntimeTarget(sessionId, runtime.agentId, runtime.runtimeGeneration.toLong()),
+                        "abort",
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -1591,6 +1702,45 @@ class ChatViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * 重启会话（`runtime/restart`）：上下文不丢，资源热重载。
+     *
+     * 宿主的实现是「先写 200 头、每 2 秒写一个空格心跳、结束时才给 JSON」，
+     * 所以这里只能等整段响应（OkHttp 的 `readTimeout` 已是 0，不会超时）。
+     */
+    fun restartRuntime() {
+        val target = device ?: return
+        val runtime = StateCache.runtime(deviceId, sessionId) ?: run {
+            error = "运行时没起来，先发一句再重启"
+            return
+        }
+        if (restarting) return
+        viewModelScope.launch {
+            restarting = true
+            try {
+                api.runtimeCommand(
+                    target,
+                    token,
+                    RuntimeTarget(sessionId, runtime.agentId, runtime.runtimeGeneration.toLong()),
+                    "restart",
+                )
+                livePrefsKey = null
+                syncLivePrefs()
+                refreshContext()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                error = describeConnectionError(e)
+            } finally {
+                restarting = false
+            }
+        }
+    }
+
+    /** 重启进行中：按钮置灰，别连点（宿主那段心跳最长几十秒）。 */
+    var restarting by mutableStateOf(false)
+        private set
 
     // ---- 运行中发送：加入当前回合 / 排队到下一轮 / 并行发送 ----
     //

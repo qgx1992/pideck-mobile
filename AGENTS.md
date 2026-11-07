@@ -513,6 +513,25 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
   不做「有一张卡但不知道在问什么」。展开内容走 `AnimatedVisibility`，选项列仍是 `heightIn(max = 320.dp)` 内部滚动。
 
+- **改偏好要走运行时命令，停止走 abort**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt`
+  的 `applyModel` / `applyThinking` / `stop`）：
+  - `POST /api/sessions/:id/update` **只改 catalog 记录**，跑着的 agent 还按旧模型回答（表现「胶囊变了回答没变」）。
+    运行时活着必须用 `runtime/model`（body `{provider, modelId, modelName}` + target 三元组）与
+    `runtime/thinking`（body `{level}`），宿主 `setRuntimeModel` 会顺手 `catalog.update` 落盘；
+    运行时没起来（冷会话，`StateCache.runtime` 为空）才退回改记录，下次激活生效。
+    宿主可能降档，响应 `{"result":{provider,modelId,modelName,thinkingLevel}}` 里的 `thinkingLevel` 才是真值。
+  - 停止按钮 = `runtime/abort`（只断当前这一轮）。`runtime/stop` 是**卸运行时**，下次发消息要重新激活几十秒，
+    只在并行/匿名会话收尾时用。重启是 `runtime/restart`：宿主先写 200 头、每 2 秒一个空格心跳、结束才给 JSON，
+    所以 UI 要置灰等它跑完（OkHttp readTimeout 已是 0）。
+- **授权失效要显式验、显式说**：冷启动 `native/app/src/main/java/dev/pideck/nativeapp/ui/StartViewModel.kt`
+  先对存着的设备打一次 `/api/state`（3 秒超时），401/403 就落设备页 + `data/AuthNotice.kt` 的常驻提示
+  （「授权已失效，重新配对」），别进首页给一屏红字（用户只会反复重进）。`describeConnectionError` 撞到 401/403
+  也会写这条提示。
+- **闪退留现场**：`native/app/src/main/java/dev/pideck/nativeapp/data/CrashLog.kt` 在 `PiDeckApp.onCreate`
+  最早装未捕获处理器，栈写 `filesDir/last-crash.txt`（含版本 / 系统 / 机型），设置页「诊断」段可看/复制/清除。
+  另外读令牌（EncryptedSharedPreferences，Keystore 主密钥可能失效）**全部 runCatching** —— 以前
+  `DeviceRepository.tokenOf` 抛一次就把进程带走；`RunWatchService.watchLoop` 整轮兜底（SupervisorJob 不防未捕获异常）。
+
 验证：`cd native && ./gradlew --offline -q :app:testDebugUnitTest`，出包
 `./gradlew :app:assembleRelease`，产物在 `native/app/build/outputs/apk/release/app-release.apk`，
 拷成 `apk/PiDeck-native-<版本>-release.apk` 后更新 `apk/SHA256SUMS.txt` 与 `apk/index.html`

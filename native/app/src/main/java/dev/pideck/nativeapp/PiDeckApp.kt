@@ -8,6 +8,7 @@ import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import dev.pideck.nativeapp.data.CrashLog
 import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.TurnStatsStore
 import dev.pideck.nativeapp.ui.sessions.GroupCollapse
@@ -19,6 +20,8 @@ class PiDeckApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 最先装：崩溃是从这里往后任何一行抛的都归它记（设置页「诊断」里能看）
+        CrashLog.install(this)
         Notifications.ensureChannels(this)
         // 偏好读取是 IO，扔到独立 scope；镜像值在 Prefs 里，非 Compose 的地方直接读
         val prefsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.pideck.nativeapp.data.CrashLog
 import dev.pideck.nativeapp.data.Device
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.Prefs
@@ -49,6 +50,10 @@ class SettingsViewModel @Inject constructor(
     var sessionCount by mutableStateOf(0)
         private set
 
+    /** 上一次崩溃的栈（`filesDir/last-crash.txt`）；没有就是 null。声明须在 init 之前。 */
+    var crashLog by mutableStateOf<String?>(null)
+        private set
+
     init {
         // Prefs 的镜像值可能还没读完（Application 里是异步灌的），先取一次再订
         viewModelScope.launch {
@@ -58,13 +63,19 @@ class SettingsViewModel @Inject constructor(
             collapseRestore = Prefs.collapseRestore
         }
         viewModelScope.launch {
-            val devices = repository.devices.first()
+            val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
             deviceCount = devices.size
             device = devices.firstOrNull { it.id == deviceId } ?: devices.firstOrNull()
             val cached = device?.let { StateCache.get(it.id) }
             hostVersion = cached?.version
             sessionCount = cached?.sessions?.size ?: 0
         }
+        crashLog = runCatching { CrashLog.read(context) }.getOrNull()
+    }
+
+    fun clearCrashLog() {
+        CrashLog.clear(context)
+        crashLog = null
     }
 
     fun chooseTheme(mode: ThemeMode) {

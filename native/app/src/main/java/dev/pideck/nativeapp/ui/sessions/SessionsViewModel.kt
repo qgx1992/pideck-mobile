@@ -194,12 +194,14 @@ class SessionsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            repository.devices.first { list -> list.any { it.id == deviceId } }
-                .firstOrNull { it.id == deviceId }
+            runCatching {
+                repository.devices.first { list -> list.any { it.id == deviceId } }
+                    .firstOrNull { it.id == deviceId }
+            }.getOrNull()
                 ?.let { found ->
                     device = found
                     deviceName = found.name
-                    token = repository.tokenOf(found.id)
+                    token = runCatching { repository.tokenOf(found.id) }.getOrNull()
                 }
             refresh()
         }

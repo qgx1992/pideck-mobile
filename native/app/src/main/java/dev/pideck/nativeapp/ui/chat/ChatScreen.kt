@@ -392,6 +392,27 @@ fun ChatScreen(
                                     viewModel.exportHtml()
                                 },
                             )
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text("重启会话")
+                                        Text(
+                                            when {
+                                                viewModel.restarting -> "正在重启，等它跑完…"
+                                                else -> "上下文不丢，重载资源"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                                enabled = !viewModel.restarting,
+                                onClick = {
+                                    showMore = false
+                                    viewModel.restartRuntime()
+                                },
+                            )
                             // 权限位按后端分发：pi → 安全等级（安全门），dsh → 权限预设，acp / 生图生视频 → 不摆。
                             // 以前这里不分后端一律摆「权限预设」，调到 pi 会话上会写坏记录，后续对话起不来。
                             when (viewModel.securityControl) {

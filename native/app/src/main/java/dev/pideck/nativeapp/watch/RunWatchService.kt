@@ -7,6 +7,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.ServiceCompat
 import dagger.hilt.android.AndroidEntryPoint
 import dev.pideck.nativeapp.data.Device
@@ -15,6 +16,7 @@ import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.PideckState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -82,50 +84,60 @@ class RunWatchService : Service() {
         var idlePolls = 0
 
         while (true) {
-            val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
-            var active = 0
+            // 整轮兜一层：这里的异常没人接就是进程级崩溃（SupervisorJob 只防兄弟协程被取消）。
+            // 从前 `tokenOf` 读 Keystore 失败一次就能把整个 App 带走 —— 表现是「冷启动闪退」。
+            try {
+                val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
+                var active = 0
 
-            for (device in devices) {
-                val token = repository.tokenOf(device.id)
-                val runtimes = runCatching {
-                    withTimeout(8_000) { api.runtimes(device, token) }
-                }.getOrNull() ?: continue
+                for (device in devices) {
+                    val token = runCatching { repository.tokenOf(device.id) }.getOrNull()
+                    val runtimes = runCatching {
+                        withTimeout(8_000) { api.runtimes(device, token) }
+                    }.getOrNull() ?: continue
 
-                for (runtime in runtimes) {
-                    val key = device.id + "|" + runtime.sessionId
-                    val running = runtime.status == "running" || runtime.status == "busy"
-                    if (running) active++
-                    if (wasRunning[key] == true && !running) {
-                        // 只在看不见 App 的时候打扰人；前台时用户自己就看到了。
-                        if (!RunWatcher.appVisible && Prefs.notifyDone) {
-                            val title = titles[runtime.sessionId]
-                                ?: runCatching { titleOf(device, token, runtime.sessionId) }.getOrNull()
-                            if (!title.isNullOrBlank()) titles[runtime.sessionId] = title
-                            Notifications.finished(
-                                this,
-                                device.id,
-                                runtime.sessionId,
-                                title.orEmpty(),
-                                failed = false,
-                            )
+                    for (runtime in runtimes) {
+                        val key = device.id + "|" + runtime.sessionId
+                        val running = runtime.status == "running" || runtime.status == "busy"
+                        if (running) active++
+                        if (wasRunning[key] == true && !running) {
+                            // 只在看不见 App 的时候打扰人；前台时用户自己就看到了。
+                            if (!RunWatcher.appVisible && Prefs.notifyDone) {
+                                val title = titles[runtime.sessionId]
+                                    ?: runCatching { titleOf(device, token, runtime.sessionId) }.getOrNull()
+                                if (!title.isNullOrBlank()) titles[runtime.sessionId] = title
+                                runCatching {
+                                    Notifications.finished(
+                                        this,
+                                        device.id,
+                                        runtime.sessionId,
+                                        title.orEmpty(),
+                                        failed = false,
+                                    )
+                                }
+                            }
+                            wasRunning.remove(key)
+                        } else {
+                            wasRunning[key] = running
                         }
-                        wasRunning.remove(key)
-                    } else {
-                        wasRunning[key] = running
                     }
                 }
-            }
 
-            runCatching {
-                getSystemService(NotificationManager::class.java)
-                    ?.notify(Notifications.ACTIVE_ID, Notifications.active(this, active.coerceAtLeast(1)))
-            }
+                runCatching {
+                    getSystemService(NotificationManager::class.java)
+                        ?.notify(Notifications.ACTIVE_ID, Notifications.active(this, active.coerceAtLeast(1)))
+                }
 
-            idlePolls = if (active == 0) idlePolls + 1 else 0
-            val alive = SystemClock.elapsedRealtime() - startedAt
-            if (idlePolls >= 3 && alive > 90_000) {
-                stopSelf()
-                return
+                idlePolls = if (active == 0) idlePolls + 1 else 0
+                val alive = SystemClock.elapsedRealtime() - startedAt
+                if (idlePolls >= 3 && alive > 90_000) {
+                    stopSelf()
+                    return
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.w("PiDeckWatch", "看护轮询失败：${e::class.java.simpleName}: ${e.message}")
             }
             delay(POLL_INTERVAL_MS)
         }

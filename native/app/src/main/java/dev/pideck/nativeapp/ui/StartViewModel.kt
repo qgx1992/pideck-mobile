@@ -8,10 +8,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.pideck.nativeapp.data.AuthNotice
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.Prefs
+import dev.pideck.nativeapp.data.PideckException
+import dev.pideck.nativeapp.data.StateFetch
+import dev.pideck.nativeapp.data.PideckApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 /**
@@ -23,7 +28,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class StartViewModel @Inject constructor(
-    repository: DeviceRepository,
+    private val repository: DeviceRepository,
+    private val api: PideckApi,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -36,7 +42,40 @@ class StartViewModel @Inject constructor(
             val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
             val remembered = runCatching { Prefs.lastSession(context) }.getOrNull()?.first
             val device = devices.firstOrNull { it.id == remembered } ?: devices.firstOrNull()
-            startRoute = if (device == null) Routes.DEVICES else Routes.home(device.id)
+            if (device == null) {
+                startRoute = Routes.DEVICES
+                return@launch
+            }
+            // 冷启动先验一次授权：令牌被撤销的话，进首页只会是一屏红字，退出重进还是一样。
+            // 验不过（401/403）就落到设备页，并把「授权失效」写成常驻提示 —— 用户才知道要重新配对。
+            when (probe(device)) {
+                Probe.Unauthorized -> {
+                    AuthNotice.show()
+                    startRoute = Routes.DEVICES
+                }
+                // 连不上（桌面端没开、不在同一网络）：照样进首页，那儿有更具体的连接报错
+                else -> startRoute = Routes.home(device.id)
+            }
         }
+    }
+
+    private enum class Probe { Ok, Unauthorized, Unreachable }
+
+    /** 一次 `/api/state`：只关心「授权还对不对」。3 秒拿不到就按连不上处理，不拖慢启动。 */
+    private suspend fun probe(device: dev.pideck.nativeapp.data.Device): Probe {
+        val token = runCatching { repository.tokenOf(device.id) }.getOrNull()
+        val result = withTimeoutOrNull(3_000) {
+            runCatching { api.state(device, token) }
+        } ?: return Probe.Unreachable
+        val error = result.exceptionOrNull()
+        if (error is PideckException && (error.code == 401 || error.code == 403)) return Probe.Unauthorized
+        if (result.isSuccess) {
+            val fresh = result.getOrNull()
+            if (fresh is StateFetch.Fresh) {
+                dev.pideck.nativeapp.data.StateCache.put(device.id, fresh.state)
+            }
+            AuthNotice.clear()
+        }
+        return Probe.Ok
     }
 }

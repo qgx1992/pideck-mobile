@@ -58,7 +58,14 @@ class DeviceRepository(private val context: Context) {
         }.getOrDefault(emptyList())
     }
 
-    fun tokenOf(deviceId: String): String? = tokens.getString(deviceId, null)
+    /**
+     * 取令牌。
+     *
+     * EncryptedSharedPreferences 在 Keystore 主密钥失效时会抛异常（换签名重装、系统恢复备份、
+     * 部分 ROM 清理 keystore），而调用点全在协程里 —— 以前直接把进程带走，表现就是
+     * 「冷启动闪退」。拿不到令牌就当没有：上层收到 401 会提示重新配对，而不是崩掉。
+     */
+    fun tokenOf(deviceId: String): String? = runCatching { tokens.getString(deviceId, null) }.getOrNull()
 
     /** 配对：同 baseUrl 视为同一台设备，重复添加只更新名字与令牌。 */
     suspend fun upsert(device: Device, token: String?) = withContext(Dispatchers.IO) {
