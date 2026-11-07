@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -274,6 +275,7 @@ fun ChatScreen(
         ActivityResultContracts.GetMultipleContents(),
     ) { uris -> viewModel.addImages(uris) }
     var showAttachSheet by remember { mutableStateOf(false) }
+    var showPrompts by remember { mutableStateOf(false) }
 
     // 长按消息 → 复制全文 / 复制代码块 / 自由复制
     var actionTarget by remember { mutableStateOf<TimelineItem?>(null) }
@@ -619,6 +621,9 @@ fun ChatScreen(
                 hostCommands = viewModel.hostCommands,
                 onNeedMention = { viewModel.buildMentionIndex() },
                 onNeedCommands = { viewModel.ensureCommands() },
+                onOpenPrompts = { showPrompts = true },
+                promptError = viewModel.promptInsertError,
+                onDismissPromptError = { viewModel.promptInsertError = null },
                 onCommand = { entry ->
                     when (entry.builtin) {
                         // 客户端接管：新会话直接回首页，压缩把命令写回输入框（可以再补一句提示词）
@@ -770,6 +775,35 @@ fun ChatScreen(
             atBottom = true
         },
     )
+    }
+
+    if (showPrompts) {
+        PromptLibrarySheet(
+            prompts = viewModel.prompts,
+            categories = viewModel.promptCategories,
+            category = viewModel.promptCategory,
+            query = viewModel.promptQuery,
+            loading = viewModel.promptsBusy,
+            error = viewModel.promptsError,
+            hasMore = viewModel.promptsHasMorePages,
+            onQueryChange = viewModel::searchPrompts,
+            onCategoryChange = viewModel::pickPromptCategory,
+            onLoadMore = viewModel::loadMorePrompts,
+            onPick = { prompt ->
+                showPrompts = false
+                scope.launch {
+                    val body = viewModel.promptBody(prompt)
+                    if (body.isNullOrBlank()) {
+                        viewModel.promptInsertError = "这条提示词取不到内容（可能已经在桌面端删掉了）"
+                    } else {
+                        val merged = if (draft.isBlank()) body else draft.trimEnd() + System.lineSeparator() + System.lineSeparator() + body
+                        draft = merged
+                        ChatDrafts.put(viewModel.sessionId, merged)
+                    }
+                }
+            },
+            onDismiss = { showPrompts = false },
+        )
     }
 
     if (showAttachSheet) {
@@ -1369,6 +1403,9 @@ private fun Composer(
     onNeedMention: () -> Unit = {},
     onNeedCommands: () -> Unit = {},
     onCommand: (CommandEntry) -> Unit = {},
+    onOpenPrompts: () -> Unit = {},
+    promptError: String? = null,
+    onDismissPromptError: () -> Unit = {},
 ) {
     // 输入区不需要一个「底板」：之前是 Surface + tonalElevation，会在底部铺出一条
     // 顶边笔直的浅色方块，跟圆角输入卡片放一起很割裂。改成向上渐隐的遮罩，
@@ -1401,6 +1438,20 @@ private fun Composer(
                     items(images, key = { it.id }) { image ->
                         AttachmentThumb(image = image, onRemove = { onRemoveImage(image.id) })
                     }
+                }
+            }
+            if (promptError != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        promptError,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onDismissPromptError) { Text("知道了") }
                 }
             }
             if (imageError != null) {
@@ -1494,6 +1545,15 @@ private fun Composer(
                             icon = Icons.Default.AddPhotoAlternate,
                             contentDescription = "添加图片",
                             onClick = onAttach,
+                            size = 32,
+                            container = Color.Transparent,
+                        )
+                        // 提示词库：桌面端的「提示词」按钮，点开是搜索 + 分类 + 插入。
+                        // 放在图片按钮右边，跟发送区隔开 —— 它是「往输入框塞东西」，不是发送动作。
+                        AppIconButton(
+                            icon = Icons.Default.MenuBook,
+                            contentDescription = "提示词库",
+                            onClick = onOpenPrompts,
                             size = 32,
                             container = Color.Transparent,
                         )

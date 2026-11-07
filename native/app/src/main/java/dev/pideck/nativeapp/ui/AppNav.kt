@@ -20,6 +20,7 @@ import dev.pideck.nativeapp.ui.devices.DevicesScreen
 import dev.pideck.nativeapp.ui.home.HomeScreen
 import dev.pideck.nativeapp.ui.sessions.SessionsScreen
 import dev.pideck.nativeapp.ui.settings.SettingsScreen
+import dev.pideck.nativeapp.ui.settings.SkillsExtensionsScreen
 import dev.pideck.nativeapp.ui.splash.SplashScreen
 import dev.pideck.nativeapp.watch.NotificationNav
 import kotlinx.coroutines.delay
@@ -30,6 +31,7 @@ object Routes {
     const val SESSIONS = "sessions/{deviceId}"
     const val CHAT = "chat/{deviceId}/{sessionId}?draft={draft}"
     const val SETTINGS = "settings/{deviceId}"
+    const val SKILLS = "skills/{deviceId}"
 
     fun home(deviceId: String) = "home/$deviceId"
 
@@ -40,6 +42,8 @@ object Routes {
         "chat/$deviceId/$sessionId?draft=${Uri.encode(draft)}"
 
     fun settings(deviceId: String) = "settings/$deviceId"
+
+    fun skills(deviceId: String) = "skills/$deviceId"
 }
 
 /** 启动动画最短停留时间：读盘再快也要让过渡看得见，否则等于没有。 */
@@ -172,7 +176,14 @@ fun AppNav(startViewModel: StartViewModel = hiltViewModel()) {
                         popUpTo(0) { inclusive = true }
                     }
                 },
+                onOpenSkills = { navController.navigate(Routes.skills(deviceId)) },
             )
+        }
+        composable(
+            route = Routes.SKILLS,
+            arguments = listOf(navArgument("deviceId") { type = NavType.StringType }),
+        ) {
+            SkillsExtensionsScreen(onBack = { navController.popBackStack() })
         }
     }
 }

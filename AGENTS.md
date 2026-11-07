@@ -509,6 +509,21 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   整体偏上 3dp、外侧两格各偏 1dp（用户报「文本在遮罩里不够居中」）。
   守门测试 `native/app/src/test/java/dev/pideck/nativeapp/ui/sessions/ProjectGroupsTest.kt`（6 条）。
 
+- **技能/扩展、提示词库、提交历史（0.5.39）只有「读 + toggle」**（`native/app/src/main/java/dev/pideck/nativeapp/`）：
+  - 技能 `GET /api/skills` + `POST /api/skills/toggle {name, sourceId, enabled}`；扩展 `GET /api/extensions`
+    + `POST /api/extensions/toggle {source, enabled, scope}`。**增删技能 / 安装扩展是 Electron IPC**，
+    手机上永远做成「只能开关」——别照桌面端把「安装」「删除」按钮也摆上来。
+  - 页面在 `ui/settings/SkillsExtensionsScreen.kt` + `ui/settings/SkillsViewModel.kt`，排序在
+    `data/SkillsAndPrompts.kt` 的 `SkillsParse.sortedSkills/sortedExtensions`（失效沉底、启用在前），
+    单测 `data/SkillsAndPromptsTest.kt`。
+  - 提示词库：列表 `GET /api/prompts?search=&category=&page=&pageSize=` 只给摘要，插入要再取
+    `GET /api/prompts/:slug`；手机一律**追加到输入框末尾**（没有光标概念），取不到就提示，不要清空草稿。
+    面板 `ui/chat/PromptLibrarySheet.kt`、状态在 `ChatViewModel.openPromptLibrary/searchPrompts/pickPromptCategory`。
+  - 提交历史 `GET /api/git/log?projectId=&limit=` 渲染在工作区「改动」页底部；`authorDate` 是 epoch ms，
+    用 `ui/sessions/SessionsScreen.kt` 的 `relativeTime()` 自己算，别用 locale 格式化（CI 是 en-US）。
+  - 设置页那句「技能 / 扩展 / 用量回桌面端看」的注释已作废：技能扩展现在是全局 HTTP 接口；
+    用量额度（`/api/usage/:provider`）默认关闭，仍未做。
+
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
   不做「有一张卡但不知道在问什么」。展开内容走 `AnimatedVisibility`，选项列仍是 `heightIn(max = 320.dp)` 内部滚动。

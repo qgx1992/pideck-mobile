@@ -1,6 +1,8 @@
 package dev.pideck.nativeapp.data
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -105,4 +107,43 @@ object WorkspaceParser {
 
     @Suppress("unused")
     private fun JsonElement.asArrayOrNull(): JsonArray? = this as? JsonArray
+}
+
+/** 一条提交（`GET /api/git/log?projectId=&limit=`）。 */
+data class GitCommit(
+    val hash: String,
+    val shortHash: String,
+    /** 提交信息首行（多行的只留标题行，手机上换行会把列表撑乱）。 */
+    val title: String,
+    val authorName: String,
+    /** 作者时间（毫秒）。宿主给的是 epoch ms，别用 locale 格式化。 */
+    val authorDateMs: Long,
+    val refNames: List<String>,
+) {
+    /** `HEAD -> master, origin/master` 这类引用，列表里只显示前两个。 */
+    val refs: String get() = refNames.take(2).joinToString(", ")
+}
+
+object GitLogParser {
+    fun commits(text: String): List<GitCommit> {
+        val root = runCatching { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
+            ?: return emptyList()
+        val array = root["commits"] as? JsonArray ?: return emptyList()
+        return array.mapNotNull { element ->
+            val obj = element as? JsonObject ?: return@mapNotNull null
+            val hash = obj["hash"].str() ?: return@mapNotNull null
+            GitCommit(
+                hash = hash,
+                shortHash = obj["shortHash"].str() ?: hash.take(7),
+                title = (obj["message"].str() ?: "").lineSequence().firstOrNull().orEmpty().trim(),
+                authorName = obj["authorName"].str() ?: "",
+                authorDateMs = obj["authorDate"].str()?.toDoubleOrNull()?.toLong() ?: 0L,
+                refNames = (obj["refNames"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                    ?: emptyList(),
+            )
+        }
+    }
+
+    private fun kotlinx.serialization.json.JsonElement?.str(): String? =
+        (this as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
 }

@@ -1,3 +1,23 @@
+## 0.5.39 — 2026-11-07
+
+**侧栏之外的第一批「桌面端功能搬过来」：技能/扩展开关、提示词库、提交历史。**
+
+- **设置 → 技能与扩展**（新页面 `ui/settings/SkillsExtensionsScreen.kt`）：两个 Tab，
+  直接开关宿主上的技能（`GET /api/skills`、`POST /api/skills/toggle`）与扩展
+  （`GET /api/extensions`、`POST /api/extensions/toggle`）。与桌面端共用同一份配置，
+  手机改了桌面端立刻是新的；扩展的开关在会话重启后生效，页面上有这句提示。
+  只能开关、不能新建/删除 —— 增删技能与安装扩展在桌面端走 Electron IPC，HTTP 没有路由。
+  顺带撤掉了设置页那句「技能扩展回桌面端看」的旧判断（那是只有 dsh 私有用例时的结论）。
+- **提示词库**（输入框左下的书本按钮 → `ui/chat/PromptLibrarySheet.kt`）：搜索（`?search=`，
+  退抖 300ms）、按分类过滤、滚到底自动翻页；点一条按 slug 取回正文
+  （`/api/prompts/:slug`）后**追加到输入框末尾**，与 `/` 命令插入同一套语义。
+  取不到内容会在输入框上方给一句提示，不会把已写的内容清掉。
+- **工作区「改动」页**：顶部显示分支名（原本就有，空改动时也保留），底部追加
+  「最近提交 · N 条」（`/api/git/log?limit=15`），每条显示标题、短哈希、相对时间与分支引用。
+  不是 git 仓库、或拿不到 log 时这一块直接不出现，不影响改动列表。
+- 解析层放在 `data/SkillsAndPrompts.kt` 与 `data/Workspace.kt` 的 `GitLogParser`，
+  单测 `data/SkillsAndPromptsTest.kt`（12 条）。总单测 268 → 278。
+
 ## 0.5.38 — 2026-11-07
 
 **改模型 / 思考档位现在「立刻生效」，停止按钮不再把运行时卸掉，闪退有据可查。**

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -100,14 +101,16 @@ private fun <T> DropdownSetting(
  * 设置页。只放「手机上真的会调」的东西：
  * 主题、跑完通知、当前连接与设备管理、版本信息。
  *
- * 技能 / 扩展 / 用量这些是**会话级**概念（`/api/sessions/:id/dsh/skills`），
- * 挪到全局设置里要再造一层选择器，价值不大 —— 需要时回桌面端看。
+ * 技能 / 扩展现在有独立的子页（宿主 `/api/skills`、`/api/extensions` 是全局接口，
+ * 0.5.x 早期只有 dsh 会话级私有接口时的「回桌面端看」判断已经不成立了）。
+ * 用量额度仍未做（`/api/usage/:provider`，默认关闭，价值一般）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
     onManageDevices: () -> Unit,
+    onOpenSkills: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -200,6 +203,21 @@ fun SettingsScreen(
                 style = AppButtonStyle.Tonal,
                 icon = Icons.Default.Dns,
                 fillWidth = true,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            SectionTitle("技能与扩展")
+            AppButton(
+                text = "管理技能 / 扩展",
+                onClick = onOpenSkills,
+                style = AppButtonStyle.Tonal,
+                icon = Icons.Default.Extension,
+                fillWidth = true,
+            )
+            Text(
+                "宿主上的技能与扩展开关（与桌面端共用同一份配置）。只能开关，不能新建或删除 —— 增删要在桌面端做。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Spacer(Modifier.height(12.dp))

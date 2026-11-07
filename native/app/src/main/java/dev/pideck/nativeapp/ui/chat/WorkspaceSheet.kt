@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -61,6 +62,8 @@ import androidx.compose.ui.unit.dp
 import dev.pideck.nativeapp.data.SubagentEntry
 import dev.pideck.nativeapp.data.TodoEntry
 import dev.pideck.nativeapp.data.ChangedFile
+import dev.pideck.nativeapp.data.GitCommit
+import dev.pideck.nativeapp.ui.sessions.relativeTime
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
 import dev.pideck.nativeapp.ui.theme.AppIconButton
@@ -130,7 +133,11 @@ fun WorkspacePanel(
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             when (tab) {
                 0 -> TodoTab(viewModel.workspaceTodo)
-                1 -> ChangesTab(viewModel.workspaceChanges, onOpenDiff = viewModel::openDiff)
+                1 -> ChangesTab(
+                    changes = viewModel.workspaceChanges,
+                    commits = viewModel.workspaceCommits,
+                    onOpenDiff = viewModel::openDiff,
+                )
                 2 -> FilesTab(viewModel, onInsertMention)
                 else -> SubagentTab(viewModel.subagents)
             }
@@ -309,17 +316,17 @@ private fun TodoRow(entry: TodoEntry) {
 }
 
 @Composable
-private fun ChangesTab(changes: WorkspaceChanges?, onOpenDiff: (ChangedFile) -> Unit) {
+private fun ChangesTab(
+    changes: WorkspaceChanges?,
+    commits: List<GitCommit> = emptyList(),
+    onOpenDiff: (ChangedFile) -> Unit,
+) {
     if (changes == null) {
         EmptyHint("拿不到仓库状态")
         return
     }
     if (!changes.repo) {
         EmptyHint("这个项目不是 git 仓库")
-        return
-    }
-    if (changes.isEmpty) {
-        EmptyHint("工作区干净，没有未提交的改动")
         return
     }
     Column(modifier = Modifier.fillMaxSize()) {
@@ -329,6 +336,14 @@ private fun ChangesTab(changes: WorkspaceChanges?, onOpenDiff: (ChangedFile) -> 
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+            )
+        }
+        if (changes.isEmpty) {
+            Text(
+                "工作区干净，没有未提交的改动",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
             )
         }
         LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -354,6 +369,62 @@ private fun ChangesTab(changes: WorkspaceChanges?, onOpenDiff: (ChangedFile) -> 
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+            }
+            // 最近提交：桌面端在「源代码管理」页有一块「提交历史」，手机只放只读的最近 15 条。
+            // 放这里是因为它和改动同属「这个项目现在什么样」，切页去看反而绕。
+            if (commits.isNotEmpty()) {
+                item(key = "commits-header") {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(top = 8.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                    )
+                    Text(
+                        "最近提交 · ${commits.size} 条",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                    )
+                }
+                items(commits, key = { "commit-" + it.hash }) { commit ->
+                    CommitRow(commit)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommitRow(commit: GitCommit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
+        Text(
+            commit.title.ifBlank { "(无提交信息)" },
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                commit.shortHash,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                // 时间自己算：宿主给的是 epoch ms，用 locale 格式化会在 CI 与本地分叉
+                relativeTime(commit.authorDateMs),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (commit.refs.isNotBlank()) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    commit.refs,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }

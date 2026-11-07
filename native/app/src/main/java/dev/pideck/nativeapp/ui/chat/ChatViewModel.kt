@@ -11,6 +11,7 @@ import android.net.Uri
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.pideck.nativeapp.data.Device
+import dev.pideck.nativeapp.data.GitCommit
 import dev.pideck.nativeapp.data.ChangedFile
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
@@ -27,6 +28,7 @@ import dev.pideck.nativeapp.data.PendingUiRequest
 import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.PrivilegeControl
+import dev.pideck.nativeapp.data.PromptSummary
 import dev.pideck.nativeapp.data.SecurityState
 import dev.pideck.nativeapp.data.parseSecurityState
 import dev.pideck.nativeapp.data.privilegeControlFor
@@ -1016,6 +1018,10 @@ class ChatViewModel @Inject constructor(
     var workspaceChanges by mutableStateOf<WorkspaceChanges?>(null)
         private set
 
+    /** 工作区「改动」页底部的最近提交（`/api/git/log`，只读，失败就空着不影响上面）。 */
+    var workspaceCommits by mutableStateOf<List<GitCommit>>(emptyList())
+        private set
+
     var workspaceFiles by mutableStateOf<List<FileNode>>(emptyList())
         private set
 
@@ -1030,6 +1036,106 @@ class ChatViewModel @Inject constructor(
         private set
 
     private var workspaceLoaded = false
+
+    // ---- 提示词库（`/api/prompts`，桌面端 Web 的「提示词库」对话框） ----
+    // 与工作区同一套策略：打开面板才拉，翻页按需；写操作是 IPC，这里只读。
+
+    var prompts by mutableStateOf<List<PromptSummary>>(emptyList())
+        private set
+
+    var promptCategories by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** null = 全部分类。 */
+    var promptCategory by mutableStateOf<String?>(null)
+        private set
+
+    var promptQuery by mutableStateOf("")
+        private set
+
+    var promptsBusy by mutableStateOf(false)
+        private set
+
+    var promptsError by mutableStateOf<String?>(null)
+        private set
+
+    /** 插入失败的一句提示（输入框旁边一行小字，别用 Toast：会盖住键盘上方）。 */
+    var promptInsertError by mutableStateOf<String?>(null)
+
+    private var promptPage = 1
+    private var promptsHasMore = false
+
+    val promptsHasMorePages: Boolean get() = promptsHasMore
+
+    fun openPromptLibrary() {
+        prompts = emptyList()
+        promptPage = 1
+        promptsHasMore = false
+        promptsError = null
+        loadPrompts(reset = true)
+    }
+
+    fun searchPrompts(text: String) {
+        if (text == promptQuery) return
+        promptQuery = text
+        // 搜索是服务端做的（`?search=`），这里退抖一下再打，别每敲一个字都请求
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            delay(300)
+            loadPrompts(reset = true)
+        }
+    }
+
+    fun pickPromptCategory(category: String?) {
+        if (category == promptCategory) return
+        promptCategory = category
+        loadPrompts(reset = true)
+    }
+
+    fun loadMorePrompts() {
+        if (promptsBusy || !promptsHasMore) return
+        loadPrompts(reset = false)
+    }
+
+    private var searchJob: Job? = null
+
+    private fun loadPrompts(reset: Boolean) {
+        val device = device ?: return
+        if (promptsBusy) return
+        promptsBusy = true
+        promptsError = null
+        val page = if (reset) 1 else promptPage + 1
+        viewModelScope.launch {
+            try {
+                val result = api.prompts(
+                    device = device,
+                    token = token,
+                    search = promptQuery.trim(),
+                    category = promptCategory,
+                    page = page,
+                    pageSize = 20,
+                )
+                prompts = if (reset) result.prompts else prompts + result.prompts.filterNot { incoming ->
+                    prompts.any { it.slug == incoming.slug }
+                }
+                promptCategories = result.categories
+                promptPage = page
+                promptsHasMore = result.hasMore && result.prompts.isNotEmpty()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                promptsError = dev.pideck.nativeapp.data.describeConnectionError(e)
+            } finally {
+                promptsBusy = false
+            }
+        }
+    }
+
+    /** 取正文（列表只有摘要）。取不到返回 null，调用方给一句提示、不要把输入框清空。 */
+    suspend fun promptBody(prompt: PromptSummary): String? = runCatching {
+        val device = device ?: return@runCatching null
+        api.promptContent(device, token, prompt.slug, prompt.category)
+    }.getOrNull()
 
     /** 抽屉打开时调用；同一会话只自动拉一次，之后靠下拉/切页手动刷。 */
     fun loadWorkspace(force: Boolean = false) {
@@ -1058,6 +1164,14 @@ class ChatViewModel @Inject constructor(
                 }.getOrDefault(emptyList())
                 val agents = runCatching { api.subagents(device, token, sessionId) }
                     .getOrDefault(emptyList())
+                // 提交历史是锦上添花：拿不到（不是仓库 / 没装 git）就空着，不打断上面三页
+                val commits = if (changes?.repo == true) {
+                    runCatching { api.gitLog(device, token, projectId, limit = 15) }
+                        .getOrDefault(emptyList())
+                } else {
+                    emptyList()
+                }
+                workspaceCommits = commits
                 workspaceTodo = todo
                 workspaceChanges = changes
                 workspaceFiles = files

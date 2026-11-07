@@ -193,6 +193,39 @@ interface PideckApi {
 
     /** 导出会话 HTML（`GET /api/sessions/:id/export-html`，响应体就是整份 HTML）。 */
     suspend fun exportHtml(device: Device, token: String?, sessionId: String): String
+
+    /** 宿主上的技能清单（`GET /api/skills`：locations + skills，已启用的带 `enabled`）。 */
+    suspend fun skills(device: Device, token: String?): SkillsPayload
+
+    /** 开关某个技能（`POST /api/skills/toggle {name, sourceId, enabled}`）。 */
+    suspend fun toggleSkill(device: Device, token: String?, name: String, sourceId: String, enabled: Boolean)
+
+    /** 宿主上的扩展清单（`GET /api/extensions`：extensions + conflicts）。 */
+    suspend fun extensions(device: Device, token: String?): ExtensionsPayload
+
+    /** 开关某个扩展（`POST /api/extensions/toggle {source, enabled, scope}`）。 */
+    suspend fun toggleExtension(device: Device, token: String?, source: String, scope: String, enabled: Boolean)
+
+    /** 提示词库一页（`GET /api/prompts?search=&category=&page=&pageSize=`）。 */
+    suspend fun prompts(
+        device: Device,
+        token: String?,
+        search: String = "",
+        category: String? = null,
+        page: Int = 1,
+        pageSize: Int = 20,
+    ): PromptsPage
+
+    /** 取一条提示词的正文（`GET /api/prompts/:slug?category=`），用来塞进输入框。 */
+    suspend fun promptContent(
+        device: Device,
+        token: String?,
+        slug: String,
+        category: String? = null,
+    ): String?
+
+    /** 最近提交（`GET /api/git/log?projectId=&limit=`），只读。 */
+    suspend fun gitLog(device: Device, token: String?, projectId: String, limit: Int = 15): List<GitCommit>
 }
 
 class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
@@ -585,6 +618,108 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             runCatching {
                 PideckJson.decodeFromJsonElement(SubagentEntry.serializer(), element)
             }.getOrNull()
+        }
+    }
+
+    override suspend fun skills(device: Device, token: String?): SkillsPayload =
+        withContext(Dispatchers.IO) {
+            SkillsParse.skills(getText(device, token, "/api/skills"))
+        }
+
+    override suspend fun toggleSkill(
+        device: Device,
+        token: String?,
+        name: String,
+        sourceId: String,
+        enabled: Boolean,
+    ) {
+        withContext(Dispatchers.IO) {
+            postJson(
+                device,
+                token,
+                "/api/skills/toggle",
+                buildJsonObject {
+                    put("name", name)
+                    put("sourceId", sourceId)
+                    put("enabled", enabled)
+                },
+            )
+        }
+    }
+
+    override suspend fun extensions(device: Device, token: String?): ExtensionsPayload =
+        withContext(Dispatchers.IO) {
+            SkillsParse.extensions(getText(device, token, "/api/extensions"))
+        }
+
+    override suspend fun toggleExtension(
+        device: Device,
+        token: String?,
+        source: String,
+        scope: String,
+        enabled: Boolean,
+    ) {
+        withContext(Dispatchers.IO) {
+            postJson(
+                device,
+                token,
+                "/api/extensions/toggle",
+                buildJsonObject {
+                    put("source", source)
+                    put("scope", scope)
+                    put("enabled", enabled)
+                },
+            )
+        }
+    }
+
+    override suspend fun prompts(
+        device: Device,
+        token: String?,
+        search: String,
+        category: String?,
+        page: Int,
+        pageSize: Int,
+    ): PromptsPage = withContext(Dispatchers.IO) {
+        val query = buildList {
+            if (search.isNotBlank()) add("search=" + encode(search))
+            if (!category.isNullOrBlank()) add("category=" + encode(category))
+            add("page=$page")
+            add("pageSize=$pageSize")
+        }.joinToString("&")
+        PromptsParse.page(getText(device, token, "/api/prompts?$query"))
+    }
+
+    override suspend fun promptContent(
+        device: Device,
+        token: String?,
+        slug: String,
+        category: String?,
+    ): String? = withContext(Dispatchers.IO) {
+        val query = if (category.isNullOrBlank()) "" else "?category=" + encode(category)
+        PromptsParse.content(getText(device, token, "/api/prompts/" + encode(slug) + query))
+    }
+
+    override suspend fun gitLog(
+        device: Device,
+        token: String?,
+        projectId: String,
+        limit: Int,
+    ): List<GitCommit> = withContext(Dispatchers.IO) {
+        GitLogParser.commits(
+            getText(device, token, "/api/git/log?projectId=" + encode(projectId) + "&limit=$limit"),
+        )
+    }
+
+    /** 带成功校验的 GET（`rawGet` 不校验状态码，401 会当成一段无效 JSON）。 */
+    private suspend fun getText(device: Device, token: String?, path: String): String {
+        val request = requestBuilder(device, token, path).get().build()
+        return client.newCall(request).await().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw PideckException("GET $path → ${response.code}", code = response.code)
+            }
+            text
         }
     }
 
