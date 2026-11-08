@@ -1764,9 +1764,9 @@ private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean = false) {
                         drawComet(
                             measure = measure,
                             headFraction = spin.value,
-                            tailFraction = 0.20f,
+                            tailFraction = 0.24f,
                             color = scheme.primary,
-                            width = (strokeWidth * 1.5f).toPx(),
+                            width = (strokeWidth * 2f).toPx(),
                             steps = 16,
                         )
                     }
@@ -1789,6 +1789,11 @@ private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean = false) {
  *
  * 用 PathMeasure 截路径而不是画渐变，是因为这一行又扁又宽：渐变扫过上下两条长边时会
  * 同时亮两段，短边又几乎不亮，看着像闪烁。截路径的话光带是**匀速**沿周长走的。
+ *
+ * 注意每段的取法：路径方向是**从尾到头**，即 `start = head - tail*(i+1)/n` 要小于
+ * `end = head - tail*i/n`。反着取（start 在 end 前面）会被下面的越界处理当成「绕一圈」，
+ * 16 段各自盖住几乎整条边框，画出来就是一整圈实心色 —— 0.5.40 第一版就是这样，跑起来
+ * 只看到边框变蓝、没有任何移动。
  */
 private fun DrawScope.drawComet(
     measure: PathMeasure,
@@ -1796,31 +1801,41 @@ private fun DrawScope.drawComet(
     tailFraction: Float,
     color: Color,
     width: Float,
-    steps: Int = 16,
+    steps: Int = 14,
 ) {
     val length = measure.length
     if (length <= 0f) return
     val head = (((headFraction % 1f) + 1f) % 1f) * length
-    val tail = length * tailFraction
+    val tail = (length * tailFraction).coerceAtLeast(1f)
     val segment = Path()
-    for (index in 0 until steps) {
-        val from = head - tail * index / steps
-        val to = head - tail * (index + 1) / steps
-        // 头 1f → 尾 0f，平方让尾巴掉得更快，否则整条边像蒙了一层灰
-        val fade = 1f - (index + 0.5f) / steps
-        segment.reset()
-        appendPathSegment(measure, from, to, segment, length)
-        if (!segment.isEmpty) {
-            drawPath(
-                path = segment,
-                color = color.copy(alpha = fade * fade * 0.95f),
-                style = Stroke(width = width, cap = StrokeCap.Round),
-            )
+    // 第一遍画光晕（更粗、更淡），第二遍画本体的芯
+    val passes = floatArrayOf(3.4f, 1f)
+    val alphas = floatArrayOf(0.26f, 1f)
+    for (pass in passes.indices) {
+        val passWidth = width * passes[pass]
+        val passAlpha = alphas[pass]
+        for (index in 0 until steps) {
+            val from = head - tail * (index + 1) / steps + length
+            val to = head - tail * index / steps + length
+            // 尾 0f → 头 1f，线性淡出：平方会让后半截直接看不见，整条光带只剩一个点
+            val fade = 1f - (index + 0.5f) / steps
+            segment.reset()
+            appendPathSegment(measure, from, to, segment, length)
+            if (!segment.isEmpty) {
+                drawPath(
+                    path = segment,
+                    color = color.copy(alpha = fade * passAlpha),
+                    style = Stroke(width = passWidth, cap = StrokeCap.Round),
+                )
+            }
         }
     }
+    // 头部再点一颗实心光点：只有渐隐的尾巴时看不出「在跑」，有个亮头才有方向感
+    val headPoint = measure.getPosition(head)
+    drawCircle(color = color, radius = width * 1.15f, center = headPoint)
 }
 
-/** 取 `[from, to]` 这一段路径；越过起点（0 或整周长）时拆成两段，别整段丢掉。 */
+/** 取 `[from, to]` 这一段路径；越过起点（0 或整周长）时拆成两段，别把整条路径都取出来。 */
 private fun appendPathSegment(
     measure: PathMeasure,
     from: Float,
