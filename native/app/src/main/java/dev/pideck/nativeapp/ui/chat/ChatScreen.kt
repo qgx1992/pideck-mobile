@@ -36,6 +36,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.drawBehind
@@ -118,9 +120,13 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -1696,17 +1702,18 @@ private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean = false) {
     val scheme = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(16.dp)
     val strokeWidth = 1.dp
-    val corner = 16.dp
-    // 运行中的指示器就是这一圈光：绕着边框跑一圈，代替原先浮在列表底部那颗「生成中」胶囊
-    // （那颗会盖住最后一条消息，长回答追滚时尤其挡字）。
-    // 只在绘制阶段读动画值 —— 整行文字不重组，也不改尺寸，不会把追滚带跑偏。
+    val cornerRadius = 16.dp
+    // 「运行中」= 边框上跑一颗彗星（头亮、尾巴渐隐），代替原先浮在列表底部的「生成中」胶囊
+    // 和第一版的「整圈旋转渐变」—— 后者在这么扁的一个圆角矩形上，光带扫过上下两条长边时
+    // 一明一暗、四个角还各亮一下，看着像闪烁而不是在跑。
+    // 动画值只在绘制阶段读：文字不重组、尺寸不变，长回答的追滚不会被带跑偏。
     val phase = if (streaming) {
         val transition = rememberInfiniteTransition(label = "turnStatsBorder")
         transition.animateFloat(
             initialValue = 0f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1500, easing = LinearEasing),
+                animation = tween(durationMillis = 1600, easing = LinearEasing),
                 repeatMode = RepeatMode.Restart,
             ),
             label = "turnStatsBorderPhase",
@@ -1734,7 +1741,7 @@ private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean = false) {
                         width = (size.width - stroke).coerceAtLeast(0f),
                         height = (size.height - stroke).coerceAtLeast(0f),
                     )
-                    val radius = CornerRadius(corner.toPx())
+                    val radius = CornerRadius(cornerRadius.toPx())
                     drawRoundRect(
                         color = scheme.outlineVariant.copy(alpha = 0.7f),
                         topLeft = topLeft,
@@ -1743,28 +1750,25 @@ private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean = false) {
                         style = Stroke(width = stroke),
                     )
                     val spin = phase
-                    if (spin != null) {
-                        val primary = scheme.primary
-                        val brush = Brush.sweepGradient(
-                            colors = listOf(
-                                primary.copy(alpha = 0f),
-                                primary.copy(alpha = 0.25f),
-                                primary,
-                                primary.copy(alpha = 0.25f),
-                                primary.copy(alpha = 0f),
-                            ),
-                            center = center,
-                        )
-                        // 绕中心转 —— 光带沿着边框走一圈，比「闪烁」更像在干活
-                        rotate(degrees = spin.value * 360f, pivot = center) {
-                            drawRoundRect(
-                                brush = brush,
-                                topLeft = topLeft,
-                                size = arcSize,
-                                cornerRadius = radius,
-                                style = Stroke(width = stroke),
+                    if (spin != null && arcSize.width > 1f && arcSize.height > 1f) {
+                        // 沿边框路径量长度，再按百分比截一段出来 —— 光带才会均匀地贴着圆角走
+                        val outline = Path().apply {
+                            addRoundRect(
+                                RoundRect(
+                                    rect = Rect(topLeft, arcSize),
+                                    cornerRadius = radius,
+                                ),
                             )
                         }
+                        val measure = PathMeasure().apply { setPath(outline, false) }
+                        drawComet(
+                            measure = measure,
+                            headFraction = spin.value,
+                            tailFraction = 0.20f,
+                            color = scheme.primary,
+                            width = (strokeWidth * 1.5f).toPx(),
+                            steps = 16,
+                        )
                     }
                 },
         ) {
@@ -1777,6 +1781,60 @@ private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean = false) {
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+/**
+ * 沿一条已测量的路径画一颗「彗星」：`headFraction` 处最亮，往后 `tailFraction` 长逐段淡出。
+ *
+ * 用 PathMeasure 截路径而不是画渐变，是因为这一行又扁又宽：渐变扫过上下两条长边时会
+ * 同时亮两段，短边又几乎不亮，看着像闪烁。截路径的话光带是**匀速**沿周长走的。
+ */
+private fun DrawScope.drawComet(
+    measure: PathMeasure,
+    headFraction: Float,
+    tailFraction: Float,
+    color: Color,
+    width: Float,
+    steps: Int = 16,
+) {
+    val length = measure.length
+    if (length <= 0f) return
+    val head = (((headFraction % 1f) + 1f) % 1f) * length
+    val tail = length * tailFraction
+    val segment = Path()
+    for (index in 0 until steps) {
+        val from = head - tail * index / steps
+        val to = head - tail * (index + 1) / steps
+        // 头 1f → 尾 0f，平方让尾巴掉得更快，否则整条边像蒙了一层灰
+        val fade = 1f - (index + 0.5f) / steps
+        segment.reset()
+        appendPathSegment(measure, from, to, segment, length)
+        if (!segment.isEmpty) {
+            drawPath(
+                path = segment,
+                color = color.copy(alpha = fade * fade * 0.95f),
+                style = Stroke(width = width, cap = StrokeCap.Round),
+            )
+        }
+    }
+}
+
+/** 取 `[from, to]` 这一段路径；越过起点（0 或整周长）时拆成两段，别整段丢掉。 */
+private fun appendPathSegment(
+    measure: PathMeasure,
+    from: Float,
+    to: Float,
+    dest: Path,
+    length: Float,
+) {
+    val a = ((from % length) + length) % length
+    val b = ((to % length) + length) % length
+    if (a <= b) {
+        measure.getSegment(a, b, dest, true)
+    } else {
+        measure.getSegment(a, length, dest, true)
+        measure.getSegment(0f, b, dest, false)
     }
 }
 
