@@ -2,6 +2,11 @@ package dev.pideck.nativeapp.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -30,6 +35,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.Arrangement
@@ -111,6 +120,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -609,7 +620,7 @@ fun ChatScreen(
                         onClose = { viewModel.closeParallelAsk() },
                     )
                 }
-                TurnStatsLine(stats = viewModel.turnStats)
+                TurnStatsLine(stats = viewModel.turnStats, streaming = viewModel.streaming)
                 Composer(
                 value = draft,
                 onValueChange = { text ->
@@ -749,38 +760,6 @@ fun ChatScreen(
                 }
             }
 
-            // 正在跑的时候，转圈贴在列表底部（顶栏留白给标题，别跟按钮抢位置）
-            AnimatedVisibility(
-                visible = viewModel.streaming,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 14.dp),
-                enter = fadeIn(tween(180)),
-                exit = fadeOut(tween(180)),
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shadowElevation = 2.dp,
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "生成中",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
         }
     }
     }
@@ -1713,8 +1692,28 @@ private fun BusySendPicker(
  * 常驻一行：没有数就显示破折号，别让它忽隐忽现把输入条顶来顶去。
  */
 @Composable
-private fun TurnStatsLine(stats: TurnStats?) {
+private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean = false) {
     val scheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(16.dp)
+    val strokeWidth = 1.dp
+    val corner = 16.dp
+    // 运行中的指示器就是这一圈光：绕着边框跑一圈，代替原先浮在列表底部那颗「生成中」胶囊
+    // （那颗会盖住最后一条消息，长回答追滚时尤其挡字）。
+    // 只在绘制阶段读动画值 —— 整行文字不重组，也不改尺寸，不会把追滚带跑偏。
+    val phase = if (streaming) {
+        val transition = rememberInfiniteTransition(label = "turnStatsBorder")
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1500, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "turnStatsBorderPhase",
+        )
+    } else {
+        null
+    }
     // 宽度和输入卡片对齐：输入区自己是 `padding(horizontal = 12.dp)` + `RoundedCornerShape(16.dp)`，
     // 这里必须用同一组数，否则一行字悬在中间、左右各差 4dp，看着像没对齐。
     Box(
@@ -1723,16 +1722,56 @@ private fun TurnStatsLine(stats: TurnStats?) {
             .padding(horizontal = 12.dp)
             .padding(bottom = 6.dp),
     ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = Color.Transparent,
-            border = BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.7f)),
-            modifier = Modifier.fillMaxWidth(),
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .drawBehind {
+                    val stroke = strokeWidth.toPx()
+                    val inset = stroke / 2f
+                    val topLeft = Offset(inset, inset)
+                    val arcSize = Size(
+                        width = (size.width - stroke).coerceAtLeast(0f),
+                        height = (size.height - stroke).coerceAtLeast(0f),
+                    )
+                    val radius = CornerRadius(corner.toPx())
+                    drawRoundRect(
+                        color = scheme.outlineVariant.copy(alpha = 0.7f),
+                        topLeft = topLeft,
+                        size = arcSize,
+                        cornerRadius = radius,
+                        style = Stroke(width = stroke),
+                    )
+                    val spin = phase
+                    if (spin != null) {
+                        val primary = scheme.primary
+                        val brush = Brush.sweepGradient(
+                            colors = listOf(
+                                primary.copy(alpha = 0f),
+                                primary.copy(alpha = 0.25f),
+                                primary,
+                                primary.copy(alpha = 0.25f),
+                                primary.copy(alpha = 0f),
+                            ),
+                            center = center,
+                        )
+                        // 绕中心转 —— 光带沿着边框走一圈，比「闪烁」更像在干活
+                        rotate(degrees = spin.value * 360f, pivot = center) {
+                            drawRoundRect(
+                                brush = brush,
+                                topLeft = topLeft,
+                                size = arcSize,
+                                cornerRadius = radius,
+                                style = Stroke(width = stroke),
+                            )
+                        }
+                    }
+                },
         ) {
             Text(
                 text = formatTurnStats(stats),
                 style = MaterialTheme.typography.labelSmall,
-                color = scheme.onSurfaceVariant,
+                color = if (streaming) scheme.onSurface else scheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,

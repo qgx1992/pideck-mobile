@@ -413,6 +413,9 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   - **外框与输入卡片同宽同圆角**（`padding(horizontal = 12.dp)` + `RoundedCornerShape(16.dp)` + 1dp
     `outlineVariant` 描边，`TurnStatsLine` 里注释写着对应关系）。输入区的内边距一改这里必须跟着改，
     否则这一行会左右各错开几 dp。
+  - **「运行中」的指示器就是这圈边框光**（0.5.40 用户要求）：`streaming` 时在 `drawBehind` 里叠一层
+    sweep 渐变（主色、两端透明）绕中心转 360°，1.5s 一圈；动画值只在绘制阶段读，文字不重组、尺寸不变。
+    别再放浮在列表底部的「生成中」胶囊 —— 它盖住最后一条消息，还跟右下角「回到底部」的 FAB 撞位置。
 - **设置页的枚举型选项统一用下拉**（`ui/settings/SettingsScreen.kt` 的 `DropdownSetting`，
   胶囊 + 带勾菜单，与首页的 `SelectChip` 同款），别再摆一排 `FilterChip`：选项一多就换行，
   还会和下面的说明文字挤在一起。
