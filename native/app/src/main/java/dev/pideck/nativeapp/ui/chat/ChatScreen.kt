@@ -1856,13 +1856,16 @@ private fun TurnStatsLine(stats: TurnStats?, streaming: Boolean = false) {
                             )
                         }
                         val measure = PathMeasure().apply { setPath(outline, false) }
+                        // 顺时针跑：路径本身是逆时针方向的，所以让头沿路径**倒退**，
+                        // 尾巴则朝路径正方向拖（`tailForwards = true`），视觉上就是顺时针。
                         drawComet(
                             measure = measure,
-                            headFraction = spin.value,
+                            headFraction = 1f - spin.value,
                             tailFraction = 0.24f,
                             color = scheme.primary,
                             width = (strokeWidth * 2f).toPx(),
                             steps = 16,
+                            tailForwards = true,
                         )
                     }
                 },
@@ -1897,6 +1900,11 @@ private fun DrawScope.drawComet(
     color: Color,
     width: Float,
     steps: Int = 14,
+    /**
+     * 尾巴朝路径**正方向**拖（配合 `headFraction = 1 - phase` 让彗星顺时针跑）。
+     * 默认 false = 尾巴朝负方向拖，头沿正方向前进（逆时针）。
+     */
+    tailForwards: Boolean = false,
 ) {
     val length = measure.length
     if (length <= 0f) return
@@ -1910,8 +1918,16 @@ private fun DrawScope.drawComet(
         val passWidth = width * passes[pass]
         val passAlpha = alphas[pass]
         for (index in 0 until steps) {
-            val from = head - tail * (index + 1) / steps + length
-            val to = head - tail * index / steps + length
+            val from = if (tailForwards) {
+                head + tail * index / steps + length
+            } else {
+                head - tail * (index + 1) / steps + length
+            }
+            val to = if (tailForwards) {
+                head + tail * (index + 1) / steps + length
+            } else {
+                head - tail * index / steps + length
+            }
             // 尾 0f → 头 1f，线性淡出：平方会让后半截直接看不见，整条光带只剩一个点
             val fade = 1f - (index + 0.5f) / steps
             segment.reset()
