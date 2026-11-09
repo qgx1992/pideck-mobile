@@ -64,7 +64,8 @@ import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.ui.theme.BackendBadge
 import dev.pideck.nativeapp.ui.theme.SelectChip
-import dev.pideck.nativeapp.ui.sessions.relativeTime
+import dev.pideck.nativeapp.ui.common.SessionRowText
+import dev.pideck.nativeapp.ui.common.relativeTime
 
 /**
  * 首页 —— 桌面网页版的默认落地页在手机上的对应物。
@@ -404,31 +405,16 @@ private fun RecentSessionRow(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    session.title.ifBlank { "未命名会话" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "$projectName · ${relativeTime(session.updatedAt)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    AgentBackend.badgeOf(session.backend, acpToolName)?.let { label ->
-                        Spacer(Modifier.width(6.dp))
-                        BackendBadge(
-                            label,
-                            muted = session.backend.isNullOrBlank() || session.backend == "pi",
-                        )
-                    }
-                }
-            }
+            // 标题 + 元信息走共用块（ui/common/SessionRowText.kt）；右侧那个小圆点是首页自己加的「活跃」记号
+            SessionRowText(
+                session = session,
+                meta = "$projectName · ${relativeTime(session.updatedAt)}",
+                acpToolName = acpToolName,
+                titleStyle = MaterialTheme.typography.bodyMedium,
+                metaStyle = MaterialTheme.typography.labelSmall,
+                verticalPadding = 1,
+                modifier = Modifier.weight(1f),
+            )
             Spacer(Modifier.width(8.dp))
             Box(
                 modifier = Modifier

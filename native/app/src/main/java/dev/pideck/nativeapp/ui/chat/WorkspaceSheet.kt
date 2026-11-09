@@ -63,7 +63,7 @@ import dev.pideck.nativeapp.data.SubagentEntry
 import dev.pideck.nativeapp.data.TodoEntry
 import dev.pideck.nativeapp.data.ChangedFile
 import dev.pideck.nativeapp.data.GitCommit
-import dev.pideck.nativeapp.ui.sessions.relativeTime
+import dev.pideck.nativeapp.ui.common.relativeTime
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
 import dev.pideck.nativeapp.ui.theme.AppIconButton

@@ -65,6 +65,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.ui.theme.AppButton
+import dev.pideck.nativeapp.ui.common.SessionRowText
+import dev.pideck.nativeapp.ui.common.relativeTime
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.ui.sessions.RowActionsHost
@@ -215,6 +217,7 @@ fun SessionDrawer(
                     onPickSession = onPickSession,
                     onLongClickSession = { actions.menuSession = it },
                     onPollRuntimes = viewModel::refreshRuntimes,
+                    acpTools = viewModel.state?.acpTools,
                     modifier = Modifier.fillMaxSize(),
                 )
 
@@ -464,43 +467,21 @@ private fun DrawerSessionRow(
         ) {
             StatusDot(status = status)
             Spacer(Modifier.width(2.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text(
-                    session.title.ifBlank { "未命名会话" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        relativeTime(session.updatedAt),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    // 后端标记：和列表页 / 首页「最近的会话」同一枚（ui/theme/Controls.kt 的 BackendBadge）。
-                    // 这一栏最窄（390dp 机器上抽屉 300dp 左右），所以只留 3dp 间距、不给长名字换行。
-                    BackendBadge(
-                        label = AgentBackend.badgeOf(session.backend, acpToolName),
-                        muted = session.backend.isNullOrBlank() || session.backend == "pi",
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                }
-            }
+            // 标题 + 相对时间 + 后端标记走共用块（ui/common/SessionRowText.kt），
+            // 这一栏最窄（390dp 机器上抽屉 300dp 左右），所以只给 1dp 行距、不给长名字换行。
+            SessionRowText(
+                session = session,
+                meta = relativeTime(session.updatedAt),
+                acpToolName = acpToolName,
+                titleStyle = MaterialTheme.typography.bodyMedium,
+                metaColor = MaterialTheme.colorScheme.outline,
+                verticalPadding = 1,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 4.dp),
+            )
         }
     }
 }
 
-/** 自己算，不用 locale —— CI / 不同系统语言下 toLocaleXxx 会分叉。 */
-private fun relativeTime(epochMillis: Long): String {
-    if (epochMillis <= 0) return ""
-    val now = System.currentTimeMillis()
-    val diff = now - epochMillis
-    return when {
-        diff < 60_000 -> "刚刚"
-        diff < 3_600_000 -> "${diff / 60_000} 分钟前"
-        diff < 86_400_000 -> "${diff / 3_600_000} 小时前"
-        diff < 7 * 86_400_000 -> "${diff / 86_400_000} 天前"
-        else -> SimpleDateFormat("MM-dd", Locale.US).format(Date(epochMillis))
-    }
-}
+/** 时间口径与其它三处会话行合并到 ui/common/TimeText.kt。 */

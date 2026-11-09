@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import dev.pideck.nativeapp.ui.common.SearchField
+import dev.pideck.nativeapp.ui.common.SessionRowText
+import dev.pideck.nativeapp.ui.common.relativeTime
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -205,7 +207,6 @@ fun SessionsScreen(
                         if (!collapsed) items(group.sessions, key = { it.id }) { session ->
                             SessionRow(
                                 session = session,
-                                running = viewModel.isRunning(session.id),
                                 acpToolName = viewModel.state?.acpTools
                                     ?.firstOrNull { it.id == session.acpToolId }?.name,
                                 onClick = { onOpenSession(session.id) },
@@ -281,7 +282,6 @@ private fun ProjectHeader(
 @OptIn(ExperimentalFoundationApi::class)
 private fun SessionRow(
     session: Session,
-    running: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     acpToolName: String? = null,
@@ -296,37 +296,20 @@ private fun SessionRow(
         ) {
             StatusDot(status = dev.pideck.nativeapp.data.SessionActivity.statusOf(session.id))
             Spacer(Modifier.width(11.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    session.title.ifBlank { "未命名会话" },
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        buildString {
-                            append(relativeTime(session.updatedAt))
-                            session.model?.modelId?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Default,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    // 后端标记：同名会话并列时靠它区分（桌面端库里 dsh / acp / pi 混着放）
-                    AgentBackend.badgeOf(session.backend, acpToolName)?.let { label ->
-                        Spacer(Modifier.width(6.dp))
-                        BackendBadge(
-                            label,
-                            muted = session.backend.isNullOrBlank() || session.backend == "pi",
-                        )
-                    }
-                }
-            }
+            // 标题 + 元信息 + 后端标记走共用块（ui/common/SessionRowText.kt），四处会话行同一份
+            SessionRowText(
+                session = session,
+                meta = buildString {
+                    append(relativeTime(session.updatedAt))
+                    session.model?.modelId?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
+                },
+                acpToolName = acpToolName,
+                titleStyle = MaterialTheme.typography.bodyLarge,
+                metaStyle = MaterialTheme.typography.bodySmall,
+                titleMaxLines = 2,
+                verticalPadding = 2,
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
@@ -352,19 +335,4 @@ private fun ErrorBlock(message: String, onRetry: () -> Unit) {
     }
 }
 
-/** 「3 分钟前」这类相对时间：自己算，不用 java.time 的 locale 格式化（CI 与设备语言不同会分叉）。 */
-internal fun relativeTime(epochMillis: Long): String {
-    if (epochMillis <= 0L) return ""
-    val diff = System.currentTimeMillis() - epochMillis
-    return when {
-        diff < 0 -> "刚刚"
-        diff < 60_000 -> "刚刚"
-        diff < 3_600_000 -> "${diff / 60_000} 分钟前"
-        diff < 86_400_000 -> "${diff / 3_600_000} 小时前"
-        diff < 7 * 86_400_000L -> "${diff / 86_400_000} 天前"
-        else -> {
-            val days = diff / 86_400_000
-            "${days} 天前"
-        }
-    }
-}
+// relativeTime 已收口到 ui/common/TimeText.kt（原来这里和抽屉各有一份，7 天以上给出两个不同结果）。

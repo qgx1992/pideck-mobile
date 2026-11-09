@@ -59,10 +59,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.pideck.nativeapp.data.AcpTool
 import dev.pideck.nativeapp.data.Project
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.SessionActivity
-import dev.pideck.nativeapp.ui.sessions.relativeTime
+import dev.pideck.nativeapp.ui.common.SessionRowText
+import dev.pideck.nativeapp.ui.common.relativeTime
 import dev.pideck.nativeapp.ui.theme.softPress
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -350,6 +352,7 @@ internal fun DrawerActivePane(
     onPickSession: (String) -> Unit,
     onLongClickSession: (Session) -> Unit,
     onPollRuntimes: () -> Unit = {},
+    acpTools: List<AcpTool>? = null,
     modifier: Modifier = Modifier,
 ) {
     // 运行态是「别处也在变」的东西：抽屉开着、别的机器/桌面端在跑的时候必须自己问。
@@ -396,6 +399,7 @@ internal fun DrawerActivePane(
             ActiveSessionRow(
                 session = session,
                 current = session.id == currentSessionId,
+                acpToolName = acpTools?.firstOrNull { it.id == session.acpToolId }?.name,
                 onClick = { if (session.id != currentSessionId) onPickSession(session.id) },
                 onLongClick = { onLongClickSession(session) },
             )
@@ -408,6 +412,7 @@ internal fun DrawerActivePane(
                 ActiveSessionRow(
                     session = session,
                     current = session.id == currentSessionId,
+                    acpToolName = acpTools?.firstOrNull { it.id == session.acpToolId }?.name,
                     onClick = { if (session.id != currentSessionId) onPickSession(session.id) },
                     onLongClick = { onLongClickSession(session) },
                 )
@@ -504,6 +509,7 @@ private fun RecentFooter(
 private fun ActiveSessionRow(
     session: Session,
     current: Boolean,
+    acpToolName: String? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -524,18 +530,16 @@ private fun ActiveSessionRow(
         ) {
             StatusDot(status = SessionActivity.statusOf(session.id))
             Spacer(Modifier.width(8.dp))
-            Text(
-                session.title.ifBlank { "未命名会话" },
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            // 与抽屉里其它会话行同一份文字块（ui/common/SessionRowText.kt）：
+            // 以前这一行是手写的，于是「后端标记」在这四处里漏的就是它（同名会话分不清 pi/dsh/acp）。
+            SessionRowText(
+                session = session,
+                meta = relativeTime(session.updatedAt),
+                acpToolName = acpToolName,
+                titleStyle = MaterialTheme.typography.bodyMedium,
+                metaColor = MaterialTheme.colorScheme.outline,
+                verticalPadding = 1,
                 modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                relativeTime(session.updatedAt),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
             )
         }
     }
