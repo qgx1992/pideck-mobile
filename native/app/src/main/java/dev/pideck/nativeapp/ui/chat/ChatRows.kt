@@ -56,6 +56,11 @@ sealed interface ChatRow {
 fun buildChatRows(
     items: List<TimelineItem>,
     live: TimelineItem.AssistantMessage?,
+    /**
+     * 要不要把连续的过程条目合并成「过程组」（设置里的「过程组显示」，默认开）。
+     * 关掉时每条内容各自平铺一行，与桌面端同一个开关同一种表现。
+     */
+    groupProcess: Boolean = true,
 ): List<ChatRow> {
     val all = ArrayList<TimelineItem>(items.size + 1)
     all.addAll(items)
@@ -75,7 +80,7 @@ fun buildChatRows(
     }
 
     for (item in all) {
-        if (item is TimelineItem.AssistantMessage && item.text.isBlank() && !isOnlyError(item)) {
+        if (groupProcess && item is TimelineItem.AssistantMessage && item.text.isBlank() && !isOnlyError(item)) {
             // 思考与工具调用都算「过程」，一起折进组里；组内思考是展开显示的（见 ProcessGroupBlock），
             // 所以并进组不等于把内容藏起来。
             pending += item

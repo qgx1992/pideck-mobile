@@ -124,4 +124,22 @@ class ChatRowsTest {
     fun `空列表得到空行序列`() {
         assertTrue(buildChatRows(emptyList(), null).isEmpty())
     }
+
+    @Test
+    fun `关掉过程组显示时每条内容各自平铺`() {
+        val rows = buildChatRows(
+            items = listOf(
+                user("u1", "改一下"),
+                step("a1", thinking = "先看看", tools = listOf(tool("read"))),
+                step("a2", tools = listOf(tool("edit"))),
+                step("a3", text = "改好了"),
+            ),
+            live = null,
+            groupProcess = false,
+        )
+
+        assertEquals(4, rows.size)
+        assertTrue(rows.all { it is ChatRow.Single })
+        assertEquals("a1", (rows[1] as ChatRow.Single).item.key)
+    }
 }

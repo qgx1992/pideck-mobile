@@ -30,11 +30,22 @@ object Prefs {
     private val KEY_COLLAPSED = stringSetPreferencesKey("collapsed_groups")
     private val KEY_COLLAPSE_RESTORE = booleanPreferencesKey("collapse_restore")
     private val KEY_BUSY_MODE = stringPreferencesKey("busy_send_mode")
+    private val KEY_PROCESS_GROUP = booleanPreferencesKey("process_group_display")
+    private val KEY_EXPAND_INTERIM = booleanPreferencesKey("expand_interim_stream")
 
 
     /** 主题变化用 StateFlow 播出去，MainActivity 直接 collect。 */
     val themeFlow = MutableStateFlow(ThemeMode.SYSTEM)
     val notifyFlow = MutableStateFlow(true)
+
+    /**
+     * 过程组相关的两个开关（对齐桌面端「设置 → 通用」里的同名项）。
+     *
+     * 聊天页要跟着它们重组，所以同样挂成 StateFlow；默认都是开 ——
+     * 与桌面端一致（`settings.processGroupDisplay` / `settings.expandInterimDuringStream` 默认 true）。
+     */
+    val processGroupFlow = MutableStateFlow(true)
+    val expandInterimFlow = MutableStateFlow(true)
 
     @Volatile
     var theme: ThemeMode = ThemeMode.SYSTEM
@@ -68,6 +79,20 @@ object Prefs {
     var busySendMode: BusySendMode = BusySendMode.STEER
         private set
 
+    /**
+     * 连续的过程条目（思考 / 工具调用）要不要合并成「过程组」。
+     *
+     * 关掉就是桌面端那个开关关掉后的样子：每条内容各自平铺，不再折成组头一行。
+     */
+    @Volatile
+    var processGroupDisplay: Boolean = true
+        private set
+
+    /** 流式对话时要不要自动展开最新那一组（关掉就全程保持折叠，手动展开的不受影响）。 */
+    @Volatile
+    var expandInterimStream: Boolean = true
+        private set
+
     private var loaded = false
 
     /** 首次从磁盘读完就置 true —— 折叠状态要等这个，否则读到的是默认值。 */
@@ -90,6 +115,12 @@ object Prefs {
                 collapsedGroups = data[KEY_COLLAPSED] ?: emptySet()
                 collapseRestore = data[KEY_COLLAPSE_RESTORE] ?: true
                 busySendMode = BusySendMode.parse(data[KEY_BUSY_MODE])
+                val groupProcess = data[KEY_PROCESS_GROUP] ?: true
+                val expandInterim = data[KEY_EXPAND_INTERIM] ?: true
+                processGroupDisplay = groupProcess
+                expandInterimStream = expandInterim
+                processGroupFlow.value = groupProcess
+                expandInterimFlow.value = expandInterim
                 loadedFlow.value = true
             }
         }
@@ -147,6 +178,18 @@ object Prefs {
         notifyDone = enabled
         notifyFlow.value = enabled
         context.prefsStore.edit { it[KEY_NOTIFY_DONE] = enabled }
+    }
+
+    suspend fun setProcessGroupDisplay(context: Context, enabled: Boolean) {
+        processGroupDisplay = enabled
+        processGroupFlow.value = enabled
+        context.prefsStore.edit { it[KEY_PROCESS_GROUP] = enabled }
+    }
+
+    suspend fun setExpandInterimStream(context: Context, enabled: Boolean) {
+        expandInterimStream = enabled
+        expandInterimFlow.value = enabled
+        context.prefsStore.edit { it[KEY_EXPAND_INTERIM] = enabled }
     }
 }
 

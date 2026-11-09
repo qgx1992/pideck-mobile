@@ -105,6 +105,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -140,6 +141,9 @@ import dev.pideck.nativeapp.data.BusySendMode
 import dev.pideck.nativeapp.data.TurnStats
 import dev.pideck.nativeapp.data.formatTurnStats
 import dev.pideck.nativeapp.data.TimelineItem
+import dev.pideck.nativeapp.data.Prefs
+import dev.pideck.nativeapp.data.ProcessActivity
+import dev.pideck.nativeapp.data.visibleMemberCount
 import dev.pideck.nativeapp.data.ToolView
 import dev.pideck.nativeapp.data.SessionModel
 import dev.pideck.nativeapp.data.thinkingLabel
@@ -189,11 +193,16 @@ fun ChatScreen(
         ChatDrafts.put(viewModel.sessionId, draft)
     }
 
+    // 两个过程相关开关（设置 → 通用）。关掉「过程组显示」就是桌面端那个开关关掉的样子：全部平铺。
+    val groupProcess by Prefs.processGroupFlow.collectAsState()
+    val expandInterim by Prefs.expandInterimFlow.collectAsState()
+
     // 拍平成「行」：连续的过程条目（思考 / 工具）合成一个过程组，正文回答单独成行。
-    val rows = remember(viewModel.items, viewModel.live, viewModel.streaming) {
+    val rows = remember(viewModel.items, viewModel.live, viewModel.streaming, groupProcess) {
         buildChatRows(
             items = viewModel.items,
             live = viewModel.live?.toTimelineItem(streaming = viewModel.streaming),
+            groupProcess = groupProcess,
         )
     }
 
@@ -761,7 +770,8 @@ fun ChatScreen(
 
                             is ChatRow.Process -> ProcessGroupBlock(
                                 row = row,
-                                autoOpen = row.streaming && row.key == lastKey,
+                                // 「流式对话时展开中间过程」关掉时全程保持折叠（手动展开的不受影响）
+                                autoOpen = expandInterim && row.streaming && row.key == lastKey,
                             )
                         }
                     }
@@ -1185,18 +1195,54 @@ private fun AssistantBlock(
 /** 过程分组里的一段思考（0.5.43 起统一渲染在工具卡下方）。 */
 private data class ThinkingPiece(val key: String, val text: String, val streaming: Boolean)
 
+/**
+ * 组内一条成员。渲染顺序与桌面端不同：桌面端按真实时序（思考插在工具之间），
+ * 手机上按用户 0.5.43 的要求把思考统一挪到组体底部，所以成员表是「全部工具 → 全部思考」。
+ */
+private sealed interface ProcessMember {
+    data class Tool(val tool: ToolView) : ProcessMember
+
+    data class Thinking(val piece: ThinkingPiece, val index: Int, val total: Int) : ProcessMember
+}
+
 @Composable
 private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
-    var open by rememberSaveable(row.key) { mutableStateOf(autoOpen) }
-    // 运行中自动展开（跟着流式看清楚在干什么），跑完自动收起
-    LaunchedEffect(autoOpen) { if (open != autoOpen) open = autoOpen }
+    // 手动开关优先：点过就以用户为准（桌面端 `manualGroupIds` 同一语义）。
+    // 以前直接用 `LaunchedEffect(autoOpen)` 覆盖 open，跑完收尾那一刻会把用户刚展开的组收回去。
+    // （用「点过没有 + 点成了什么」两个布尔，别用可空 Boolean —— rememberSaveable 对 null 不友好）
+    var manualSet by rememberSaveable(row.key) { mutableStateOf(false) }
+    var manualOpen by rememberSaveable(row.key) { mutableStateOf(autoOpen) }
+    val open = if (manualSet) manualOpen else autoOpen
+
+    val tools = row.steps.flatMap { it.tools }
+    val thinkings = row.steps.mapNotNull { step ->
+        step.thinking?.takeIf { it.isNotBlank() }?.let { text -> ThinkingPiece(step.key, text, step.streaming) }
+    }
+    val members: List<ProcessMember> = buildList {
+        tools.forEach { add(ProcessMember.Tool(it)) }
+        thinkings.forEachIndexed { index, piece ->
+            add(ProcessMember.Thinking(piece, index + 1, thinkings.size))
+        }
+    }
+    // 挂载预算：桌面端组内 >32 条只挂后 32，超出给「显示更早的 N 条步骤」
+    var batches by rememberSaveable(row.key) { mutableIntStateOf(0) }
+    val shown = visibleMemberCount(members.size, batches)
+    val hidden = members.size - shown
+    val visibleMembers = members.takeLast(shown)
 
     Column(modifier = Modifier.fillMaxWidth()) {
+        // 运行中给最后一条工具的参数摘要（桌面端 `lastToolDetail` 同款）：
+        // 光一句「正在执行命令」在长回合里等于没信息。
+        val runningDetail = if (row.streaming) tools.lastOrNull()?.let { ProcessActivity.toolDetail(it) } else null
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .clickable { open = !open }
+                .clickable {
+                    manualSet = true
+                    manualOpen = !open
+                }
                 .padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1212,19 +1258,36 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (row.toolCount > 0) {
+            if (runningDetail != null) {
                 Text(
-                    text = " · ${row.toolCount} 次调用",
+                    text = " · ",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
-            }
-            spanText(row.durationMs)?.let { span ->
                 Text(
-                    text = " · $span",
+                    text = runningDetail,
                     style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+            } else {
+                if (row.toolCount > 0) {
+                    Text(
+                        text = " · ${row.toolCount} 次调用",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                spanText(row.durationMs)?.let { span ->
+                    Text(
+                        text = " · $span",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
             }
             if (row.streaming) {
                 Spacer(Modifier.size(8.dp))
@@ -1236,75 +1299,60 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
             }
         }
 
-        if (open) {
-            Surface(
+        AnimatedVisibility(visible = open, enter = fadeIn(tween(140)), exit = fadeOut(tween(90))) {
+            val inner = rememberScrollState()
+            val lineColor = MaterialTheme.colorScheme.outlineVariant
+            // 组里也是流式追加：不钉住的话新工具卡长在可视区外，看着像「没跟上」
+            LaunchedEffect(members.size, row.streaming) {
+                if (row.streaming) {
+                    withFrameNanos { }
+                    inner.scrollTo(inner.maxValue)
+                }
+            }
+            // 组体样式对齐桌面端：缩进 + 左侧 2dp 竖线，不再是一张圆角卡片
+            // （桌面 `.ml-5 border-l-2 border-border-subtle pl-3`）
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 2.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                shape = RoundedCornerShape(12.dp),
+                    .padding(start = 20.dp, top = 2.dp)
+                    .drawBehind {
+                        drawRect(
+                            color = lineColor,
+                            topLeft = Offset.Zero,
+                            size = Size(2.dp.toPx(), size.height),
+                        )
+                    }
+                    .padding(start = 12.dp)
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(inner)
+                    .padding(vertical = 2.dp),
             ) {
-                val inner = rememberScrollState()
-                // 组里也是流式追加：不钉住的话新工具卡长在可视区外，看着像「没跟上」
-                LaunchedEffect(row.steps.size, row.streaming) {
-                    if (row.streaming) {
-                        withFrameNanos { }
-                        inner.scrollTo(inner.maxValue)
+                if (hidden > 0) {
+                    TextButton(
+                        onClick = { batches += 1 },
+                        modifier = Modifier.padding(bottom = 2.dp),
+                    ) {
+                        Text(
+                            text = "显示更早的 ${minOf(hidden, 32)} 条步骤",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
                     }
                 }
-                Column(
-                    modifier = Modifier
-                        .heightIn(max = 320.dp)
-                        .verticalScroll(inner)
-                        .padding(10.dp),
-                ) {
-                    // 一轮里的思考往往有好几段（每次工具调用前都会想一段），
-                    // 对齐桌面端 `ThinkingStep`：每段只占一行，点开才看正文。
-                    //
-                    // 顺序按用户 0.5.43 的要求改成「工具在前、思考置底」：以前每个 step 先画思考再画
-                    // 工具卡，连着几次调用时思考一直压在可视区最上面，看着像整组被思考糊住了。
-                    val thinkings = row.steps.mapNotNull { step ->
-                        step.thinking?.takeIf { it.isNotBlank() }?.let { text ->
-                            ThinkingPiece(step.key, text, step.streaming)
-                        }
-                    }
-                    row.steps.forEach { step ->
-                        step.tools.forEach { tool ->
-                            ToolCard(tool)
-                            Spacer(Modifier.size(6.dp))
-                        }
-                        step.errorText?.let { message ->
-                            Surface(
-                                color = MaterialTheme.colorScheme.errorContainer,
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(
-                                    text = message,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.padding(10.dp),
-                                )
-                            }
-                        }
-                    }
-                    if (thinkings.isNotEmpty()) {
-                        thinkings.forEachIndexed { index, piece ->
-                            var thinkingOpen by remember(piece.key) { mutableStateOf(false) }
+                visibleMembers.forEachIndexed { index, member ->
+                    when (member) {
+                        is ProcessMember.Tool -> ToolCard(member.tool)
+                        is ProcessMember.Thinking -> {
+                            var thinkingOpen by remember(member.piece.key) { mutableStateOf(false) }
                             ThinkingCard(
-                                text = piece.text,
+                                text = member.piece.text,
                                 open = thinkingOpen,
-                                streaming = piece.streaming,
-                                title = if (thinkings.size > 1) {
-                                    "思考 ${index + 1}/${thinkings.size}"
-                                } else {
-                                    "思考"
-                                },
+                                streaming = member.piece.streaming,
+                                title = if (member.total > 1) "思考 ${member.index}/${member.total}" else "思考",
                                 onToggle = { thinkingOpen = !thinkingOpen },
                             )
-                            if (index != thinkings.lastIndex) Spacer(Modifier.size(6.dp))
                         }
                     }
+                    if (index != visibleMembers.lastIndex) Spacer(Modifier.size(6.dp))
                 }
             }
         }

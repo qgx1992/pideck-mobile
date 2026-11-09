@@ -1,3 +1,23 @@
+## 0.5.45 — 2026-11-09
+
+**过程组对齐桌面端：手动展开优先、组头带实时命令、大组有挂载预算、竖线缩进，并补上那两个开关。**
+
+- **手动展开优先**（`ui/chat/ChatScreen.kt` 的 `ProcessGroupBlock`）：以前 `LaunchedEffect(autoOpen)`
+  会把展开状态直接覆盖掉 —— 你手动点开一组，这轮一收尾就被自动收起。现在按桌面端
+  `manualGroupIds` 的语义：点过就以你为准，跑完不会把你刚展开的组收回去。
+- **组头显示实时命令片段**：折叠时组头右侧补上最后一条工具的参数摘要（`ProcessActivity.detailFromArgs`：
+  命令 > 路径 > 检索词 > 描述，压成一行、等宽字体、尾截断），不再只有一句「正在执行命令」。
+- **组内挂载预算**（`visibleMemberCount` / `data/ProcessActivity.kt`）：与桌面端
+  `PROCESS_GROUP_MEMBER_LIMIT = 32` 同口径，超过 32 条只挂后 32 条，顶部给「显示更早的 N 条步骤」，
+  每点一次多放 32 条。
+- **组体改成竖线缩进**：去掉原来那张圆角浅色卡片，改成桌面端 `.ml-5 border-l-2 pl-3` 的样子
+  （缩进 20dp + 2dp 竖线 + 12dp 内边距），展开带淡入。
+- **设置页补上两个开关**（设置 → 过程组，`data/Prefs.kt` 的 `processGroupDisplay` / `expandInterimStream`）：
+  「合并成过程组 / 全部平铺」对应桌面端 `settings.processGroupDisplay`（关掉就是每条内容各自平铺）；
+  「流式输出时自动展开 / 保持折叠」对应 `settings.expandInterimDuringStream`。
+- 单测 326 → 335（`buildChatRows(groupProcess = false)` 全平铺、`ProcessActivityTest` 8 条：
+  参数摘要的字段优先级 / 多行压一行 / 超长截断 / 坏 JSON / 挂载预算）。
+
 ## 0.5.44 — 2026-11-09
 
 **后台在等你回答时也会提醒了；过程分组里的思考从「置顶」改到「置底」。**

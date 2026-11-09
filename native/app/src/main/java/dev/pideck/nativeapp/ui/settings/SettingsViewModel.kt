@@ -38,6 +38,14 @@ class SettingsViewModel @Inject constructor(
     var collapseRestore by mutableStateOf(Prefs.collapseRestore)
         private set
 
+    /** 连续的过程条目要不要合并成「过程组」（桌面端同名开关）。 */
+    var processGroupDisplay by mutableStateOf(Prefs.processGroupDisplay)
+        private set
+
+    /** 流式对话时要不要自动展开最新那一组。 */
+    var expandInterimStream by mutableStateOf(Prefs.expandInterimStream)
+        private set
+
     var device by mutableStateOf<Device?>(null)
         private set
 
@@ -61,6 +69,8 @@ class SettingsViewModel @Inject constructor(
             theme = Prefs.themeFlow.first()
             notifyDone = Prefs.notifyFlow.first()
             collapseRestore = Prefs.collapseRestore
+            processGroupDisplay = Prefs.processGroupFlow.first()
+            expandInterimStream = Prefs.expandInterimFlow.first()
         }
         viewModelScope.launch {
             val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
@@ -91,6 +101,16 @@ class SettingsViewModel @Inject constructor(
     fun chooseCollapseRestore(enabled: Boolean) {
         collapseRestore = enabled
         viewModelScope.launch { Prefs.setCollapseRestore(context, enabled) }
+    }
+
+    fun chooseProcessGroupDisplay(enabled: Boolean) {
+        processGroupDisplay = enabled
+        viewModelScope.launch { Prefs.setProcessGroupDisplay(context, enabled) }
+    }
+
+    fun chooseExpandInterimStream(enabled: Boolean) {
+        expandInterimStream = enabled
+        viewModelScope.launch { Prefs.setExpandInterimStream(context, enabled) }
     }
 
     fun removeDevice(id: String) {

@@ -1,5 +1,11 @@
 package dev.pideck.nativeapp.data
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+
 /**
  * 过程组的「活动类别」归纳（对齐桌面端
  * `app/vendor/pideck/src/renderer/src/components/session/timeline/toolCategory.ts`）。
@@ -100,6 +106,41 @@ object ProcessActivity {
             .sortedByDescending { it.second }
     }
 
+    /**
+     * 组头右侧那截实时细节：正在跑的那条工具的参数摘要（对齐桌面端 `lastToolDetail`）。
+     *
+     * 桌面端把参数规整成一句人话（「读取 README.md」），手机这边没有那套 phrase 表，
+     * 就从参数里挑最像「在干什么」的那个字段，压成一行给组头看 —— 折叠状态下也能知道在动哪个文件。
+     */
+    fun toolDetail(tool: ToolView): String? = detailFromArgs(tool.input)
+
+    /** 参数 JSON → 一行摘要（先按常用字段挑，挑不到就取第一个非空字符串值）。 */
+    fun detailFromArgs(input: String?): String? {
+        val raw = input?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        val element = runCatching { Json.parseToJsonElement(raw) }.getOrNull()
+        val picked = pickDetail(element)
+            ?: (element as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        val lines = picked?.lineSequence()
+            ?.map { it.trim() }?.filter { it.isNotEmpty() }?.toList().orEmpty()
+        if (lines.isEmpty()) return null
+        val text = lines.joinToString(" · ")
+        return if (text.length > 90) text.take(90) + "…" else text
+    }
+
+    private fun pickDetail(element: JsonElement?): String? {
+        val obj = element as? JsonObject ?: return null
+        for (key in DETAIL_KEYS) {
+            val value = obj[key] as? JsonPrimitive ?: continue
+            val text = value.contentOrNull?.takeIf { it.isNotBlank() } ?: continue
+            return text
+        }
+        // 没有常见字段（`mcp__xxx__do` 这类）：按顺序拿第一个非空字符串值，聊胜于无。
+        return obj.values.firstNotNullOfOrNull { value ->
+            (value as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        }
+    }
+
     /** 组头摘要：运行中给「正在读取…」，结束后给「读取 ×3 · 思考 ×2」。 */
     fun summary(
         toolNames: List<String>,
@@ -119,3 +160,27 @@ object ProcessActivity {
         return if (parts.isEmpty()) "过程" else parts.joinToString(" · ")
     }
 }
+
+/** 组内成员的挂载预算（对齐桌面端 `PROCESS_GROUP_MEMBER_LIMIT = 32`）。 */
+const val PROCESS_MEMBER_BUDGET = 32
+
+/**
+ * 组内实际渲染多少条成员（`batches` = 点了多少次「显示更早的 N 条步骤」）。
+ *
+ * 从末尾往前留：过程组是往后长的，真正想看的是刚发生的那几条。
+ */
+fun visibleMemberCount(total: Int, batches: Int, budget: Int = PROCESS_MEMBER_BUDGET): Int {
+    if (total <= 0) return 0
+    if (budget <= 0) return total
+    val steps = batches.coerceAtLeast(0) + 1
+    val shown = budget.toLong() * steps
+    return if (shown >= total) total else shown.toInt()
+}
+
+/** 挑细节时优先看的参数名（命令 > 路径 > 检索词 > 描述），顺序即优先级。 */
+private val DETAIL_KEYS = listOf(
+    "command", "cmd", "script",
+    "path", "file_path", "file", "filename", "notebook_path",
+    "pattern", "query", "q", "search",
+    "url", "prompt", "description", "name", "title",
+)

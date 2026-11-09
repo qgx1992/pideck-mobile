@@ -474,6 +474,25 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   - 设置页那句「技能 / 扩展 / 用量回桌面端看」的注释已作废：技能扩展现在是全局 HTTP 接口；
     用量额度（`/api/usage/:provider`）默认关闭，仍未做。
 
+- **过程组有三个不能改的约定**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatScreen.kt` 的
+  `ProcessGroupBlock`，0.5.45 对齐桌面端）：
+  1. **手动展开优先**：用 `manualSet` / `manualOpen` 两个布尔，`open = if (manualSet) manualOpen else autoOpen`。
+     别退回 `LaunchedEffect(autoOpen) { open = autoOpen }` —— 那会在一轮跑完的那一帧把用户刚点开的组收回去
+     （桌面端是 `manualGroupIds` + `suppressedAutoGroupId`，同一语义）。
+  2. **组头要有实时内容**：运行中显示最后一条工具的参数摘要（`data/ProcessActivity.kt` 的
+     `toolDetail` / `detailFromArgs`：命令 > 路径 > 检索词 > 描述，多行压一行、超 90 字截断），
+     只剩一句「正在执行命令」等于没有信息。
+  3. **组内挂载预算 32**（`data/ProcessActivity.kt` 的 `visibleMemberCount` + `PROCESS_MEMBER_BUDGET`，
+     对应桌面端 `PROCESS_GROUP_MEMBER_LIMIT = 32`）：`takeLast(shown)` 从末尾往前留，超出给
+     「显示更早的 N 条步骤」，每点一次 +32。
+  组体样式是桌面端那套「缩进 20dp + 2dp 竖线 + 12dp 内边距」的 `drawBehind`，不是卡片。
+  两个开关在 `data/Prefs.kt`（`processGroupDisplay` / `expandInterimStream`，默认都开），
+  聊天页通过 `Prefs.processGroupFlow` / `expandInterimFlow` 的 `collectAsState()` 跟着设置页变；
+  `buildChatRows(items, live, groupProcess = false)` 就是「全部平铺」（每条内容走 `AssistantBlock`）。
+  手机与桌面端仍有差异，**别自己去补**：桌面端把思考插在真实时序里（手机按用户要求置底）、
+  桌面端同一消息的多条工具合成一张 `ToolGroupCard`（手机一条一张）、桌面端还有扩展输出 /
+  重试 / 中间回复的独立节点（手机没有这些数据）。
+
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
   不做「有一张卡但不知道在问什么」。展开内容走 `AnimatedVisibility`，选项列仍是 `heightIn(max = 320.dp)` 内部滚动。

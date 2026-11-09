@@ -169,6 +169,31 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(12.dp))
+            SectionTitle("过程组")
+            DropdownSetting(
+                value = viewModel.processGroupDisplay,
+                options = listOf(true, false),
+                label = { if (it) "合并成过程组" else "全部平铺" },
+                onSelect = { viewModel.chooseProcessGroupDisplay(it) },
+            )
+            Text(
+                "一轮内的连续思考与工具调用合并成「过程组」，组头一句话概括、点开看明细。关掉之后每条内容各自平铺，长回合会很长。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            DropdownSetting(
+                value = viewModel.expandInterimStream,
+                options = listOf(true, false),
+                label = { if (it) "流式输出时自动展开" else "流式输出时保持折叠" },
+                onSelect = { viewModel.chooseExpandInterimStream(it) },
+            )
+            Text(
+                "开着时，正在跑的那一组会自动展开，跟着流式看它在干什么；关掉则全程折叠、省渲染。手动点开/收起的那一组不受影响。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(12.dp))
             SectionTitle("会话列表")
             DropdownSetting(
                 value = viewModel.collapseRestore,
