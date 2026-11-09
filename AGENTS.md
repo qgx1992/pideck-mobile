@@ -168,6 +168,12 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   `TopAppBar` 正下方那行 `Row`（模型 / 思考档位胶囊））：模型胶囊外面套一层 `Box(Modifier.weight(1f))`、内部封顶 188dp，
   右侧（上下文胶囊 + 历史按钮）才永远有位置。全都给固定宽度时，上下文胶囊一出现，
   历史按钮就只量到 0 宽度、直接看不见（踩过一次，用户报「查看上下文后历史按钮被顶掉」）。
+- **「它问你一句」也要通知，而且不能报成「回复完成」**（`native/app/src/main/java/dev/pideck/nativeapp/watch/RunWatchService.kt`）：
+  `/api/sessions/runtimes` 里**没有** pending 这一项，所以看护每轮顺带用 `If-None-Match` 问一次
+  `/api/state`（没变化＝304、不带 body，别怕 55KB），从 `pendingUiRequests` 拿问答卡。判据三条：
+  新 `requestId` 才弹（去重键 `deviceId|sessionId|requestId`，回答后从表里清掉，否则同一张卡每次轮询都弹）；
+  该会话挂着提问时**抑制**「回复完成」（提问时 agent 常正好 running→idle，那条会被误弹，用户点进去才发现它在等人）；
+  渠道单独一个 `run-watch-ask`（`IMPORTANCE_HIGH`），别塞进 `run-watch-done` —— 静音「跑完了」不该把要人回的东西一起静音。
 - **点「回复完成」通知要能进那个会话**：`native/app/src/main/java/dev/pideck/nativeapp/watch/Notifications.kt`
   的 `finished()` 必须把 `pideckDeviceId` + `pideckSessionId` 塞进 Intent，并且**每条通知一份
   PendingIntent**（requestCode 用 `NotificationNav.notificationId(deviceId, sessionId)`）；

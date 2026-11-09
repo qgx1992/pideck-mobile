@@ -1182,6 +1182,9 @@ private fun AssistantBlock(
  * 桌面端就是这么渲染的：跑起来之后屏幕上只有「读取 · 搜索 · 2 次调用」这样一行，
  * 正文与细节要主动展开 —— 长回合里这能把几十屏的过程压成几行。
  */
+/** 过程分组里的一段思考（0.5.43 起统一渲染在工具卡下方）。 */
+private data class ThinkingPiece(val key: String, val text: String, val streaming: Boolean)
+
 @Composable
 private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
     var open by rememberSaveable(row.key) { mutableStateOf(autoOpen) }
@@ -1256,23 +1259,16 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
                         .padding(10.dp),
                 ) {
                     // 一轮里的思考往往有好几段（每次工具调用前都会想一段），
-                    // 全部展开会把工具行挤到看不见的地方，看着像「思考被置顶、几段糊成一坨」。
                     // 对齐桌面端 `ThinkingStep`：每段只占一行，点开才看正文。
-                    val thinkingTotal = row.steps.count { !it.thinking.isNullOrBlank() }
-                    var thinkingSeen = 0
-                    row.steps.forEach { step ->
-                        step.thinking?.let { thinking ->
-                            thinkingSeen += 1
-                            var thinkingOpen by remember(step.key) { mutableStateOf(false) }
-                            ThinkingCard(
-                                text = thinking,
-                                open = thinkingOpen,
-                                streaming = step.streaming,
-                                title = if (thinkingTotal > 1) "思考 $thinkingSeen/$thinkingTotal" else "思考",
-                                onToggle = { thinkingOpen = !thinkingOpen },
-                            )
-                            Spacer(Modifier.size(6.dp))
+                    //
+                    // 顺序按用户 0.5.43 的要求改成「工具在前、思考置底」：以前每个 step 先画思考再画
+                    // 工具卡，连着几次调用时思考一直压在可视区最上面，看着像整组被思考糊住了。
+                    val thinkings = row.steps.mapNotNull { step ->
+                        step.thinking?.takeIf { it.isNotBlank() }?.let { text ->
+                            ThinkingPiece(step.key, text, step.streaming)
                         }
+                    }
+                    row.steps.forEach { step ->
                         step.tools.forEach { tool ->
                             ToolCard(tool)
                             Spacer(Modifier.size(6.dp))
@@ -1290,6 +1286,23 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
                                     modifier = Modifier.padding(10.dp),
                                 )
                             }
+                        }
+                    }
+                    if (thinkings.isNotEmpty()) {
+                        thinkings.forEachIndexed { index, piece ->
+                            var thinkingOpen by remember(piece.key) { mutableStateOf(false) }
+                            ThinkingCard(
+                                text = piece.text,
+                                open = thinkingOpen,
+                                streaming = piece.streaming,
+                                title = if (thinkings.size > 1) {
+                                    "思考 ${index + 1}/${thinkings.size}"
+                                } else {
+                                    "思考"
+                                },
+                                onToggle = { thinkingOpen = !thinkingOpen },
+                            )
+                            if (index != thinkings.lastIndex) Spacer(Modifier.size(6.dp))
                         }
                     }
                 }

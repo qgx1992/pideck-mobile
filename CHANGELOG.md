@@ -1,3 +1,21 @@
+## 0.5.44 — 2026-11-09
+
+**后台在等你回答时也会提醒了；过程分组里的思考从「置顶」改到「置底」。**
+
+- **问答卡现在会弹通知**（`watch/RunWatchService.kt` + `watch/Notifications.kt`）：
+  看护以前只盯 `/api/sessions/runtimes` 的 running→idle，而提问卡不在那条接口里 —— 于是 App 在后台时，
+  agent 问你一句永远不会提醒你；更糟的是提问时 agent 常常正好从 running 转 idle，
+  弹出来的反而是那句错的「回复完成」（点进去才发现它在等你答话）。
+  现在每轮顺带用 **If-None-Match** 问一次 `/api/state`（没变化就是 304、不带 body），
+  从 `pendingUiRequests` 拿提问：新提问、且 App 不在前台 → 发一条「<会话> 在等你回答」，
+  渠道单独一个「等待你回答」（`IMPORTANCE_HIGH`，不会跟「回复完成」一起被静音），
+  点进去直接落到那个会话；同一 `requestId` 只弹一次（`deviceId|sessionId|requestId` 去重，
+  回答后从去重表清掉）。有提问挂着的会话**不再**发「回复完成」。
+- **过程分组里的思考置底**（`ui/chat/ChatScreen.kt` 的 `ProcessGroupBlock`）：
+  以前每个 step 先画思考卡片再画工具卡，连着几次调用时思考一直压在可视区顶端；
+  现在先铺全部工具卡（含报错），最后再按顺序列思考（仍是每段一行、点开看正文）。
+- 单测 326 条不变（这两处都在 Android 侧，没有可在 JVM 里断言的纯逻辑）。
+
 ## 0.5.43 — 2026-11-09
 
 **把聊天页与会话列表页的「Android 手脚」也收成接口，两个页面第一次有了行为测试。**

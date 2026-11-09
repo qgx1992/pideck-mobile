@@ -15,7 +15,9 @@ import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.PideckJson
+import dev.pideck.nativeapp.data.PendingUiRequest
 import dev.pideck.nativeapp.data.PideckState
+import dev.pideck.nativeapp.data.StateFetch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -80,6 +82,12 @@ class RunWatchService : Service() {
     private suspend fun watchLoop() {
         val wasRunning = mutableMapOf<String, Boolean>()
         val titles = mutableMapOf<String, String>()
+        /** 每台设备上一次 `/api/state` 的 ETag：没变化就是 304，不带 body。 */
+        val etags = mutableMapOf<String, String?>()
+        /** 每台设备上一次拿到的待回答提问（304 时沿用，不然会把「还在等」误判成「已经答了」）。 */
+        val pendingByDevice = mutableMapOf<String, List<PendingUiRequest>>()
+        /** 已经通知过的提问（`deviceId|sessionId|requestId`）：同一张卡别每 12s 弹一次。 */
+        val notifiedAsks = mutableSetOf<String>()
         val startedAt = SystemClock.elapsedRealtime()
         var idlePolls = 0
 
@@ -92,6 +100,41 @@ class RunWatchService : Service() {
 
                 for (device in devices) {
                     val token = runCatching { repository.tokenOf(device.id) }.getOrNull()
+
+                    // 待回答的提问（问答卡）。先问 `/api/state`，因为 `/api/sessions/runtimes`
+                    // 里没有 pending 这一项 —— 以前后台**永远不会**因为「它问你一句」而提醒你，
+                    // 只有「回复完成」会弹（而提问卡出现时 agent 可能正好从 running 转 idle，
+                    // 于是弹出来的还是那句错的「回复完成」）。
+                    // 带 If-None-Match：没变化时宿主直接回 304、不带 body，可以每轮问。
+                    val stateFetch = runCatching {
+                        withTimeout(8_000) { api.state(device, token, etags[device.id]) }
+                    }.getOrNull()
+                    if (stateFetch is StateFetch.Fresh) {
+                        etags[device.id] = stateFetch.etag
+                        pendingByDevice[device.id] = stateFetch.state.pendingUiRequests
+                        stateFetch.state.sessions.forEach { session ->
+                            session.title.takeIf { it.isNotBlank() }?.let { titles[session.id] = it }
+                        }
+                    }
+                    val pending = pendingByDevice[device.id].orEmpty()
+                    val pendingSessions = pending.map { it.sessionId }.toSet()
+
+                    if (!RunWatcher.appVisible && Prefs.notifyDone) {
+                        for (ask in pending) {
+                            val askKey = "${device.id}|${ask.sessionId}|${ask.requestId}"
+                            if (!notifiedAsks.add(askKey)) continue
+                            runCatching {
+                                Notifications.question(
+                                    this,
+                                    device.id,
+                                    ask.sessionId,
+                                    titles[ask.sessionId].orEmpty(),
+                                    ask.title,
+                                )
+                            }
+                        }
+                    }
+
                     val runtimes = runCatching {
                         withTimeout(8_000) { api.runtimes(device, token) }
                     }.getOrNull() ?: continue
@@ -101,8 +144,10 @@ class RunWatchService : Service() {
                         val running = runtime.status == "running" || runtime.status == "busy"
                         if (running) active++
                         if (wasRunning[key] == true && !running) {
+                            // 等着人回答的时候别报「回复完成」：那张提问通知已经把人叫过去了。
+                            val waitingForAnswer = runtime.sessionId in pendingSessions
                             // 只在看不见 App 的时候打扰人；前台时用户自己就看到了。
-                            if (!RunWatcher.appVisible && Prefs.notifyDone) {
+                            if (!waitingForAnswer && !RunWatcher.appVisible && Prefs.notifyDone) {
                                 val title = titles[runtime.sessionId]
                                     ?: runCatching { titleOf(device, token, runtime.sessionId) }.getOrNull()
                                 if (!title.isNullOrBlank()) titles[runtime.sessionId] = title
@@ -122,6 +167,14 @@ class RunWatchService : Service() {
                         }
                     }
                 }
+
+                // 已经回答 / 撤回的提问腾出去重表，否则同一个 requestId 再出现就被静音了。
+                val liveAskKeys = buildSet {
+                    for ((deviceId, asks) in pendingByDevice) {
+                        for (ask in asks) add("$deviceId|${ask.sessionId}|${ask.requestId}")
+                    }
+                }
+                notifiedAsks.retainAll(liveAskKeys)
 
                 runCatching {
                     getSystemService(NotificationManager::class.java)
@@ -143,7 +196,7 @@ class RunWatchService : Service() {
         }
     }
 
-    /** 会话标题：只有要发通知时才拉一次 `/api/state`（55KB，别每轮都拉）。 */
+    /** 会话标题：拿不到 `/api/state` 时兜底用（正常路径上标题已经随 state 一起拿到了）。 */
     private suspend fun titleOf(device: Device, token: String?, sessionId: String): String? {
         val state = PideckJson.decodeFromString(PideckState.serializer(), api.rawGet(device, token, "/api/state"))
         return state.sessions.firstOrNull { it.id == sessionId }?.title

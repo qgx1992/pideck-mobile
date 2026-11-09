@@ -10,11 +10,12 @@ import androidx.core.app.NotificationCompat
 import dev.pideck.nativeapp.MainActivity
 import dev.pideck.nativeapp.R
 
-/** 通知渠道与两类通知的构造（看护常驻 / 回复完成）。 */
+/** 通知渠道与三类通知的构造（看护常驻 / 回复完成 / 等着你回答）。 */
 object Notifications {
 
     const val CHANNEL_ACTIVE = "run-watch-active"
     const val CHANNEL_DONE = "run-watch-done"
+    const val CHANNEL_ASK = "run-watch-ask"
     const val ACTIVE_ID = 0x7E0
 
     fun ensureChannels(context: Context) {
@@ -31,6 +32,12 @@ object Notifications {
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_DONE, "回复完成", NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "后台时，某个会话的回复跑完了"
+            },
+        )
+        // 单独一个渠道：提问要人回，不能和「跑完了」一起被静音掉。
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ASK, "等待你回答", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "后台时，某个会话问了你一句（选择题 / 填空题），在等你回"
             },
         )
     }
@@ -79,6 +86,33 @@ object Notifications {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(openApp(context))
             .build()
+
+    /**
+     * 「在等你回答」：agent 抛了一张问答卡（`/api/state` 的 `pendingUiRequests`）。
+     *
+     * 与 [finished] 共用同一个通知 id（按 deviceId+sessionId 算）：同一会话里先问后答，
+     * 后一条会原地替换前一条，不会在通知栏堆两条。
+     */
+    fun question(
+        context: Context,
+        deviceId: String,
+        sessionId: String,
+        title: String,
+        ask: String,
+    ) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val session = title.ifBlank { "会话" }
+        val body = ask.ifBlank { "有一张提问卡等着你回答" }
+        val builder = NotificationCompat.Builder(context, CHANNEL_ASK)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("$session 在等你回答")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText("$session\n$body"))
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(openSession(context, deviceId, sessionId))
+        runCatching { manager.notify(NotificationNav.notificationId(deviceId, sessionId), builder.build()) }
+    }
 
     /** 回复完成通知。同一会话复用同一个 id，避免堆一屏。 */
     fun finished(context: Context, deviceId: String, sessionId: String, title: String, failed: Boolean) {
