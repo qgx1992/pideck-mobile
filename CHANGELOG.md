@@ -17,8 +17,12 @@
 - **DI 可替换**：新增 `di/AppBindings.kt`，`PideckApi` 与 `DeviceDirectory` 改成
   `@Binds` 绑接口（真实实现仍由 `AppModule` 提供）。要给 ViewModel 写行为测试时，
   用 `@TestInstallIn` 换掉这个 Module 即可，不必再搭 mock server。
-- 单测 300 → 310（`data/ConnectionResolverTest` 5 条：正常 / 无令牌 / Keystore 抛错 /
-  设备不存在 / 流永不放行；`ui/common/LoadStateTest` 5 条）。
+- **ViewModel 终于能测了**：`HomeViewModel` 不再吃 `DeviceRepository`（它其实一个方法都没用到），
+  依赖只剩 `SavedStateHandle` + `ConnectionResolver` + `PideckApi` + `SessionStateStore`，
+  全都可以在 JVM 里造。测试基底 `test/.../FakePideckApi.kt`（34 个方法各抛「未打桩」，
+  子类只覆盖要用的两三个）+ `HomeViewModelTest`（6 条：成功落 Ready 并填工作区 / 子会话不进「最近」/
+  失败是 Failed 而不是空白 / 设备被删给可操作文案 / 开新会话失败只污染 `actionError` / 成功回传 id）。
+- 单测 300 → 316（新增 `ConnectionResolverTest` 5 条、`LoadStateTest` 5 条、`HomeViewModelTest` 6 条）。
 
 ## 0.5.41 — 2026-11-09
 

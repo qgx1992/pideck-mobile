@@ -19,7 +19,7 @@ Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
 ```bash
 cd native
-./gradlew :app:testDebugUnitTest    # 310 条 JVM 单测
+./gradlew :app:testDebugUnitTest    # 316 条 JVM 单测
 ./gradlew :app:assembleRelease      # app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -61,7 +61,7 @@ native/                       唯一在发的产物
 │  ├─ ui/home · sessions · devices · settings · pairing · splash
 │  ├─ watch/                 RunWatchService（前台服务）+ 通知
 │  └─ di/                    Hilt
-└─ app/src/test/             310 条 JVM 单测（纯逻辑；含真桌面端联调的 Live* 用例，无设置时自动跳过）
+└─ app/src/test/             316 条 JVM 单测（纯逻辑；含真桌面端联调的 Live* 用例，无设置时自动跳过）
 ```
 
 设计上的三条约定：

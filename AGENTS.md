@@ -267,6 +267,17 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
     首页 `HomeViewModel` 与会话列表 `SessionsViewModel` 的 `loading` / `error` 已经只是它派生的只读属性；
     要区分「连不上 / 正在拉 / 真的没有内容」时读 `loadState`，别再靠 `items.isEmpty()` 猜。
     动作类失败（改名、删除、开新会话）走各自的 `actionError`，别和整屏拉取混成一个字段。
+  - **ViewModel 行为测试**：基底是 `native/app/src/test/java/dev/pideck/nativeapp/data/FakePideckApi.kt`
+    （每个方法抛「未打桩」，测试里 `object : FakePideckApi() { override suspend fun state(…) = … }` 只写
+    要用的那几个；接口加方法后它编译不过，不会静默漏）。写法照
+    `native/app/src/test/java/dev/pideck/nativeapp/ui/home/HomeViewModelTest.kt`：
+    `Dispatchers.setMain(StandardTestDispatcher())` + `runTest(dispatcher)` + `advanceUntilIdle()`
+    （ViewModel 的 `init` 也在 `viewModelScope` 里跑，不推进调度器就什么都看不到）。
+    **注意 fake 默认没打桩就会抛**，`init` 顺手调到的方法（首页是 `models`）也要给个空实现，
+    否则异常会冒到测试线程上当失败。
+    **别把 ViewModel 依赖 Android 的东西**：`HomeViewModel` 曾经多余地注入 `DeviceRepository`
+    （一个方法都没用到），去掉之后整条链路都能在 JVM 里跑；要写新 VM 测试就先看它的构造参数里
+    有没有 `Context` / `DeviceRepository` —— 有就说明该先收口（`ConnectionResolver` / `DeviceDirectory`）。
   - **DI**：`di/AppBindings.kt` 用 `@Binds` 把 `PideckApi` 与 `DeviceDirectory` 绑到真实实现
     （真实实现的 `@Provides` 在 `di/AppModule.kt`）。要给 ViewModel 写行为测试，
     用 `@TestInstallIn` 换掉 `AppBindings` 塞假实现即可，不必搭 mock server、也不要改生产装配。

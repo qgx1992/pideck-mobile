@@ -11,7 +11,6 @@ import dev.pideck.nativeapp.data.AcpTool
 import dev.pideck.nativeapp.data.AvailableModel
 import dev.pideck.nativeapp.data.AgentBackend
 import dev.pideck.nativeapp.data.Device
-import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.Project
 import dev.pideck.nativeapp.data.STANDARD_THINKING_LEVELS
@@ -39,7 +38,6 @@ import javax.inject.Inject
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
-    private val repository: DeviceRepository,
     private val connections: ConnectionResolver,
     private val api: PideckApi,
     private val stateStore: SessionStateStore,
