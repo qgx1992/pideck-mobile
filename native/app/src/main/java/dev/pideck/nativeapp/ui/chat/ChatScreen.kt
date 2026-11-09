@@ -1318,6 +1318,14 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
                     inner.scrollTo(inner.maxValue)
                 }
             }
+            // 跑完再打开要从头看：流式时被钉在底部，收尾后位置会停在最后一条，
+            // 展开第一眼看到的是「结尾的思考」，容易误以为顺序不对。
+            LaunchedEffect(open, row.streaming) {
+                if (open && !row.streaming) {
+                    withFrameNanos { }
+                    inner.scrollTo(0)
+                }
+            }
             // 组体样式对齐桌面端：缩进 + 左侧 2dp 竖线，不再是一张圆角卡片
             // （桌面 `.ml-5 border-l-2 border-border-subtle pl-3`）
             Column(
