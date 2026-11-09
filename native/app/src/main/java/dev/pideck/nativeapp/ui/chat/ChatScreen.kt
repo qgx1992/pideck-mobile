@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.background
@@ -332,6 +333,8 @@ fun ChatScreen(
 
     // 长按消息 → 复制全文 / 复制代码块 / 自由复制
     var actionTarget by remember { mutableStateOf<TimelineItem?>(null) }
+    // 思考 / 工具点开的那块浮窗（与「自由复制」同一套外壳）
+    var detail by remember { mutableStateOf<DetailContent?>(null) }
     var freeCopyTarget by remember { mutableStateOf<TimelineItem?>(null) }
 
     LaunchedEffect(viewModel.error) {
@@ -765,6 +768,7 @@ fun ChatScreen(
                                 is TimelineItem.AssistantMessage -> AssistantBlock(
                                     item = item,
                                     onLongPress = { actionTarget = item },
+                                    onOpenDetail = { detail = it },
                                 )
                             }
 
@@ -772,6 +776,7 @@ fun ChatScreen(
                                 row = row,
                                 // 「流式对话时展开中间过程」关掉时全程保持折叠（手动展开的不受影响）
                                 autoOpen = expandInterim && row.streaming && row.key == lastKey,
+                                onOpenDetail = { detail = it },
                             )
                         }
                     }
@@ -977,6 +982,17 @@ fun ChatScreen(
             onDismiss = { freeCopyTarget = null },
         )
     }
+    detail?.let { content ->
+        DetailDialog(
+            content = content,
+            onCopyAll = { text ->
+                clipboard.setText(AnnotatedString(text))
+                detail = null
+                scope.launch { snackbar.showSnackbar("已复制 ${text.length} 字") }
+            },
+            onDismiss = { detail = null },
+        )
+    }
     if (showHistory) {
         val turns = remember(viewModel.items) { buildHistoryTurns(viewModel.items, ::clock) }
         HistorySheet(
@@ -1116,10 +1132,8 @@ private fun UserBubble(
 private fun AssistantBlock(
     item: TimelineItem.AssistantMessage,
     onLongPress: () -> Unit = {},
+    onOpenDetail: (DetailContent) -> Unit = {},
 ) {
-    // 默认只占一行：思考是过程信息，正文才是这一条的重点（桌面端 ThinkingBlock 同款）
-    var thinkingOpen by remember(item.key) { mutableStateOf(false) }
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1133,15 +1147,22 @@ private fun AssistantBlock(
         item.thinking?.let { thinking ->
             ThinkingCard(
                 text = thinking,
-                open = thinkingOpen,
                 streaming = item.streaming,
-                onToggle = { thinkingOpen = !thinkingOpen },
+                onOpen = {
+                    onOpenDetail(
+                        DetailContent(
+                            title = if (item.streaming) "思考过程（进行中）" else "思考过程",
+                            hint = "太长不想滚？长按选中一段就行；也可以直接复制全文",
+                            text = thinking,
+                        ),
+                    )
+                },
             )
             Spacer(Modifier.size(8.dp))
         }
 
         item.tools.forEach { tool ->
-            ToolCard(tool)
+            ToolCard(tool, onOpen = { onOpenDetail(toolDetailOf(tool)) })
             Spacer(Modifier.size(6.dp))
         }
 
@@ -1209,7 +1230,11 @@ private sealed interface ProcessMember {
 }
 
 @Composable
-private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
+private fun ProcessGroupBlock(
+    row: ChatRow.Process,
+    autoOpen: Boolean,
+    onOpenDetail: (DetailContent) -> Unit = {},
+) {
     // 手动开关优先：点过就以用户为准（桌面端 `manualGroupIds` 同一语义）。
     // 以前直接用 `LaunchedEffect(autoOpen)` 覆盖 open，跑完收尾那一刻会把用户刚展开的组收回去。
     // （用「点过没有 + 点成了什么」两个布尔，别用可空 Boolean —— rememberSaveable 对 null 不友好）
@@ -1357,17 +1382,29 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
                 }
                 visibleMembers.forEachIndexed { index, member ->
                     when (member) {
-                        is ProcessMember.Tool -> ToolCard(member.tool)
-                        is ProcessMember.Thinking -> {
-                            var thinkingOpen by remember(member.piece.key) { mutableStateOf(false) }
-                            ThinkingCard(
-                                text = member.piece.text,
-                                open = thinkingOpen,
-                                streaming = member.piece.streaming,
-                                title = if (member.total > 1) "思考 ${member.index}/${member.total}" else "思考",
-                                onToggle = { thinkingOpen = !thinkingOpen },
-                            )
-                        }
+                        is ProcessMember.Tool -> ToolCard(
+                            tool = member.tool,
+                            onOpen = { onOpenDetail(toolDetailOf(member.tool)) },
+                        )
+
+                        is ProcessMember.Thinking -> ThinkingCard(
+                            text = member.piece.text,
+                            streaming = member.piece.streaming,
+                            title = if (member.total > 1) "思考 ${member.index}/${member.total}" else "思考",
+                            onOpen = {
+                                onOpenDetail(
+                                    DetailContent(
+                                        title = if (member.total > 1) {
+                                            "思考 ${member.index}/${member.total}"
+                                        } else {
+                                            "思考过程"
+                                        },
+                                        hint = "太长不想滚？长按选中一段就行；也可以直接复制全文",
+                                        text = member.piece.text,
+                                    ),
+                                )
+                            },
+                        )
                     }
                     if (index != visibleMembers.lastIndex) Spacer(Modifier.size(6.dp))
                 }
@@ -1388,12 +1425,17 @@ private fun spanText(ms: Long): String? {
     return "${totalSeconds / 60}m${(totalSeconds % 60).toString().padStart(2, '0')}s"
 }
 
+/**
+ * 思考卡：**只占一行**，点开是「自由复制」同款浮窗。
+ *
+ * 以前是就地展开（卡片自己撑高），长思考一展开就把整轮回复推走、还很难挑出其中一段复制；
+ * 换成浮窗后与原位滚动互不干扰，浮窗里能直接拖选。
+ */
 @Composable
 private fun ThinkingCard(
     text: String,
-    open: Boolean,
     streaming: Boolean,
-    onToggle: () -> Unit,
+    onOpen: () -> Unit,
     title: String = "思考过程",
 ) {
     Surface(
@@ -1401,43 +1443,41 @@ private fun ThinkingCard(
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .softPress(RoundedCornerShape(10.dp), onToggle),
+            .softPress(RoundedCornerShape(10.dp), onOpen),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = if (streaming) "$title（进行中）" else title,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    text = "${text.length} 字",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-                Icon(
-                    imageVector = if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = if (open) "收起" else "展开",
-                    tint = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-            if (open) {
-                Text(
-                    text = text,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (streaming) "$title（进行中）" else title,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "${text.length} 字",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Icon(
+                imageVector = Icons.Default.OpenInFull,
+                contentDescription = "展开",
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(15.dp),
+            )
         }
     }
 }
 
+/**
+ * 工具卡：一行摘要，点开是「自由复制」同款浮窗（入参 / 结果 / 错误都在里面，等宽显示）。
+ *
+ * 同样是「不再就地展开」：命令输出动辄几百行，塞在气泡里既挤又没法滚动，
+ * 浮窗里能滚、能选、能一次复制全文。
+ */
 @Composable
-private fun ToolCard(tool: ToolView) {
-    var open by remember(tool.id) { mutableStateOf(false) }
+private fun ToolCard(tool: ToolView, onOpen: () -> Unit = {}) {
     val tint = when {
         tool.isError -> MaterialTheme.colorScheme.error
         tool.isSettled -> Color(0xFF4CAF50)
@@ -1448,10 +1488,13 @@ private fun ToolCard(tool: ToolView) {
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .softPress(RoundedCornerShape(10.dp), onClick = { open = !open }),
+            .softPress(RoundedCornerShape(10.dp), onOpen),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            run {
                 Box(
                     modifier = Modifier
                         .size(7.dp)
@@ -1474,34 +1517,36 @@ private fun ToolCard(tool: ToolView) {
                     modifier = Modifier.weight(1f),
                 )
                 Icon(
-                    imageVector = if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = null,
+                    imageVector = Icons.Default.OpenInFull,
+                    contentDescription = "展开",
                     tint = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(15.dp),
                 )
-            }
-            if (open) {
-                val detail = buildString {
-                    tool.input?.let { append("入参\n").append(it).append("\n\n") }
-                    tool.errorText?.let { append("错误\n").append(it) }
-                    if (tool.errorText == null) tool.output?.let { append("结果\n").append(it) }
-                }.trim()
-                if (detail.isNotEmpty()) {
-                    Text(
-                        text = detail,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            lineHeight = 17.sp,
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .padding(top = 8.dp)
-                            .heightIn(max = 320.dp),
-                    )
-                }
             }
         }
     }
+}
+
+/** 工具卡点开后浮窗里的正文：入参 / 错误 / 结果，等宽显示。 */
+private fun toolDetailOf(tool: ToolView): DetailContent {
+    val body = buildString {
+        tool.input?.let { append("入参\n").append(it).append("\n\n") }
+        tool.errorText?.let { append("错误\n").append(it) }
+        if (tool.errorText == null) {
+            tool.output?.let { append("结果\n").append(it) }
+        }
+    }.trim()
+    val hint = when {
+        tool.isError -> "这条调用出错了：说明在「错误」那一段"
+        tool.state.contains("running") -> "还在跑，结果会随流式更新"
+        else -> tool.name + " · " + toolSummary(tool)
+    }
+    return DetailContent(
+        title = tool.name,
+        hint = hint.take(90),
+        text = body.ifBlank { "（这条调用没有留下入参和结果）" },
+        mono = true,
+    )
 }
 
 private fun toolSummary(tool: ToolView): String {
