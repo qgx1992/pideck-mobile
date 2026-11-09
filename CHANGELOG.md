@@ -15,6 +15,10 @@
 - **设置页补上两个开关**（设置 → 过程组，`data/Prefs.kt` 的 `processGroupDisplay` / `expandInterimStream`）：
   「合并成过程组 / 全部平铺」对应桌面端 `settings.processGroupDisplay`（关掉就是每条内容各自平铺）；
   「流式输出时自动展开 / 保持折叠」对应 `settings.expandInterimDuringStream`。
+- **组内思考回到真实时序**（同版修订）：0.5.43 把思考统一挪到了组体底部，一圈 39 段思考会全堆在
+  83 张工具卡下面，看不出「先想了什么再跑什么」。现在逐条 step 先放思考、再放它的工具调用，
+  与桌面端 `buildTurnDisplay` 入列顺序一致；组头摘要压成单行（去掉与摘要重复的「· N 次调用」，
+  那截会掉到第二行）。
 - 单测 326 → 335（`buildChatRows(groupProcess = false)` 全平铺、`ProcessActivityTest` 8 条：
   参数摘要的字段优先级 / 多行压一行 / 超长截断 / 坏 JSON / 挂载预算）。
 

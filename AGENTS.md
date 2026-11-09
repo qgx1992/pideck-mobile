@@ -489,9 +489,11 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   两个开关在 `data/Prefs.kt`（`processGroupDisplay` / `expandInterimStream`，默认都开），
   聊天页通过 `Prefs.processGroupFlow` / `expandInterimFlow` 的 `collectAsState()` 跟着设置页变；
   `buildChatRows(items, live, groupProcess = false)` 就是「全部平铺」（每条内容走 `AssistantBlock`）。
-  手机与桌面端仍有差异，**别自己去补**：桌面端把思考插在真实时序里（手机按用户要求置底）、
-  桌面端同一消息的多条工具合成一张 `ToolGroupCard`（手机一条一张）、桌面端还有扩展输出 /
-  重试 / 中间回复的独立节点（手机没有这些数据）。
+  **组内顺序必须是真实时序**：逐条 step 先放思考、再放这条消息的工具调用（0.5.45 定案，
+  跟桌面端 `buildTurnDisplay` 一致）。0.5.43 曾把思考统一挪到组体底部，用户 0.5.45 拿截图纠正：
+  39 段思考全堆在工具卡下面，分不清「这条命令是想了什么才跑的」。
+  手机与桌面端仍有差异，**别自己去补**：桌面端同一消息的多条工具合成一张 `ToolGroupCard`
+  （手机一条一张）、桌面端还有扩展输出 / 重试 / 中间回复的独立节点（手机没有这些数据）。
 
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），

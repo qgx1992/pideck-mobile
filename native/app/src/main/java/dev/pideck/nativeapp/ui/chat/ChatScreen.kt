@@ -1196,8 +1196,11 @@ private fun AssistantBlock(
 private data class ThinkingPiece(val key: String, val text: String, val streaming: Boolean)
 
 /**
- * 组内一条成员。渲染顺序与桌面端不同：桌面端按真实时序（思考插在工具之间），
- * 手机上按用户 0.5.43 的要求把思考统一挪到组体底部，所以成员表是「全部工具 → 全部思考」。
+ * 组内一条成员。**按真实时序排**：每条 assistant 消息里先有思考、再有它触发的工具调用
+ * （对齐桌面端 `buildTurnDisplay` —— 思考组与工具组都是按 run.items 的顺序入列表的）。
+ *
+ * 0.5.43 曾把思考统一挪到组体底部，0.5.45 按用户截图改回来：39 段思考全堆在 83 张工具卡下面，
+ * 看不出「这一条命令是在想完之后跑的」。
  */
 private sealed interface ProcessMember {
     data class Tool(val tool: ToolView) : ProcessMember
@@ -1215,13 +1218,22 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
     val open = if (manualSet) manualOpen else autoOpen
 
     val tools = row.steps.flatMap { it.tools }
-    val thinkings = row.steps.mapNotNull { step ->
-        step.thinking?.takeIf { it.isNotBlank() }?.let { text -> ThinkingPiece(step.key, text, step.streaming) }
-    }
+    val thinkingTotal = row.steps.count { it.thinking?.isNotBlank() == true }
     val members: List<ProcessMember> = buildList {
-        tools.forEach { add(ProcessMember.Tool(it)) }
-        thinkings.forEachIndexed { index, piece ->
-            add(ProcessMember.Thinking(piece, index + 1, thinkings.size))
+        var thinkingIndex = 0
+        for (step in row.steps) {
+            val text = step.thinking?.takeIf { it.isNotBlank() }
+            if (text != null) {
+                thinkingIndex += 1
+                add(
+                    ProcessMember.Thinking(
+                        piece = ThinkingPiece(step.key, text, step.streaming),
+                        index = thinkingIndex,
+                        total = thinkingTotal,
+                    ),
+                )
+            }
+            step.tools.forEach { add(ProcessMember.Tool(it)) }
         }
     }
     // 挂载预算：桌面端组内 >32 条只挂后 32，超出给「显示更早的 N 条步骤」
@@ -1257,6 +1269,10 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
                 text = row.summary,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // 摘要里已经有各类次数，不再另起一段「· 83 次调用」（那截会掉到第二行）
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = runningDetail != null),
             )
             if (runningDetail != null) {
                 Text(
@@ -1274,13 +1290,6 @@ private fun ProcessGroupBlock(row: ChatRow.Process, autoOpen: Boolean) {
                     modifier = Modifier.weight(1f),
                 )
             } else {
-                if (row.toolCount > 0) {
-                    Text(
-                        text = " · ${row.toolCount} 次调用",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
                 spanText(row.durationMs)?.let { span ->
                     Text(
                         text = " · $span",
