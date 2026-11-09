@@ -131,6 +131,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -695,19 +696,35 @@ fun ChatScreen(
                 )
 
                 rows.isEmpty() -> Column(
-                    modifier = Modifier.align(Alignment.Center),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 28.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    // 空态要分清四件事：真没有消息 / 还在读 / 拉取失败 / 服务端说拿不到。
+                    // 以前不管哪种都写「这个会话还没有消息」—— 断网时用户只会以为会话被清空了。
+                    val failure = viewModel.error ?: viewModel.unavailable
                     Text(
-                        text = viewModel.unavailable ?: "这个会话还没有消息",
+                        text = when {
+                            failure != null -> failure
+                            viewModel.loading -> "正在读取消息…"
+                            else -> "这个会话还没有消息"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (failure != null) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        textAlign = TextAlign.Center,
                     )
-                    Text(
-                        text = "在下面输入框里发第一条",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
+                    if (failure == null) {
+                        Text(
+                            text = "在下面输入框里发第一条",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
                 }
 
                 else -> LazyColumn(

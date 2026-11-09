@@ -6,7 +6,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.pideck.nativeapp.data.Prefs
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 项目分组的折叠状态，进程级共享 + 落盘。
@@ -39,8 +41,14 @@ object GroupCollapse {
         this.scope = scope
         scope.launch {
             runCatching { Prefs.awaitLoaded() }
-            if (touched) return@launch
-            collapsed = if (Prefs.collapseRestore) Prefs.collapsedGroups else emptySet()
+            val restored = if (Prefs.collapseRestore) Prefs.collapsedGroups else emptySet()
+            // 传进来的 scope 是 Dispatchers.IO（`PiDeckApp.onCreate` 的 prefsScope）：
+            // 读盘留在 IO，**写 Compose 状态必须回主线程**。快照状态本身线程安全，
+            // 但主线程不会因为 IO 线程的这次写入被唤醒重绘，表现是「上次展开的项目又合上了」，
+            // 手动滚一下才刷新。
+            withContext(Dispatchers.Main.immediate) {
+                if (!touched) collapsed = restored
+            }
         }
     }
 

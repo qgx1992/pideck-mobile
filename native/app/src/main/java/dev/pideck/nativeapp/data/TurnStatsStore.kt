@@ -65,7 +65,15 @@ object TurnStatsStore {
         }
     }
 
-    private fun encode(key: String, stats: TurnStats): String? {
+    /**
+     * 落盘格式：8 列，`key \t 首字 \t 全程 \t tokens \t 生成速度 \t 端到端速度 \t 会话匀速 \t 缓存命中`。
+     *
+     * **读写两头的列数必须一致** —— 0.5.36 加 `averageTps` / `cacheHit` 时只改了 [decode]，
+     * [encode] 还写着 6 列，而 decode 的 `parts.size != 8` 会直接吞掉每一行，
+     * 结果是「重启后统计行全部消失」，而且没有任何报错（踩过，0.5.41 修）。
+     * 现在 encode 写满 8 列，decode 兼容 6 列旧记录（缺的两项留空）。
+     */
+    internal fun encode(key: String, stats: TurnStats): String? {
         if (stats.isEmpty) return null
         fun num(value: Number?): String = value?.toString() ?: ""
         return listOf(
@@ -75,15 +83,18 @@ object TurnStatsStore {
             num(stats.outputTokens),
             num(stats.tps),
             num(stats.endToEndTps),
+            num(stats.averageTps),
+            num(stats.cacheHit),
         ).joinToString("\t")
     }
 
-    private fun decode(line: String): Pair<String, TurnStats>? {
+    /** @return `key to stats`；列数不对（< 6）或整行没有可用数字时返回 null。 */
+    internal fun decode(line: String): Pair<String, TurnStats>? {
         val parts = line.split('\t')
-        if (parts.size != 8) return null
-        fun long(i: Int): Long? = parts[i].toLongOrNull()
-        fun int(i: Int): Int? = parts[i].toIntOrNull()
-        fun double(i: Int): Double? = parts[i].toDoubleOrNull()
+        if (parts.size < 6) return null
+        fun long(i: Int): Long? = parts.getOrNull(i)?.toLongOrNull()
+        fun int(i: Int): Int? = parts.getOrNull(i)?.toIntOrNull()
+        fun double(i: Int): Double? = parts.getOrNull(i)?.toDoubleOrNull()
         val stats = TurnStats(
             ttftMs = long(1),
             totalMs = long(2),

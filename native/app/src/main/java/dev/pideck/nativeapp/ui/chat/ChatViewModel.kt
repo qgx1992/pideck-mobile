@@ -79,6 +79,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
@@ -199,6 +201,21 @@ class ChatViewModel @Inject constructor(
 
         /** 宿主 perf 的 `perfAt` 与消息 `endedAt` 允许的偏差（同一瞬间，给时钟/落盘误差留量）。 */
         const val HOST_PERF_MATCH_MS = 120_000L
+
+        /**
+         * 空闲看护的检查节拍（每 15 秒量一次距上一帧多久）。
+         */
+        const val STREAM_IDLE_CHECK_MS = 15_000L
+
+        /**
+         * 流式空闲超时：这么久**一个帧都没有**就认为这一轮断了。
+         * 宿主跑工具时会持续发帧（含 ping），真的沉默 3 分钟就是连接没了；
+         * 以前没有任何看护，`sending` 会永远是 true —— 输入框一直显示「停止」、发送键按不动。
+         */
+        const val STREAM_IDLE_TIMEOUT_MS = 3 * 60_000L
+
+        /** 从「等设备就绪」到「拿不到设备也要放行」的兜底（DataStore 首次加载、设备已被删）。 */
+        const val DEVICE_READY_TIMEOUT_MS = 5_000L
     }
 
     var sending by mutableStateOf(false)
@@ -236,6 +253,15 @@ class ChatViewModel @Inject constructor(
     /** 最近一次读到的最大消息序号：入队时记下来，落盘后只有比它大的同文消息才算到达。 */
     private var lastMessageSeq: Long = 0L
 
+    /** [refreshHistory] 的并发守卫：只有最新一次请求的结果允许落地。 */
+    private var historyRefreshSeq: Int = 0
+
+    /** 最近一次收到流帧的时刻（空闲看护用）。 */
+    private var lastStreamFrameAt: Long = 0L
+
+    /** 本轮是被空闲看护掐掉的（不是用户点的停止），用于区分要不要报错。 */
+    private var streamTimedOut: Boolean = false
+
     /** 并行问询面板的状态；null = 面板关着。 */
     var parallelAsk by mutableStateOf<ParallelAsk?>(null)
         private set
@@ -251,9 +277,14 @@ class ChatViewModel @Inject constructor(
     init {
         restoreBusySendMode()
         viewModelScope.launch {
+            // 必须带超时：设备已被删 / DataStore 还在加载时，`first {}` 会**永久**挂起，
+            // 而 runCatching 兜不住「挂起」—— 后面 deviceReady.complete() 就永远执行不到，
+            // 所有 await 设备的地方一起冻住，界面只剩一个空白会话页。
             val found = runCatching {
-                repository.devices.first { list -> list.any { it.id == deviceId } }
-                    .firstOrNull { it.id == deviceId }
+                withTimeoutOrNull(DEVICE_READY_TIMEOUT_MS) {
+                    repository.devices.first { list -> list.any { it.id == deviceId } }
+                        .firstOrNull { it.id == deviceId }
+                }
             }.getOrNull()
             if (found != null) {
                 device = found
@@ -1273,15 +1304,28 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val session = StateCache.session(deviceId, sessionId)
-                val todo = runCatching { api.todo(device, token, sessionId) }.getOrNull()
-                val changes = runCatching {
+                // 五个面板各自独立失败：**要记下来**。
+                // 以前全是 `runCatching{}.getOrNull()`，断网/超时/401 全被吞成 null，
+                // 界面显示「没有待办 / 没有改动 / 空文件树」—— 用户只会以为数据丢了。
+                val failures = linkedSetOf<String>()
+                suspend fun <T> attempt(label: String, block: suspend () -> T): T? =
+                    try {
+                        block()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        failures += "$label：${describeConnectionError(e)}"
+                        null
+                    }
+                val todo = attempt("待办") { api.todo(device, token, sessionId) }
+                val changes = attempt("改动") {
                     api.changes(device, token, projectId, session?.projectPath)
-                }.getOrNull()
-                val files = runCatching {
+                }
+                val files = attempt("文件") {
                     api.files(device, token, projectId, workspaceDir)
-                }.getOrDefault(emptyList())
-                val agents = runCatching { api.subagents(device, token, sessionId) }
-                    .getOrDefault(emptyList())
+                } ?: emptyList()
+                val agents = attempt("子任务") { api.subagents(device, token, sessionId) }
+                    ?: emptyList()
                 // 提交历史是锦上添花：拿不到（不是仓库 / 没装 git）就空着，不打断上面三页
                 val commits = if (changes?.repo == true) {
                     runCatching { api.gitLog(device, token, projectId, limit = 15) }
@@ -1294,6 +1338,11 @@ class ChatViewModel @Inject constructor(
                 workspaceChanges = changes
                 workspaceFiles = files
                 subagents = agents
+                workspaceError = if (failures.isEmpty()) {
+                    null
+                } else {
+                    "部分面板没读到（其余照常显示）：" + failures.joinToString("；")
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1731,11 +1780,17 @@ class ChatViewModel @Inject constructor(
 
     fun refreshHistory() {
         val target = device ?: return
+        // 这个函数有 6 个触发点（init / send 收尾 / 600ms 补拉 / SSE 收尾 / onForeground / compact 后），
+        // 各自新开协程、彼此没有顺序。没有这个序号时，先发后到的旧响应会把新页盖回去
+        // （表现：刚发出的消息闪一下又消失），与 loadOlder() 交错时同一条消息还可能进两段，
+        // 撞上 LazyColumn 的 key 直接抛「Key was already used」。
+        val seq = ++historyRefreshSeq
         viewModelScope.launch {
-            loading = items.isEmpty()
-            error = null
+            if (items.isEmpty()) loading = true
+            if (seq == historyRefreshSeq && items.isEmpty()) error = null
             try {
                 val page = api.messagesPage(target, token, sessionId, pageSize = 40)
+                if (seq != historyRefreshSeq) return@launch
                 unavailable = page.unavailable
                 items = page.messages.toTimelineItems()
                 markLastTurnResult()
@@ -1747,9 +1802,9 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                error = describeConnectionError(e)
+                if (seq == historyRefreshSeq) error = describeConnectionError(e)
             } finally {
-                loading = false
+                if (seq == historyRefreshSeq) loading = false
             }
         }
     }
@@ -1870,19 +1925,42 @@ class ChatViewModel @Inject constructor(
             try {
                 // 请求一 collect 就立刻发出；先打点，首字从这里起算（≈ 宿主的 startedAt）。
                 markTurnRequestSent()
-                api.chat(target, token, payload).collect { frame ->
-                    val snapshot = when {
-                        frame.data.trim() == "[DONE]" -> merger.finish()
-                        else -> {
-                            val parsed = runCatching {
-                                PideckJson.parseToJsonElement(frame.data) as? JsonObject
-                            }.getOrNull()
-                            if (parsed != null) merger.applyFrame(parsed) else merger.snapshot()
+                lastStreamFrameAt = System.currentTimeMillis()
+                streamTimedOut = false
+                coroutineScope {
+                    val stream = launch {
+                        api.chat(target, token, payload).collect { frame ->
+                            lastStreamFrameAt = System.currentTimeMillis()
+                            val snapshot = when {
+                                frame.data.trim() == "[DONE]" -> merger.finish()
+                                else -> {
+                                    val parsed = runCatching {
+                                        PideckJson.parseToJsonElement(frame.data) as? JsonObject
+                                    }.getOrNull()
+                                    if (parsed != null) merger.applyFrame(parsed) else merger.snapshot()
+                                }
+                            }
+                            live = snapshot
+                            if (snapshot != null) markTurnFirstContent(snapshot)
+                            if (snapshot?.errorText != null) error = snapshot.errorText
                         }
                     }
-                    live = snapshot
-                    if (snapshot != null) markTurnFirstContent(snapshot)
-                    if (snapshot?.errorText != null) error = snapshot.errorText
+                    // 看护：长时间一个帧都没有就收摊。只 cancel 这一条收集协程，
+                    // 不 cancel 外层 try/finally —— 收尾（补拉历史、结算统计）必须照常跑。
+                    val guard = launch {
+                        while (isActive) {
+                            delay(STREAM_IDLE_CHECK_MS)
+                            if (System.currentTimeMillis() - lastStreamFrameAt > STREAM_IDLE_TIMEOUT_MS) {
+                                streamTimedOut = true
+                                error = "连接停在了半路：宿主 ${STREAM_IDLE_TIMEOUT_MS / 60_000} 分钟没有回应，" +
+                                    "已停止接收这一轮"
+                                stream.cancel()
+                                break
+                            }
+                        }
+                    }
+                    stream.join()
+                    guard.cancel()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -1893,12 +1971,17 @@ class ChatViewModel @Inject constructor(
                 live = null
                 stopHostStatsWatch()
                 if (turnEndedAt == 0L) turnEndedAt = System.currentTimeMillis()
-                refreshHistory()
-                // 落盘比收尾帧略晚：第一次重拉可能还没这条 assistant 消息，
-                // 补一次把统计行的 tokens 补上（已经结算过就什么都不做）。
-                if (turnStartedAt > 0L) {
-                    delay(600)
-                    if (turnStartedAt > 0L) refreshHistory()
+                // 收尾必须 NonCancellable：点停止 / 页面销毁会把整个协程 cancel 掉，
+                // 那时 refreshHistory() 之后那句 delay(600) 会立刻抛 CancellationException，
+                // 于是「补拉落盘消息」这条最需要跑的路永远跑不到（统计行停在 — 上）。
+                withContext(NonCancellable) {
+                    refreshHistory()
+                    // 落盘比收尾帧略晚：第一次重拉可能还没这条 assistant 消息，
+                    // 补一次把统计行的 tokens 补上（已经结算过就什么都不做）。
+                    if (turnStartedAt > 0L) {
+                        delay(600)
+                        if (turnStartedAt > 0L) refreshHistory()
+                    }
                 }
             }
         }

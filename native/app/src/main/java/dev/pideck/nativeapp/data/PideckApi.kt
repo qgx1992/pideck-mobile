@@ -230,6 +230,19 @@ interface PideckApi {
 
 class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
 
+    /**
+     * 普通 JSON 请求用的 client（读超时 [SHORT_READ_TIMEOUT_SECONDS]）。
+     *
+     * 注入进来的 [client] 读超时是 **0**（`defaultOkHttpClient()`）—— 那是 SSE 必须的，
+     * 否则长时间没有帧会被断开。但拿它打普通接口时，一个半开连接（NAT 超时、Wi-Fi 切换、
+     * 宿主在写响应前挂掉）会**永远**不返回：`startStatePolling` 的协程会就此停摆，
+     * 之后 5 秒轮询再也不跑，界面上的运行态与统计行全部冻住。
+     * 所以普通请求一律走这个派生 client，SSE 才用 [client]。
+     */
+    internal val jsonClient: OkHttpClient = client.newBuilder()
+        .readTimeout(SHORT_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .build()
+
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     override suspend fun state(device: Device, token: String?, etag: String?): StateFetch =
@@ -237,7 +250,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             val request = requestBuilder(device, token, "/api/state")
                 .apply { if (!etag.isNullOrBlank()) header("if-none-match", etag) }
                 .build()
-            client.newCall(request).await().use { response ->
+            jsonClient.newCall(request).await().use { response ->
                 when {
                     response.code == 304 -> StateFetch.NotModified
                     !response.isSuccessful ->
@@ -265,7 +278,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             if (before != null) append("&before=").append(before)
         }
         val path = "/api/sessions/${encode(sessionId)}/messages/page$query"
-        client.newCall(requestBuilder(device, token, path).build()).await().use { response ->
+        jsonClient.newCall(requestBuilder(device, token, path).build()).await().use { response ->
             if (!response.isSuccessful) {
                 throw PideckException("messages ${response.code}", code = response.code)
             }
@@ -381,7 +394,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
 
     override suspend fun rawGet(device: Device, token: String?, path: String): String =
         withContext(Dispatchers.IO) {
-            client.newCall(requestBuilder(device, token, path).build()).await().use { response ->
+            jsonClient.newCall(requestBuilder(device, token, path).build()).await().use { response ->
                 if (!response.isSuccessful) {
                     throw PideckException("GET $path → ${response.code}", code = response.code)
                 }
@@ -562,7 +575,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         sessionId: String,
     ): String = withContext(Dispatchers.IO) {
         val path = "/api/sessions/${encode(sessionId)}/export-html"
-        client.newCall(requestBuilder(device, token, path).build()).await().use { response ->
+        jsonClient.newCall(requestBuilder(device, token, path).build()).await().use { response ->
             if (!response.isSuccessful) {
                 throw PideckException("export ${response.code}", code = response.code)
             }
@@ -714,7 +727,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
     /** 带成功校验的 GET（`rawGet` 不校验状态码，401 会当成一段无效 JSON）。 */
     private suspend fun getText(device: Device, token: String?, path: String): String {
         val request = requestBuilder(device, token, path).get().build()
-        return client.newCall(request).await().use { response ->
+        return jsonClient.newCall(request).await().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw PideckException("GET $path → ${response.code}", code = response.code)
@@ -727,7 +740,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         val request = requestBuilder(device, token, path)
             .post(body.toString().toRequestBody(jsonMedia))
             .build()
-        return client.newCall(request).await().use { response ->
+        return jsonClient.newCall(request).await().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw PideckException("POST $path → ${response.code}", code = response.code)
@@ -781,6 +794,9 @@ internal suspend fun Call.await(): Response = suspendCancellableCoroutine { cont
     })
     cont.invokeOnCancellation { runCatching { cancel() } }
 }
+
+/** 普通 JSON 请求的读超时。SSE / 带心跳的长请求不走它（见 `OkHttpPideckApi.jsonClient`）。 */
+internal const val SHORT_READ_TIMEOUT_SECONDS = 45L
 
 /** 默认 client：SSE 需要「读不超时」，否则长时间无帧会被断开。 */
 fun defaultOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
