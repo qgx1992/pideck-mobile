@@ -6,14 +6,12 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import android.content.Context
 import android.net.Uri
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.pideck.nativeapp.data.Device
 import dev.pideck.nativeapp.data.GitCommit
 import dev.pideck.nativeapp.data.ChangedFile
-import dev.pideck.nativeapp.data.DeviceRepository
+import dev.pideck.nativeapp.data.PlatformActions
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.ImagePrep
 import dev.pideck.nativeapp.data.LineDiff
@@ -110,11 +108,10 @@ import javax.inject.Inject
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
-    private val repository: DeviceRepository,
     private val connections: ConnectionResolver,
     private val api: PideckApi,
     private val stateStore: SessionStateStore,
-    @ApplicationContext private val context: Context,
+    private val platform: PlatformActions,
 ) : ViewModel() {
 
     private val deviceId: String = savedStateHandle["deviceId"] ?: error("缺少 deviceId")
@@ -290,7 +287,7 @@ class ChatViewModel @Inject constructor(
             // 找不到设备也要放行：否则等信号的请求会永远挂着
             deviceReady.complete(Unit)
             // 记下这一落脚点：下次冷启动直接回到这里，不用再从设备列表点进来
-            runCatching { Prefs.rememberSession(context, deviceId, sessionId) }
+            runCatching { platform.rememberSession(deviceId, sessionId) }
             val cached = stateStore.session(deviceId, sessionId)
             title = cached?.title?.ifBlank { null } ?: "会话"
             sessionModel = cached?.model.toSessionModel()
@@ -716,14 +713,7 @@ class ChatViewModel @Inject constructor(
             try {
                 val html = api.exportHtml(target, token, sessionId)
                 if (!htmlLooksValid(html)) throw PideckException("导出失败：服务端没有返回 HTML")
-                val saved = withContext(Dispatchers.IO) {
-                    FileSaver.saveText(
-                        context,
-                        exportFileName(sessionId, title),
-                        "text/html",
-                        html,
-                    )
-                }
+                val saved = platform.saveExport(exportFileName(sessionId, title), "text/html", html)
                 actionNote = "已导出到 $saved"
             } catch (e: CancellationException) {
                 throw e
@@ -1848,7 +1838,7 @@ class ChatViewModel @Inject constructor(
                 imageError = "一条消息最多带 ${ImagePrep.MAX_COUNT} 张图"
                 break
             }
-            val prepared = ImagePrep.fromUri(context, uri)
+            val prepared = platform.imageFromUri(uri)
             if (prepared == null) {
                 imageError = "这张图片读不出来（或者压完还是太大）"
                 continue
@@ -1864,7 +1854,7 @@ class ChatViewModel @Inject constructor(
             imageError = "一条消息最多带 ${ImagePrep.MAX_COUNT} 张图"
             return
         }
-        val prepared = ImagePrep.fromClipboard(context)
+        val prepared = platform.imageFromClipboard()
         if (prepared == null) {
             imageError = "剪贴板里没有图片"
             return
@@ -1892,7 +1882,7 @@ class ChatViewModel @Inject constructor(
         resetTurnClock()
         startHostStatsWatch()
         // 前台起服务是稳的（后台启动会被系统拒），run 一结束服务自己退出。
-        RunWatcher.start(context)
+        platform.watchRuns()
         merger = ReplyMerger()
         live = null
         // 用户消息先上屏：等磁盘落盘再显示会有半秒的「没反应」。
@@ -2085,7 +2075,7 @@ class ChatViewModel @Inject constructor(
     fun rememberBusySendMode(mode: BusySendMode) {
         if (busySendMode == mode) return
         busySendMode = mode
-        viewModelScope.launch { runCatching { Prefs.setBusySendMode(context, mode) } }
+        viewModelScope.launch { runCatching { platform.setBusySendMode(mode) } }
     }
 
     fun sendWhileBusy(text: String, mode: BusySendMode) {

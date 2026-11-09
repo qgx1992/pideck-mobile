@@ -267,6 +267,11 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
     首页 `HomeViewModel` 与会话列表 `SessionsViewModel` 的 `loading` / `error` 已经只是它派生的只读属性；
     要区分「连不上 / 正在拉 / 真的没有内容」时读 `loadState`，别再靠 `items.isEmpty()` 猜。
     动作类失败（改名、删除、开新会话）走各自的 `actionError`，别和整屏拉取混成一个字段。
+  - **Android 手脚**：`data/PlatformActions.kt`（接口）+ `data/AndroidPlatformActions.kt`（实现，
+    纯转发、一行判断都不许有）。聊天页与列表页要起看护 / 记落脚点 / 写档位 / 读图 / 存文件，
+    一律注入它，**不要**再往 ViewModel 的构造参数里加 `@ApplicationContext Context`
+    —— 加了就等于把整页从单测里踢出去（单测的 `android.jar` 每个方法都抛）。
+    新加一个副作用时先想：能不能挂在 `PlatformActions` 上；不能再开新的接缝接口，别塞 `Context`。
   - **ViewModel 行为测试**：基底是 `native/app/src/test/java/dev/pideck/nativeapp/data/FakePideckApi.kt`
     （每个方法抛「未打桩」，测试里 `object : FakePideckApi() { override suspend fun state(…) = … }` 只写
     要用的那几个；接口加方法后它编译不过，不会静默漏）。写法照

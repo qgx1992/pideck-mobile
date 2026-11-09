@@ -20,4 +20,9 @@ object StateCache {
 
     fun runtime(deviceId: String, sessionId: String): RuntimeInfo? =
         get(deviceId)?.runtimes?.firstOrNull { it.sessionId == sessionId }
+
+    /** 单测用：这是个进程级单例，用例之间不清就会互相污染（踩过：上一个用例塞的 runtime 让下一个用例多发一次 abort）。 */
+    internal fun resetForTest() {
+        byDevice.clear()
+    }
 }

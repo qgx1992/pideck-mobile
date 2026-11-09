@@ -1,3 +1,25 @@
+## 0.5.43 — 2026-11-09
+
+**把聊天页与会话列表页的「Android 手脚」也收成接口，两个页面第一次有了行为测试。**
+
+- 新增 `data/PlatformActions.kt`（接口）与 `data/AndroidPlatformActions.kt`（实现，纯转发）：
+  起看护服务、记落脚点、写「运行中发送」档位、记设备最近使用、读相册/剪贴板图片、存导出文件。
+  `ChatViewModel` 与 `SessionsViewModel` 的构造参数里不再有 `@ApplicationContext Context`
+  （也顺手清掉了两个 VM 上一直没人用的 `DeviceRepository`）—— 这正是它们此前一条单测都写不了的原因：
+  单测里 `android.jar` 的每个方法都抛 `RuntimeException`。
+- 行为测试两套（`ui/chat/ChatViewModelTest` 5 条、`ui/sessions/SessionsViewModelTest` 5 条）：
+  - 聊天页：初始化拉历史并记住落脚点 / 历史失败要报错而不是空对话 /
+    **停止走 `abort`**（防退回 `runtime/stop` 那个「卸运行时、下次要等几十秒」的老坑）/
+    没有运行时就不发命令 / 「运行中发送」档位会落盘；
+  - 会话列表：刷新后进 `Ready` 且按项目分组、组内只放顶层会话 / 有会话在跑才起看护 /
+    失败落 `Failed` / 搜索只留命中项。
+- 修掉会话列表页一个真问题：设备被删（或从未配对成功）时 `refresh()` 直接 `return`，
+  页面永远停在 `Idle`，用户看到「还没有连上，点刷新重试」而刷新又什么都不做；
+  现在落 `Failed("设备已不存在，回设备页重新添加")`，与首页一致。
+- 顺手给 `StateCache` / `SessionActivity` 加了单测用的 `resetForTest()`：它们是进程级单例，
+  不清就会串味（踩过：上一个用例塞的 runtime 让下一个用例多发一次 `abort`）。
+- 单测 316 → 326。测试基座 `FakePlatformActions` 只记调用、不碰 Android。
+
 ## 0.5.42 — 2026-11-09
 
 **架构收敛（C 批）：同一件事只有一份实现，界面状态只有一份来源。**

@@ -1,6 +1,5 @@
 package dev.pideck.nativeapp.ui.sessions
 
-import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -9,11 +8,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.pideck.nativeapp.data.Device
-import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.data.ConnectionResolver
+import dev.pideck.nativeapp.data.PlatformActions
 import dev.pideck.nativeapp.data.SessionStateStore
 import dev.pideck.nativeapp.ui.common.LoadState
 import dev.pideck.nativeapp.ui.common.failureOf
@@ -25,7 +24,6 @@ import dev.pideck.nativeapp.watch.RunWatcher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
 data class SessionGroup(
@@ -80,10 +78,9 @@ internal fun projectGroupsOf(
 class SessionsViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val connections: ConnectionResolver,
-    private val repository: DeviceRepository,
     private val api: PideckApi,
     private val stateStore: SessionStateStore,
-    @ApplicationContext private val context: Context,
+    private val platform: PlatformActions,
 ) : ViewModel() {
 
     private val deviceId: String = savedStateHandle["deviceId"] ?: error("缺少 deviceId")
@@ -322,7 +319,12 @@ class SessionsViewModel @Inject constructor(
     }
 
     fun refresh() {
-        val target = device ?: return
+        // 设备被删 / 没配对过：必须落成失败态，否则界面停在 Idle，
+        // 用户看到的是「还没有连上，点刷新重试」而刷新又什么都不做（0.5.43）。
+        val target = device ?: run {
+            loadState = failureOf("设备已不存在，回设备页重新添加")
+            return
+        }
         if (loading) return
         viewModelScope.launch {
             loadState = LoadState.Loading
@@ -333,11 +335,11 @@ class SessionsViewModel @Inject constructor(
                         etag = fetched.etag
                         stateStore.put(deviceId, fetched.state)
                         // 有会话在跑就挂上看护（跑完了一条通知），没跑就等下次再说。
-                        if (fetched.state.runtimes.any { it.isRunning }) RunWatcher.start(context)
+                        if (fetched.state.runtimes.any { it.isRunning }) platform.watchRuns()
                     }
                     StateFetch.NotModified -> Unit
                 }
-                repository.touch(target.id)
+                platform.touchDevice(target.id)
                 loadState = LoadState.Ready
             } catch (e: Exception) {
                 loadState = failureOf(e)

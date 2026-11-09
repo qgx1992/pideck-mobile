@@ -4,9 +4,11 @@ import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import dev.pideck.nativeapp.data.AndroidPlatformActions
 import dev.pideck.nativeapp.data.DeviceDirectory
 import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.OkHttpPideckApi
+import dev.pideck.nativeapp.data.PlatformActions
 import dev.pideck.nativeapp.data.PideckApi
 import javax.inject.Singleton
 
@@ -32,4 +34,8 @@ abstract class AppBindings {
     @Binds
     @Singleton
     abstract fun deviceDirectory(impl: DeviceRepository): DeviceDirectory
+
+    @Binds
+    @Singleton
+    abstract fun platformActions(impl: AndroidPlatformActions): PlatformActions
 }
