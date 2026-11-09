@@ -1,3 +1,25 @@
+## 0.5.42 — 2026-11-09
+
+**架构收敛（C 批）：同一件事只有一份实现，界面状态只有一份来源。**
+
+- **取设备这条路径收成一份**：新增 `data/Connection.kt` 的 `ConnectionResolver`
+  （`DeviceDirectory` 最小接口 + `Connection(device, token)`）。四个 ViewModel 以前各写一遍
+  「`devices.first { … }` → `tokenOf()` → 失败静默」，于是同一个坑（设备被删后 `first {}`
+  **永久挂起**、`runCatching` 兜不住挂起）在不同页面各犯一次；现在统一 5 秒上限，
+  找不到设备就当它不存在，调用方回设备页。
+- **写状态收成一份**：新增 `data/SessionStateStore.kt`，`/api/state` 与 `/api/sessions/runtimes`
+  落本地只有一个入口 —— 写 `StateCache` 与同步 `SessionActivity` 永远一起发生。
+  之前四个页面各调各的、还有几处只写了缓存忘了同步运行态，表现是会话行的状态灯「有时亮有时不亮」。
+- **列表页状态收成一份**：新增 `ui/common/LoadState.kt`（`Idle` / `Loading` / `Ready` / `Failed`），
+  首页与会话列表页的 `loading: Boolean` + `error: String?` 换成它派生的只读属性；
+  错误文案来自 `failureOf(e)`（内部走 `describeConnectionError`，401 仍然指向重新配对）。
+  同时把会话列表页首帧那个「永远转圈」修掉了，并区分「连不上 / 正在拉 / 真的没有会话」。
+- **DI 可替换**：新增 `di/AppBindings.kt`，`PideckApi` 与 `DeviceDirectory` 改成
+  `@Binds` 绑接口（真实实现仍由 `AppModule` 提供）。要给 ViewModel 写行为测试时，
+  用 `@TestInstallIn` 换掉这个 Module 即可，不必再搭 mock server。
+- 单测 300 → 310（`data/ConnectionResolverTest` 5 条：正常 / 无令牌 / Keystore 抛错 /
+  设备不存在 / 流永不放行；`ui/common/LoadStateTest` 5 条）。
+
 ## 0.5.41 — 2026-11-09
 
 **一次架构清理：仓库只留原生客户端，顺手修掉 10 个会咬人的老问题。**
