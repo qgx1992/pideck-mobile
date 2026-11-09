@@ -1,14 +1,17 @@
 # PiDeck 原生客户端（Kotlin / Compose）
 
-这是「全原生」方案（`docs/native-android-evaluation.md` 里的 C 方案）的实现工程，
-与仓库根的 Capacitor 壳（`app/`）并行存在，`applicationId` 是 `top.caoayu.pideck.native`，
-所以两个包可以同时装在一台手机上做对照。
+**这个目录就是整个仓库的交付物**（0.5.0 起）。`docs/native-android-evaluation.md` 里记着当初
+为什么从 WebView 壳迁到全原生；0.4.x 的 Capacitor 壳（`app/`）与更早的 TypeScript 协议核心（`src/`、
+`tests/`）已在 0.5.41 从 master 删除，完整内容留在分支 `archive/webview-shell`。
 
-## 为什么单独一个 Gradle 工程
+版本 0.5.40 / `versionCode 540`，包名 `top.caoayu.pideck`，Kotlin 2.0 + Jetpack Compose。
 
-- 不干扰 `app/android` 的 Capacitor 构建链（那边是 Java + AGP 8.11.1 + `variables.gradle`）；
-- 原生侧自己锁版本（Kotlin 2.0.21 / AGP 8.7.3 / Compose BOM 2024.12.01 / Hilt 2.52），互不牵连；
-- 迁移期结束后整个目录就是交付物，不会有「壳里残留原生代码」的中间态。
+## 工程结构
+
+- 自己一套 Gradle 工程，版本自己锁（Kotlin 2.0.21 / AGP 8.7.3 / Compose BOM 2024.12.01 / Hilt 2.52）；
+- 分层：`data/`（模型 + HTTP/SSE + 解析）、`ui/`（chat / home / sessions / devices / settings / pairing）、
+  `watch/`（前台服务 + 通知）、`di/`（Hilt）；
+- 测试全在 `app/src/test/`，289 条纯 JVM 单测（解析、分帧、分组、行索引、统计口径），无 Compose 测试。
 
 ## 构建
 
@@ -21,32 +24,28 @@ cd native
 需要 JDK 21 + Android SDK（`local.properties` 里写 `sdk.dir`，该文件不入库）。
 仓库已 gitignore `native/**/build/`、`native/.gradle/`、`native/local.properties`。
 
-## 已实现（第一梯队）
+## 已经能做什么
+
+完整能力表见仓库根 `README.md` 的「它现在能做什么」，这里只列模块入口：
 
 | 模块 | 文件 | 说明 |
 |---|---|---|
-| 协议模型 | `data/Models.kt` | 对齐上游 `webTypes.ts`；全部 `ignoreUnknownKeys` |
-| HTTP + SSE | `data/PideckApi.kt` | OkHttp 4.12 + `okhttp-sse`，`/api/state`（带 ETag 304）、`messages/page`、`/api/sessions/:id/stream`、`/api/chat` |
-| 配对解析 | `data/PairingLink.kt` | 认 http 链接 / `#/?token=` / `pideck://pair` / 裸 `host:port` |
-| 设备与令牌 | `data/DeviceRepository.kt` | 设备清单进 DataStore，**令牌进 EncryptedSharedPreferences**（Keystore） |
-| 设备页 | `ui/devices/*` | 添加=先真连一次 `/api/state` 再落盘；删除；空态引导 |
-| 会话列表 | `ui/sessions/*` | 项目分组、运行中绿点、相对时间、下拉刷新入口 |
-| 主题 | `ui/theme/Theme.kt` | 与桌面端同一套基色的深/浅色 |
+| 协议模型 | `app/src/main/java/dev/pideck/nativeapp/data/Models.kt` | 对齐桌面端 `webTypes.ts`；全部 `ignoreUnknownKeys` |
+| HTTP + SSE | `app/src/main/java/dev/pideck/nativeapp/data/PideckApi.kt` | OkHttp 4.12 + `okhttp-sse`：`/api/state`（ETag 304）、`messages/page`、`/api/chat`、`/api/sessions/:id/stream` |
+| 配对解析 | `app/src/main/java/dev/pideck/nativeapp/data/PairingLink.kt` | http 链接 / `#/?token=` / `pideck://pair` / 裸 `host:port` |
+| 设备与令牌 | `app/src/main/java/dev/pideck/nativeapp/data/DeviceRepository.kt` | 设备清单进 DataStore，令牌进 EncryptedSharedPreferences（Keystore，带 AEAD 失效自愈） |
+| 聊天页 | `app/src/main/java/dev/pideck/nativeapp/ui/chat/` | 时间线（Markdown / GFM 表格 / 代码高亮 / 思考块 / 过程组 / 工具卡 / 图片）、Composer、回合统计行、历史跳转 |
+| 侧栏 | `app/src/main/java/dev/pideck/nativeapp/ui/chat/SessionDrawer.kt` | 三枚可拖动的分段（活动 / 聊天 / 项目） |
+| 设置 | `app/src/main/java/dev/pideck/nativeapp/ui/settings/` | 技能与扩展开关、诊断（崩溃栈）、外观、通知 |
+| 后台 | `app/src/main/java/dev/pideck/nativeapp/watch/RunWatchService.kt` | 多设备 `dataSync` 前台服务 + 跑完通知（点通知直达会话） |
 
-## 待办（按梯队）
+## 一些约定
 
-1. 聊天页：时间线（Markdown / 代码高亮 / 思考块 / 工具卡 / 虚拟滚动）+ Composer + 回合统计
-2. 扫码配对（CameraX + zxing）
-3. 工作区抽屉（文件 / git / todo / 子代理）、设置 / 技能扩展 / 用量
-4. 前台服务通知（`dataSync` 前台服务 + SSE，替代壳里的 `RunWatchService`）
-5. Ktor mock harness（`/api/state`、`/api/sessions/:id/stream` 假桌面端）与 UI 回归
+**不要**在客户端里造第二套协议逻辑：字段名与桌面端一致，上游新增字段靠 `ignoreUnknownKeys` 兜住，
+需要展示时再补模型。桌面端升级后对账方法：把 `resources/app.asar` 用 `npx @electron/asar extract` 解开，
+比路由字符串集合、`/api/state` 与流帧的 `data-*` 集合（基线版本记在 `data/HostCompat.kt` 的 `BASELINE`）。
 
-## 与 WebView 壳的关系
-
-迁移期两边都会存在。**不要**把桌面端 UI 再往这里搬第二遍的协议逻辑——原生侧只实现 API 客户端，
-字段名与上游一致；上游新增字段时 `ignoreUnknownKeys` 保证不炸，需要展示时再补模型。
-
-注意：`native` 不能作为 Kotlin 包名的一段语义关键字风险，所以源码包名是 `dev.pideck.nativeapp`。
+`native` 不适合当包名的一段，所以源码包名是 `dev.pideck.nativeapp`（与 `applicationId` 无关）。
 
 ## 运行时动作与输入增强（0.5.15 起）
 
@@ -79,8 +78,8 @@ cd native
 | debug | `top.caoayu.pideck.native` | `.native` 后缀，与手机里的调试版同 id，可覆盖调试版；也能与正式包共存 |
 
 源码 namespace 仍是 `dev.pideck.nativeapp`（`applicationId` 与它无关，改名只动 `app/build.gradle.kts`）。
-版本号从 0.5.0 起按 `major*100 + minor*10 + patch`（0.5.0 → 500），必须始终高于壳最后发过的版本号，
-否则 Android 会以「版本回退」拒绝覆盖安装。
+版本号从 0.5.0 起按 `major*1000 + minor*100 + patch`（0.5.40 → 540、0.5.9 → 509 < 0.5.10 → 510），
+必须始终高于壳最后发过的 412，否则 Android 会以「版本回退」拒绝覆盖安装。规则见仓库根 `AGENTS.md`。
 
 ## 出包
 
@@ -89,14 +88,14 @@ cd native
 ./gradlew :app:assembleDebug
 # apk 在 app/build/outputs/apk/debug/app-debug.apk
 
-# 正式包（复用 ../app/android/keystore.properties 里那份发布签名）
+# 正式包（读仓库根的 ../keys/keystore.properties 与 pideck-release.keystore）
 ./gradlew :app:assembleRelease
 # apk 在 app/build/outputs/apk/release/app-release.apk
 ```
 
-签名为什么要复用壳那份：`app/android/keystore.properties` + `pideck-release.keystore` 是同一个开发者
-的长久身份，丢一次就有无数老版本无法覆盖升级；原生工程再生成一份只是平白多两个必须备份的文件。
-两个应用的 `applicationId` 不同，共用一张证书不会互相顶掉。
+签名材料放在**仓库根的 `keys/`**（`keystore.properties` + `pideck-release.keystore`，都不入库）：
+它是这个应用的长久身份，丢了就再也无法覆盖升级老版本，必须单独备份到密码管理器。
+0.5.41 之前这两个文件借住在 `app/android/` 里，随 0.4.x 归档一起迁出来了。
 
 **签名换了就不能覆盖安装**：0.1.24 及更早是 debug 签名，升到 0.1.25 的 release 包必须先卸载旧版本
 （Android 会报「签名不一致」）。版本号无关，证书不同就是不行。

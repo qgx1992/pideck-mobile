@@ -9,13 +9,14 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
-// 复用 WebView 壳那份发布签名（同一个开发者、同一个备份位置，少一个会丢的东西）。
-// 文件不入库：`../app/android/keystore.properties` 与 `pideck-release.keystore` 都在 .gitignore 里。
-val keystorePropsFile = rootProject.file("../app/android/keystore.properties")
+// 发布签名材料放在仓库根的 `keys/`（0.5.41 之前借住在 `app/android/` 里，那个目录已经随
+// 0.4.x WebView 壳一起删掉了）。两份文件都不入库，见根 `.gitignore`。
+// 丢了这两个文件 → 后续版本无法覆盖安装升级，必须立刻备份到密码管理器。
+val keystorePropsFile = rootProject.file("../keys/keystore.properties")
 val keystoreProps = Properties().apply {
     if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
 }
-val releaseKeystore = rootProject.file("../app/android/" + (keystoreProps.getProperty("storeFile") ?: "pideck-release.keystore"))
+val releaseKeystore = rootProject.file("../keys/" + (keystoreProps.getProperty("storeFile") ?: "pideck-release.keystore"))
 val hasReleaseKeystore = keystorePropsFile.exists() && releaseKeystore.exists()
 
 android {

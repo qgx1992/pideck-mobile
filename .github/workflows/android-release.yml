@@ -11,7 +11,7 @@ name: Android Release
 # 需要的 repository secrets（都是只写，不进日志）：
 #   ANDROID_KEYSTORE_BASE64     pideck-release.keystore 的 base64
 #   ANDROID_KEYSTORE_PROPERTIES keystore.properties 的完整内容
-#   （native/app/build.gradle.kts 从 ../app/android/ 读这两个文件，所以仍写回 app/android/）
+#   （native/app/build.gradle.kts 从仓库根的 ../keys/ 读这两个文件，所以写到 keys/）
 
 on:
   push:
@@ -96,9 +96,10 @@ jobs:
             echo "::error::缺少 ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PROPERTIES secrets"
             exit 1
           fi
-          echo "${KEYSTORE_BASE64}" | base64 -d > app/android/pideck-release.keystore
-          printf '%s\n' "${KEYSTORE_PROPERTIES}" > app/android/keystore.properties
-          chmod 600 app/android/pideck-release.keystore app/android/keystore.properties
+          mkdir -p keys
+          echo "${KEYSTORE_BASE64}" | base64 -d > keys/pideck-release.keystore
+          printf '%s\n' "${KEYSTORE_PROPERTIES}" > keys/keystore.properties
+          chmod 600 keys/pideck-release.keystore keys/keystore.properties
 
       # git 在 Windows 上不记录可执行位（gradlew 存成 100644），checkout 出来没有 +x，
       # 直接 ./gradlew 会 exit 126。
@@ -144,7 +145,7 @@ jobs:
 
       - name: 清理签名材料
         if: always()
-        run: rm -f app/android/pideck-release.keystore app/android/keystore.properties
+        run: rm -f keys/pideck-release.keystore keys/keystore.properties
 
       - uses: actions/upload-artifact@v4
         with:

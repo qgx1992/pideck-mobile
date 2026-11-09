@@ -23,6 +23,5 @@ native/.kotlin/
 native/.idea/
 native/**/*.iml
 
-# 原生工程的签名配置（如有，也不入库）
-native/keystore.properties
-native/*.keystore
+# 发布签名材料（keystore.properties + *.keystore）：不入库，本机放在 keys/
+keys/

@@ -33,13 +33,14 @@ versionCode = major*1000 + minor*100 + patch      # 0.5.28 → 528，0.2.0 → 2
 `CHANGELOG.md` 里**同一个版本号只写一条**：多轮修订并进这条（可以写「0.5.29（含 3 次修订）」），
 不要按轮次各起一条 —— 那也是「每次都出一个新版本」的另一种形态。
 
-需要同时改的三处（漏一处就会出现「包里是 0.1.8、页面写 0.1.9」这类错位）：
+需要同时改的几处（漏一处就会出现「包里是 0.5.41、页面写 0.5.40」这类错位）：
 
 | 文件 | 字段 |
 |---|---|
-| `app/package.json` | `version` |
-| `app/android/app/build.gradle` | `pideckVersionName` / `pideckVersionCode` |
-| `app/README.md`、根 `README.md` | 产物文件名里的版本号 |
+| `native/app/build.gradle.kts` | `versionCode` / `versionName`（唯一真源，CI 也从这里解析） |
+| `CHANGELOG.md` | 顶部新版本那一条 |
+| `README.md`、`native/README.md` | 版本号、单测数量 |
+| `apk/index.html` | `<h1>`、APK 链接、`<div class="meta">` 里的版本与 sha256（`apk/` 不入库，但对外就是它） |
 
 规则：
 
@@ -52,8 +53,10 @@ versionCode = major*1000 + minor*100 + patch      # 0.5.28 → 528，0.2.0 → 2
 
 两者独立，用户会明确指定走哪条：
 
-1. **本地包（局域网测试）**：`cd app && npm run apk:release` → `npm run publish:apk -- --release`
-   → 更新 `apk/index.html` 的版本、链接与说明 → 校验 8080 上的下载与 sha256。
+1. **本地包（局域网测试）**：`cd native && ./gradlew --offline -q :app:testDebugUnitTest`
+   → `./gradlew :app:assembleRelease`（产物 `native/app/build/outputs/apk/release/app-release.apk`）
+   → 拷成 `apk/PiDeck-native-<版本>-release.apk` → 重写 `apk/SHA256SUMS.txt` → 改 `apk/index.html`
+   → 校验 8080 上的页面与包 sha256。
    `apk/` 在 `.gitignore` 里，目录里只保留最新一个 PiDeck 包（旧包发布后删掉并同步 `SHA256SUMS.txt`）。
 2. **GitHub Release**：`git push origin master` → 打 `vX.Y.Z` tag 并推送 → CI 构建签名包并挂到 Release
    → 用 `gh release edit` 补标题与说明（工作流本身不写 body）。
@@ -61,10 +64,14 @@ versionCode = major*1000 + minor*100 + patch      # 0.5.28 → 528，0.2.0 → 2
 > 本机 `git push` 需要显式走系统代理：`git -c http.proxy=http://127.0.0.1:7897 push ...`
 > （代理端口会随 Clash 重启变化，先 `netstat` 确认）。
 >
-> 出包流水线（`.github/workflows/android-release.yml`）跑的是 `npm ci` + `npm test` + `vite build` +
-> `cap sync android` + `assembleRelease`，没有 flutter 步骤（0.3.0 起）。流水线的 runner 是 Node 22，
-> `node --test shell/*.test.ts` 依赖 Node 22.18+ 的默认 type stripping，别把 node 版本降到 22 以下。
-> 流水线里有 typecheck / test，所以**本地先跑绿再打 tag**，否则 tag 白打。
+> 出包流水线（`.github/workflows/android-release.yml`）只构建 `native/`：`setup-java 21` →
+> 补 `platforms;android-35` / `build-tools;35.0.0` → 从 secrets 还原签名到 `keys/` →
+> `./gradlew :app:testDebugUnitTest` → `./gradlew :app:assembleRelease` → `apksigner` + `aapt2` 校验
+> 签名与 versionCode → 上传 Release 附件并删掉 `keys/` 里的签名材料。
+> 版本号从 `native/app/build.gradle.kts` 解析，tag 与 gradle 不一致只告警、以 tag 命名产物。
+> 流水线里有单测，所以**本地先跑绿再打 tag**，否则 tag 白打。
+>
+> `ci.yml` 是 PR/push 的快速门禁（只跑 `native/` 的单测，路径过滤 `native/**`）。
 >
 > CI 的 runner 是 en-US：任何 `toLocaleTimeString()` / `toLocaleDateString()` 之类的本地化输出
 > 都会在 CI 与本地之间分叉（踩过：消息时间是 `3:04:`）。要格式化的时间自己算，别靠 locale。
@@ -88,14 +95,14 @@ versionCode = major*1000 + minor*100 + patch      # 0.5.28 → 528，0.2.0 → 2
 
 ```powershell
 # 注册 + 立刻启动（幂等，可重复跑；-NoStart 只注册不起）
-powershell -NoProfile -ExecutionPolicy Bypass -File app/scripts/install-download-server-task.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-download-server-task.ps1
 
 # 卸载（顺带杀掉还在监听 8080 的进程）
-powershell -NoProfile -ExecutionPolicy Bypass -File app/scripts/install-download-server-task.ps1 -Uninstall
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-download-server-task.ps1 -Uninstall
 ```
 
-- 任务名 `PiDeck Download Server`，实际命令：`pythonw.exe "…\app\scripts\serve-apk.py" --port 8080`
-- 服务本体是 `app/scripts/serve-apk.py`，**不是** `python -m http.server`：后者是单线程，
+- 任务名 `PiDeck Download Server`，实际命令：`pythonw.exe "…\scripts\serve-apk.py" --port 8080`（0.5.41 起脚本从 `app/scripts/` 搬到仓库根的 `scripts/`，任务已用新脚本重新注册过）
+- 服务本体是 `scripts/serve-apk.py`，**不是** `python -m http.server`：后者是单线程，
   手机拉 14MB 包时整站被堵住；且 `pythonw` 下 `sys.stdout/stderr` 是 `None`，
   基类的 `log_message` 一写就抛 `AttributeError`（在发响应头之前炸），必须先把它们接管到日志文件。
 - 日志：`%LOCALAPPDATA%\PiDeck-DownloadServer\server.log`（**不能**放进 `apk/`，那是对外明文目录）。
@@ -125,166 +132,37 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 
 - `apk/` 下**只放能公开的东西**。它是对局域网无鉴权明文开放的（还带目录列表），
   任何凭据 / 客户端配置 / 未脱敏的笔记都不能放在这里（踩过：`apk/proxy/` 里三份代理配置曾对外 200）。
-- 页面里的二维码用 `app/scripts/gen-qr.py` 生成、`app/scripts/verify-qr.mjs --expect <地址>` 校验。
+- 页面里的二维码用 `scripts/gen-qr.py` 生成、`scripts/verify-qr.mjs --expect <地址>` 校验。
 - 下载页正文**只放一行当前版本摘要**，改了什么放进 `<details class="changelog">`（默认折叠），
   历史全部进 `<details class="history">`。踩过：每次都把改动段落往上摞，页面变成一屏读不完的更新日志。
 - 静态服务器没有 deny 规则，要挡住某个文件只能让它不在这棵目录树里。
 
-## 界面栈：vendor 桌面端的 Web 客户端（0.4.0 起）
+## 历史：0.4.x 的 WebView 壳（已归档，别再照它做）
 
-四条路都试过了，结论是「别自己再写一份界面」：
+0.1.x–0.4.x 的客户端是「Capacitor 壳 + vendor 桌面端网页」（`app/vendor/pideck/` + `app/shell/`），
+配套还有更早的 ① 代 TypeScript 协议核心（`src/`、`tests/`）。这两套代码在 0.5.41 全部从 master 删除，
+完整内容留在分支 **`archive/webview-shell`**（`git checkout archive/webview-shell -- app` 可取回）。
 
-| 版本 | 做法 | 为什么否掉 |
-|---|---|---|
-| 0.1.x–0.2.x | 自研原生 + 自研协议 | 协议要维护两份，桌面端每加字段都得两边对表 |
-| 0.3.0 | Flutter add-to-app | 同一套界面维护两遍（`flutter_module/`） |
-| 0.3.1–0.3.11 | 借桌面端网页版（本地转发） | 那份页面是给浏览器写的：系统栏、返回键、文件选择、外链全要原生补，十一个版本大半在修安全区 |
-| 0.3.12 | 回到自研本地 UI（`app/src/**`） | 界面能用，但仍是**第二份实现**（8,995 行），桌面端升级不会传导过来 |
-| **0.4.0** | **vendor 桌面端 Web 客户端**（`app/vendor/pideck/`） | 当前方案 |
-
-现在的分层：
-
-```
-app/vendor/pideck/          桌面端 0.9.9 的 src/renderer/src + src/shared（原样，不改）
-app/shell/                  Capacitor 壳：设备、令牌注入、fetch/EventSource 桥、看护、外链、下载
-app/shell/launcher.html     dist/index.html —— 配对与设备管理页
-app/android/                原生插件：SsePlugin（GET/POST 流式）、RunWatchService、FileSaver、NavigationBar
-```
-
-- **界面只有一处**：`app/vendor/pideck/src/renderer/src/web/**`。改界面 = 改上游 = 下次同步带回，
-  不要在这里打本地补丁（`app/VENDORED.md` 记着 pin 的 tag 与同步步骤）。
-- **壳只做 WebView 做不到的事**：原生 SSE（POST 也能流）、后台跑完发通知、外链交给系统浏览器、
-  blob 下载转原生保存、令牌注入（`Authorization: Bearer`，不拼在网址上）。
-- 桥的接缝在 `app/shell/boot.ts`：写令牌 → `installFetchBridge` → `installEventSource` →
-  `installExternalLinks` → `installDownloadBridge` → 禁 SW → 起看护。顺序有意义：上游
-  `webApi.ts:19` 在**模块顶层**读令牌，晚一步就会被旧值盖回去。
-- `CapacitorHttp.enabled` 必须保持 `false`（`app/capacitor.config.ts`）：开了它 fetch 会被整体缓冲，
-  流式对话直接变成「等半天一次性出来」。
-- service worker 必须禁用：Capacitor 下 `sw.js` 会缓存旧 assets，表现为「更新了还是老页面」。
-- **「要不要走原生 SSE」按路径判定，不要看 `Accept` 头**（`app/shell/fetch-bridge.ts` 的
-  `looksLikeStream`）：`ai` 的 `DefaultChatTransport` 发 `POST /api/chat` 时**不带
-  `Accept: text/event-stream`**，只按头分流会把整条对话交给 `CapacitorHttp` 缓冲，
-  表现是「等半天、答案一次性蹦出来」。现在按 `/api/chat` 与 `*/stream` 路径判定，
-  4 条单测在 `app/shell/fetch-bridge.test.ts`。
-- `POST_NOTIFICATIONS` 是**运行时**权限（Android 13+）：清单里声明不等于拿到，
-  `RunWatchService` 的 `notify()` 会被静默丢弃，表现为「跑完了没提醒」。启动页
-  `app/shell/launcher.ts` 调 `ensureNotificationPermission()`（`app/shell/permissions.ts`），
-  被拒过两次后系统不再弹框，「去设置」走 `NavigationBar.openNotificationSettings`。
-- 扫码取景是「相机预览在 WebView 下面」：`BarcodeScanner.startScan()` 只负责起相机，
-  页面必须自己把背景变透明（`body.barcode-scanner-active`），否则看到的是纯色块。
-  `app/shell/launcher.html` 里的遮罩只能靠取景框自身的 `box-shadow`，整屏底色必须 transparent。
-- **点通知要能直接进那个会话**：原生那端一直是通的（`RunWatchService` 两条通知的 Intent 都带
-  `pideckSessionId` + `pideckDeviceId`），缺的一直是 JS 不去取 —— 结果点通知只把 App 唤醒，停在
-  启动页。现在 `app/shell/launch-session.ts` 统一收口：冷启动由 `boot.ts` 把地址栏指到 `/s/<id>`
-  （上游 `WebChatApp.tsx:214` 会用 `sessionFromPath()` 恢复选中），热启动由 `appStateChange`/`resume`
-  取走 `RunWatchPlugin.consumeLaunchSession()` 后就地 `pushState` + `popstate`。启动页还兼一层：
-  Capacitor 的 `html5mode` 会把无扩展名路径回落到 `index.html`，所以「停在 `/s/<id>` 上被系统重建」
-  加载的是启动页，它转写成待跳转记录再送进 `web.html`。守门测试
-  `app/shell/notification-tap.test.ts`（8 条）盯着两头，删任一端都会红。
-- **看护是多设备的**：`RunWatchService` 按 `deviceId` 维护多份 `Target`（每台一条
-  `/api/events` SSE、一个线程、各自的 `lastStatus` / `knownRequests` / 标题表），JS 侧
-  `startRunWatch(loadDevices(), { page })` 每 15s 轮询每台设备的 `/api/sessions/runtimes`，
-  压成 id 签名，**只有集合变化才重新下发** —— 否则每次轮询都会掐断 SSE，服务端重连要重推
-  57KB state。新增单目标路径已删，`RunWatch.start` 收 `{ targets, page }`。通知 id 必须是
-  `(deviceId + ":" + sessionId).hashCode()`，只用 `sessionId` 会让两台设备的同名会话互相覆盖，
-  点回来还会开错机器。
-- **通知的静音范围只算聊天页**：前台服务记一个 `page`（`chat` / `launcher`，由
-  `app/shell/run-watch.ts` 的 `startRunWatch(device, { page })` 透传），原生判定是
-  `!appVisible() || !"chat".equals(page)`。理由：停在聊天页时用户正盯着对话，弹通知是噪音；
-  而启动页没有任何会话视图，跑完了不提醒就真错过。别再退回「JS 报 `visibilityState`」那套
-  （WebView 的 visible 与 App 是否在前台不是一回事，混用过一次，结果是别的页面停留时照静音）。
-  另外别在 `pagehide` 上停服务：从聊天页退回启动页也是一次换页，停掉之后「在启动页等结果」
-  就彻底没有通知（0.4.9 修的就是这条）。服务跟着进程走，闲着时 `startRunWatch` 自己会停。
-- **启动页的页面画布必须保持透明**：相机预览（`BarcodeScanner.startScan`）铺在 WebView **下面**，
-  `html` / `body` / WebView / 窗口任何一层有底色，取景框里就是一块纯色。踩过两次：一次是
-  `.scan-overlay` 自己带底色，一次是 `safe-area-css.ts` 无条件给 `html` 铺画布色
-  （`--color-bg-app` 在启动页没定义 → 兜底白）。现在画布底色改成显式传参（只有聊天页传），
-  扫码期间 `enterScannerMode()` 再对四层各断言一次透明（原生侧是
-  `NavigationBar.setScannerTransparency`）。守门测试 `app/shell/scanner-transparency.test.ts`。
-- **别信 `env(safe-area-inset-*)`**：Android WebView 在 edge-to-edge 布局下会把它报成 0
-  （页面明明被手势条压住），上游 `WebChatApp.tsx:1299` 的 `pb-[env(safe-area-inset-bottom)]`
-  于是等于没写、输入框被小横条盖住。壳的解法是 `NavigationBar.getInsets()`（原生量 WebView
-  与系统栏的**实际重叠**，dp）→ `app/shell/safe-area.ts` 只把 env() 没算到的差值写进那几条
-  utility 的 padding（`app/shell/safe-area-css.ts` 生成样式表，有单测）。退出 e2e 成功的机型
-  重叠为 0，不会被推走；键盘收起/旋转后 150ms 重算。
-- **`fixed`/`absolute` 覆盖层要单独让位**：右侧栏（`WebWorkspaceDrawer.tsx:28` 的 `aside`）、
-  全屏文件预览（`WebFilePreview.tsx:305`）、底部弹层（`WebBottomSheet.tsx:80`）的坐标原点在
-  整个视口上，主壳的 `pt/pb-[env(...)]` 管不到它们 —— 右侧栏的标题栏（含关闭 X）会整个顶进
-  状态栏里看不见。`app/shell/safe-area-css.ts` 的 `OVERLAY_RULES` 按 class 字符串精确命中这三种
-  面板补内边距；上游改 class 就会静默失效，所以 `app/shell/overlay-selectors.test.ts` 直接读
-  vendor 源码对账，同步上游后测试红一次就能发现。
-- **靠 CSS 变成覆盖层的也要让位**：左侧会话栏 `.chat-list-pane` 在 ≤760px 时被 `web.css:422`
-  改成 `position: fixed; inset: 0 auto 0 0`，同样绕开主壳内边距。`MOBILE_OVERLAY_CLASSES`
-  在 `@media (max-width: 760px)` 里补上下内边距（桌面宽度它只是 flex 子项，补了会双份）。
-- 状态栏图标不会自己跟主题：主题只是 `documentElement.dataset.theme`，图标明暗在系统手里。
-  `app/shell/system-bars.ts` 用 `MutationObserver` 盯 `data-theme`，同步 `StatusBar.setStyle`
-  （`Style.Dark` = 浅色图标）与 `NavigationBar.setColor({ lightIcons })`；启动页固定深色。
-  真机排查：`__pideckDebug.insets()` / `__pideckDebug.safeAreaCss()`。
-
-- 返回键**不能**用 `canGoBack ? history.back() : …`：WebView 里它几乎永远是 true —— 上游给每个覆盖层压一条
-  `__pideckDismiss` 记录（`web/useDismissOnBack.ts:20`），选中会话还会 `pushState("/s/<id>")`
-  （`web/WebChatApp.tsx:228`），于是返回手势变成「浏览器后退」：关掉面板后还在会话之间一格一格退。
-  现在走 `app/shell/back.ts` 的 `BACK_LAYERS`：按「最上面一层」逐层关，关无可关才回启动页；
-  启动页连按两次才退出。层级顺序 = Radix 弹层（安全等级/模型/提示词 popover，合成 pointerdown
-  点外部，失败再补 Escape）→ `role=dialog`（`WebBottomSheet` 家族、搜索/技能面板，合成 Escape）
-  → 上游压了 `__pideckDismiss` 的右侧栏/文件预览（`history.back()`）→ 左侧会话栏
-  （`.mobile-sidebar-backdrop.is-open` 存在时点 `.mobile-sidebar-close`）。
-  只有右侧栏和文件预览会自己订阅返回，**其余层不压历史记录**，所以必须由壳这边按选择器命中；
-  `app/shell/back.test.ts` 对这些选择器逐个读 vendor 源码对账，上游改 class 就红。
-
-## 动效：`app/shell/motion.ts`（0.4.11 起）
-
-上游的动效按鼠标/大屏调，手机上偏「硬」。移动端的手感统一放在 `app/shell/motion.ts`：
-运行向往 `<head>` 末尾追加一张样式表（靠「后出现」压过上游同优先级规则，同名 `@keyframes` 也是后者覆盖）。
-
-- **不要改 `vendor/`** 里的动画：下次同步上游会丢。要调就加在 `MOTION_RULES`。
-- 缓动与三档时长在 `MOTION_VARS`（`enter` / `exit` / `fast 130ms` / `base 200ms` / `slow 280ms`）。
-- 每条规则的 `where` 写明上游对应位置；`shell/motion.test.ts` 会读 vendor 源码对账，
-  上游换 class 或 keyframes 名就失败，不会静默失效。
-- 约束：手机上是长列表 + 贴底追滚，**新消息入场别用大位移**（10px 就会跟追滚叠加成弹一下）；
-  keyframes 只动 `opacity` / `transform`，别碰会触发重排的属性。
-
-## 回合统计行：`app/shell/turn-stats.ts`（0.4.12 起）
-
-上游 Web 端**没有**桌面端那条统计带子（`components/session/ComposerStatsLine.tsx` 只挂在桌面 `ComposerArea`），
-`/api/state` 的 `runtimes` 也只有 `status`。手机上的「耗时 / tok / tok/s」由壳自己算：
-
-- 数据：`GET /api/sessions/:id/messages/page?pageSize=1`，取最后一条 assistant 的
-  `meta = { usage: { outputTokens, inputTokens, cacheReadTokens, cost }, durationMs, startedAt, endedAt }`
-  —— 与桌面端结算同一条回复用的是同一份原始数。
-- 时机：上游 composer 在 `streaming` 时渲染停止按钮（`data-testid="web-composer-stop[-compact]"`），
-  这一跳消失就是本轮结束；**不要**去轮询 `/api/state`（56KB）来判定。
-- 口径：`meta` 里没有首字时刻，所以只报**端到端** `outputTokens ÷ durationMs`（桌面 `endToEndTps` 同口径），
-  不冒充桌面那个扣掉首字等待的流式 tps。文案里写「端到端」。
-- 渲染：作为 `form.composer` 的最后一个子节点注入（不碰 `vendor/`），样式与桌面一样是 11px 三级文字色。
-- 验证：`npm run smoke` 现在会挑一个会话把地址栏指到 `/s/<id>`，并断言这一行出现了真实数字。
-
-## 改动完成后必须跑的验证
-
-```bash
-cd app && npm run verify          # typecheck + node --test shell/*.test.ts + vite build
-cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌面端（需要桌面端开着 Web 服务）
-```
-
-`npm run smoke`（`app/scripts/smoke-ui.mjs`）是唯一能在没有手机时验证「vendored 界面能不能起来」的
-手段：它用 jsdom 执行 `dist/web.html` 的产物、注入设备与令牌、把相对 `/api/*` 补成绝对地址，
-断言出现输入框。没给 `--token` 时从 `%APPDATA%/PiDeck/settings.json` 的 `webServiceToken` 读。
-
-出包前还要确认 Android 侧能编过：`cd app && npm run apk:release`（含 `cap sync` 与
-`assembleRelease`），然后 `npm run publish:apk -- --release`。
-
-`app/shell/*.test.ts` 覆盖的是壳自己的纯逻辑（设备存储、配对输入、SSE 分帧）。界面行为不再有
-客户端侧测试——它属于上游，上游自己有 1,862 个测试文件。
-
+为什么删：它们已经不产出任何交付物（0.4.12 停发），却还在 CI 里跑 job、还在 `AGENTS.md` 里占 147 行
+操作手册，导致「照文档做会得到 0.4.12 的包」这种误导。零碎的踩坑记录（安全区、扫码取景、返回键分层、
+`fixed` 覆盖层让位等）在 git 历史与归档分支里都还在，不要再往本文件搬回来。
 
 ## 原生客户端（0.5.x，2026-11 起接管）
 
-上面「界面栈 / 动效 / 回合统计行」几节描述的是 0.4.x 的 WebView 壳（`app/vendor/` + `app/shell/`），
-**已经不是当前实现**。现在的客户端是纯 Kotlin + Compose，源码在
-`native/app/src/main/java/dev/pideck/nativeapp/`，版本号与出包约定见本文件开头两节（改动仍走
-`native/app/build.gradle.kts` 的 `versionCode`/`versionName`，规则见开头「版本号」一节）。
+现在的客户端是纯 Kotlin + Compose，源码在 `native/app/src/main/java/dev/pideck/nativeapp/`，
+版本号与出包约定见本文件开头两节（改动走 `native/app/build.gradle.kts` 的 `versionCode`/`versionName`）。
 
-两个踩过的坑，改这两处前先看：
+出包与验证（本地）：
+
+```bash
+cd native && ./gradlew --offline -q :app:testDebugUnitTest   # 289 条 JVM 单测
+cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/outputs/apk/release/app-release.apk
+```
+
+`native/app/src/test/` 覆盖的是纯逻辑（解析、分帧、行索引、分组、统计口径等）。没有 Compose 测试、
+没有 `ChatViewModel` 行为测试 —— 改界面与 ViewModel 时要靠真机回归。
+
+踩过的坑，改这几处前先看：
 
 - **顶栏那排胶囊的宽度必须有一个「可伸缩」的**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatScreen.kt`，
   `TopAppBar` 正下方那行 `Row`（模型 / 思考档位胶囊））：模型胶囊外面套一层 `Box(Modifier.weight(1f))`、内部封顶 188dp，
@@ -450,14 +328,17 @@ cd app && npm run smoke           # jsdom 里跑 dist，连本机 8765 的真桌
   两条展示口径：`latestPercent` = **最新一页**里最后一条带 usage 的 assistant（历史接口从新到旧翻页，
   把各页拼成数组后末尾其实是最早那条，所以用 `CacheStatBuilder.addPage()` 逐页喂，见注释）；
   `averagePercent` = 全部 assistant 的**简单平均**（与桌面 `average` 同口径，不按 token 加权）。
-  **不要**放进统计行：那一行是速度（首字 / tok/s），缓存率是成本；也不要放进会话列表 ——
-  不同会话的命中率不可比（新开会话必然低）。
+  **统计行里的「命中」和这里是两个来源，别搞混**：统计行那个取宿主的 `perf.cacheHitPercent`
+  （`runtime/state` 里现成的、最近一次回复的命中率，见 `formatTurnStats`）；弹层里的
+  `latestPercent` / `averagePercent` 是本端按 `meta.usage` 自己算的，能翻历史、不要求运行时活着。
+  所以两处数字偶尔不同是正常的（口径不同：一个按宿主最近一次结算，一个按本端逐条累加）。
+  **不要**把缓存率放进会话列表 —— 不同会话的命中率不可比（新开会话必然低）。
   刷新时机只有「打开上下文弹层 / 点重新读取」，不跟着每轮跑：翻完一个会话最多 10 页请求，
   而命中率一轮才变一次。字段全缺（acp 的 meta 是 null）时显示 `—`，**有输入但没 cacheRead 是真 0%**，
   两者要分开（`cacheHitOf()` 返回 null vs 0.0）。
 - **侧栏「活动」段**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/DrawerActivePane.kt`，
-  0.5.37）：抽屉顶上一排 pill 分「活动 / 聊天」两段，对应桌面端左侧栏那个 `Tabs`
-  （`active` / `chats`，`projects` 还没做）。`DrawerTabState` 是**单例**不是 `rememberSaveable` ——
+  0.5.37）：抽屉顶上一排 pill 分「活动 / 聊天 / 项目」三段，对应桌面端左侧栏那个 `Tabs`
+  （`active` / `chats` / `projects`；桌面端还有插件分组区，手机拿不到）。`DrawerTabState` 是**单例**不是 `rememberSaveable` ——
   抽屉每次开合都是新组合，会话列表页与聊天页又是两个 ViewModel 实例（同 `GroupCollapse` 的理由）。
   **结构照桌面端 `ActiveSessionsTree`，别自己发明**：上半 `liveDrawerSessions(sessions, loadedSessionIds)`
   = 宿主上**装载着运行时**的会话（`/api/state` 的 `runtimes`，`idle` 也算，按 `updatedAt` 倒序）；

@@ -1,7 +1,10 @@
 name: CI
 
-# PR 与 push 的快速门禁：只跑类型检查 + 测试（不构建 Android，几十秒结束）。
+# push / PR 的快速门禁：只对 native/（Kotlin + Compose 原生客户端）跑单测。
 # 出包走 android-release.yml，别把两件事混在一个工作流里。
+#
+# 0.5.41 之前这里跑的是根 src/（① 代 TS 协议核心）与 app/（0.4.x WebView 壳）两个 job，
+# 两者都已归档到分支 archive/webview-shell，不再参与任何构建。
 
 on:
   pull_request:
@@ -9,18 +12,7 @@ on:
     branches:
       - master
     paths:
-      - "src/**"
-      - "tests/**"
-      - "app/src/**"
-      - "app/tests/**"
-      - "app/scripts/**"
-      - "app/package.json"
-      - "app/package-lock.json"
-      - "app/tsconfig.json"
-      - "app/vite.config.ts"
-      - "package.json"
-      - "package-lock.json"
-      - "tsconfig.json"
+      - "native/**"
       - ".github/workflows/ci.yml"
 
 concurrency:
@@ -28,41 +20,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  protocol:
-    name: 协议核心（src/）
+  native:
+    name: 原生客户端（native/）
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - name: 类型检查
-        run: npm run typecheck
-      - name: 测试
-        run: npm test
 
-  app:
-    name: 客户端（app/）
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-java@v4
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            app/package-lock.json
-      # app 通过 @core 别名引用上一级的 src/，两个都装
-      - run: npm ci
-      - run: npm ci --prefix app
-      - name: 类型检查
-        run: npm run typecheck --prefix app
-      - name: 测试
-        run: npm test --prefix app
-      - name: 构建（确认 vite 能出包）
-        run: npm run build --prefix app
+          distribution: temurin
+          java-version: "21"
+
+      # 不用 android-actions/setup-android：它在当前 runner 镜像上会去装已被移除的
+      # 'tools' 包而直接失败。ubuntu-latest 自带 Android SDK，这里只补齐需要的
+      # platform / build-tools（与 android-release.yml 同一套做法）。
+      - name: 准备 Android SDK
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort -V | tail -1)"
+          if [ -n "$SDKMANAGER" ]; then
+            yes 2>/dev/null | "$SDKMANAGER" --sdk_root="$SDK" \
+              "platforms;android-35" "build-tools;35.0.0" > /dev/null 2>&1 || true
+          fi
+
+      # git 在 Windows 上不记录可执行位（gradlew 存成 100644），checkout 出来没有 +x。
+      - name: 确保 gradlew 可执行
+        run: chmod +x native/gradlew
+
+      - name: 单元测试
+        working-directory: native
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
