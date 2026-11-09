@@ -37,11 +37,12 @@ import dev.pideck.nativeapp.data.privilegeControlFor
 import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.QueuedPrompt
 import dev.pideck.nativeapp.data.QueuedPrompts
+import dev.pideck.nativeapp.data.ConnectionResolver
 import dev.pideck.nativeapp.data.Session
+import dev.pideck.nativeapp.data.SessionActivity
+import dev.pideck.nativeapp.data.SessionStateStore
 import dev.pideck.nativeapp.data.ReplyMerger
 import dev.pideck.nativeapp.data.ReplySnapshot
-import dev.pideck.nativeapp.data.SessionActivity
-import dev.pideck.nativeapp.data.StateCache
 import dev.pideck.nativeapp.data.StateFetch
 import dev.pideck.nativeapp.data.AskUi
 import dev.pideck.nativeapp.data.AvailableModel
@@ -110,7 +111,9 @@ import javax.inject.Inject
 class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: DeviceRepository,
+    private val connections: ConnectionResolver,
     private val api: PideckApi,
+    private val stateStore: SessionStateStore,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -277,37 +280,32 @@ class ChatViewModel @Inject constructor(
     init {
         restoreBusySendMode()
         viewModelScope.launch {
-            // 必须带超时：设备已被删 / DataStore 还在加载时，`first {}` 会**永久**挂起，
-            // 而 runCatching 兜不住「挂起」—— 后面 deviceReady.complete() 就永远执行不到，
-            // 所有 await 设备的地方一起冻住，界面只剩一个空白会话页。
-            val found = runCatching {
-                withTimeoutOrNull(DEVICE_READY_TIMEOUT_MS) {
-                    repository.devices.first { list -> list.any { it.id == deviceId } }
-                        .firstOrNull { it.id == deviceId }
-                }
-            }.getOrNull()
-            if (found != null) {
-                device = found
-                token = runCatching { repository.tokenOf(found.id) }.getOrNull()
+            // 设备解析统一走 ConnectionResolver（内部就是「带超时的 first + 读令牌」）：
+            // 设备被删 / DataStore 还在加载时 `first {}` 会**永久**挂起，而 runCatching 兜不住「挂起」——
+            // 后面 deviceReady.complete() 就永远执行不到，所有 await 设备的地方一起冻住，只剩空白会话页。
+            connections.resolve(deviceId, DEVICE_READY_TIMEOUT_MS)?.let { conn ->
+                device = conn.device
+                token = conn.token
             }
             // 找不到设备也要放行：否则等信号的请求会永远挂着
             deviceReady.complete(Unit)
             // 记下这一落脚点：下次冷启动直接回到这里，不用再从设备列表点进来
             runCatching { Prefs.rememberSession(context, deviceId, sessionId) }
-            val cached = StateCache.session(deviceId, sessionId)
+            val cached = stateStore.session(deviceId, sessionId)
             title = cached?.title?.ifBlank { null } ?: "会话"
             sessionModel = cached?.model.toSessionModel()
             thinkingLevel = cached?.thinkingLevel
             backend = cached?.backend
             permissionPreset = cached?.permissionPreset
-            StateCache.get(deviceId)?.security?.let { security = parseSecurityState(it) }
+            stateStore.cached(deviceId)?.security?.let { security = parseSecurityState(it) }
             // 从冷启动 / 历史跳进来时缓存里没有这条会话：模型与思考档位就都显示不出来。
             // 拉一次 /api/state 把记录补上（只在缺记录时才发这一趟）。
-            if (cached == null && found != null) {
-                runCatching { api.state(found, token, null) }
+            val resolved = device
+            if (cached == null && resolved != null) {
+                runCatching { api.state(resolved, token, null) }
                     .onSuccess { result ->
                         if (result is StateFetch.Fresh) {
-                            StateCache.put(deviceId, result.state)
+                            stateStore.put(deviceId, result.state)
                             adoptState(result.state)
                         }
                     }
@@ -478,7 +476,7 @@ class ChatViewModel @Inject constructor(
             runCatching { api.state(target, token, null) }
                 .onSuccess { result ->
                     if (result is StateFetch.Fresh) {
-                        StateCache.put(deviceId, result.state)
+                        stateStore.put(deviceId, result.state)
                         adoptState(result.state)
                     }
                 }
@@ -522,7 +520,7 @@ class ChatViewModel @Inject constructor(
         private set
 
     private fun runtimeTarget(): RuntimeTarget? {
-        val runtime = StateCache.runtime(deviceId, sessionId) ?: return null
+        val runtime = stateStore.runtime(deviceId, sessionId) ?: return null
         return RuntimeTarget(sessionId, runtime.agentId, runtime.runtimeGeneration.toLong())
     }
 
@@ -538,7 +536,7 @@ class ChatViewModel @Inject constructor(
     private fun syncLivePrefs() {
         if (sessionModel != null && thinkingLevel != null) return
         val host = device ?: return
-        val runtime = StateCache.runtime(deviceId, sessionId) ?: return
+        val runtime = stateStore.runtime(deviceId, sessionId) ?: return
         val key = "${runtime.agentId}#${runtime.runtimeGeneration}"
         if (key == livePrefsKey) return
         livePrefsKey = key
@@ -577,8 +575,7 @@ class ChatViewModel @Inject constructor(
                         .getOrNull()
                         ?.let { fresh ->
                             if (fresh is StateFetch.Fresh) {
-                                StateCache.put(deviceId, fresh.state)
-                                SessionActivity.observe(fresh.state)
+                                stateStore.put(deviceId, fresh.state)
                             }
                         }
                     runtime = runtimeTarget()
@@ -814,8 +811,7 @@ class ChatViewModel @Inject constructor(
                         .onSuccess { result ->
                             if (result is StateFetch.Fresh) {
                                 stateEtag = result.etag
-                                StateCache.put(deviceId, result.state)
-                                SessionActivity.observe(result.state)
+                                stateStore.put(deviceId, result.state)
                                 val next = result.state.pendingUiRequests
                                     .firstOrNull { it.sessionId == sessionId }
                                 if (next?.requestId != pendingAsk?.requestId) askError = null
@@ -1022,7 +1018,7 @@ class ChatViewModel @Inject constructor(
     private suspend fun refreshStateQuietly(target: Device) {
         val fresh = runCatching { api.state(target, token, null) }.getOrNull()
         if (fresh is StateFetch.Fresh) {
-            StateCache.put(deviceId, fresh.state)
+            stateStore.put(deviceId, fresh.state)
             adoptState(fresh.state)
         }
     }
@@ -1035,7 +1031,7 @@ class ChatViewModel @Inject constructor(
                 api.updateSession(target, token, sessionId, patch)
                 onApplied()
                 val fresh = runCatching { api.state(target, token, null) }.getOrNull()
-                if (fresh is StateFetch.Fresh) StateCache.put(deviceId, fresh.state)
+                if (fresh is StateFetch.Fresh) stateStore.put(deviceId, fresh.state)
             } catch (e: Exception) {
                 prefError = describeConnectionError(e)
             }
@@ -1303,7 +1299,7 @@ class ChatViewModel @Inject constructor(
         workspaceError = null
         viewModelScope.launch {
             try {
-                val session = StateCache.session(deviceId, sessionId)
+                val session = stateStore.session(deviceId, sessionId)
                 // 五个面板各自独立失败：**要记下来**。
                 // 以前全是 `runCatching{}.getOrNull()`，断网/超时/401 全被吞成 null，
                 // 界面显示「没有待办 / 没有改动 / 空文件树」—— 用户只会以为数据丢了。
@@ -1517,8 +1513,8 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun projectIdOf(): String? =
-        StateCache.session(deviceId, sessionId)?.projectId
-            ?: StateCache.get(deviceId)?.sessions?.firstOrNull { it.id == sessionId }?.projectId
+        stateStore.session(deviceId, sessionId)?.projectId
+            ?: stateStore.cached(deviceId)?.sessions?.firstOrNull { it.id == sessionId }?.projectId
 
     /**
      * 回到前台：重拉历史 + 重开订阅。
@@ -1996,7 +1992,7 @@ class ChatViewModel @Inject constructor(
      */
     fun stop() {
         val target = device ?: return
-        val runtime = StateCache.runtime(deviceId, sessionId)
+        val runtime = stateStore.runtime(deviceId, sessionId)
         viewModelScope.launch {
             try {
                 if (runtime != null) {
@@ -2026,7 +2022,7 @@ class ChatViewModel @Inject constructor(
      */
     fun restartRuntime() {
         val target = device ?: return
-        val runtime = StateCache.runtime(deviceId, sessionId) ?: run {
+        val runtime = stateStore.runtime(deviceId, sessionId) ?: run {
             error = "运行时没起来，先发一句再重启"
             return
         }
@@ -2125,7 +2121,7 @@ class ChatViewModel @Inject constructor(
         sendJob?.cancel()
         sendJob = null
         viewModelScope.launch {
-            val runtime = StateCache.runtime(deviceId, sessionId)
+            val runtime = stateStore.runtime(deviceId, sessionId)
             if (runtime != null) {
                 runCatching {
                     api.stopRuntime(target, token, sessionId, runtime.agentId, runtime.runtimeGeneration.toLong())

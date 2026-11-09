@@ -17,7 +17,12 @@ import dev.pideck.nativeapp.data.Project
 import dev.pideck.nativeapp.data.STANDARD_THINKING_LEVELS
 import dev.pideck.nativeapp.data.SessionModel
 import dev.pideck.nativeapp.data.Session
-import dev.pideck.nativeapp.data.StateCache
+import dev.pideck.nativeapp.data.ConnectionResolver
+import dev.pideck.nativeapp.ui.common.LoadState
+import dev.pideck.nativeapp.ui.common.failureOf
+import dev.pideck.nativeapp.ui.common.isLoading
+import dev.pideck.nativeapp.ui.common.message
+import dev.pideck.nativeapp.data.SessionStateStore
 import dev.pideck.nativeapp.data.StateFetch
 import dev.pideck.nativeapp.data.describeConnectionError
 import kotlinx.coroutines.flow.first
@@ -35,7 +40,9 @@ import javax.inject.Inject
 class HomeViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: DeviceRepository,
+    private val connections: ConnectionResolver,
     private val api: PideckApi,
+    private val stateStore: SessionStateStore,
 ) : ViewModel() {
 
     val deviceId: String = savedStateHandle["deviceId"] ?: error("缺少 deviceId")
@@ -57,11 +64,22 @@ class HomeViewModel @Inject constructor(
     var selectedProjectId by mutableStateOf<String?>(null)
         private set
 
-    var loading by mutableStateOf(true)
+    /**
+     * 这一屏「拉到哪一步了」（0.5.42 统一成一份）。界面靠它区分
+     * 「还在拉」/「拉完了但真没内容」/「拉失败了」—— 以前只有 `loading` + `error` 两个布尔式字段，
+     * 空白页看不出到底是哪种。
+     */
+    var loadState by mutableStateOf<LoadState>(LoadState.Idle)
         private set
 
-    var error by mutableStateOf<String?>(null)
+    /** 动作类失败（开新会话、切后端之类），与「这一屏拉没拉到」分开记。 */
+    var actionError by mutableStateOf<String?>(null)
         private set
+
+    val loading: Boolean get() = loadState.isLoading
+
+    /** 界面看的那一行红字：动作错误优先，其次是这一屏的拉取失败。 */
+    val error: String? get() = actionError ?: loadState.message
 
     var creating by mutableStateOf(false)
         private set
@@ -171,18 +189,16 @@ class HomeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // 读盘失败（DataStore / Keystore 抽风）不能把进程带走：设备没了就当「回设备页」
-            val found = runCatching {
-                repository.devices.first { list -> list.any { it.id == deviceId } }
-                    .firstOrNull { it.id == deviceId }
-            }.getOrNull()
-            if (found != null) {
-                device = found
-                token = runCatching { repository.tokenOf(found.id) }.getOrNull()
-                deviceName = found.name
+            // 设备解析统一走 ConnectionResolver（5 秒上限，读盘抽风也不会把首页冻住）。
+            // 以前这里没有超时，DataStore 不吐时首页就是空白。会话列表页也有一份同样的代码，
+            // 现在两边都收口到同一个实现，别再各写一遍。
+            connections.resolve(deviceId)?.let { conn ->
+                device = conn.device
+                token = conn.token
+                deviceName = conn.device.name
             }
             // 列表页刚拉过的状态先垫上，首页不至于空着等网络
-            StateCache.get(deviceId)?.let { apply(it.projects, it.sessions, it.acpTools) }
+            stateStore.cached(deviceId)?.let { apply(it.projects, it.sessions, it.acpTools) }
             load()
             loadModels()
         }
@@ -190,27 +206,24 @@ class HomeViewModel @Inject constructor(
 
     fun load() {
         val target = device ?: run {
-            loading = false
-            error = "设备已不存在，回设备页重新添加"
+            loadState = failureOf("设备已不存在，回设备页重新添加")
             return
         }
         viewModelScope.launch {
-            loading = true
-            error = null
+            loadState = LoadState.Loading
             try {
                 when (val fetched = api.state(target, token, etag)) {
                     is StateFetch.Fresh -> {
                         etag = fetched.etag
-                        StateCache.put(deviceId, fetched.state)
+                        stateStore.put(deviceId, fetched.state)
                         apply(fetched.state.projects, fetched.state.sessions, fetched.state.acpTools)
                     }
 
                     StateFetch.NotModified -> Unit
                 }
+                if (loadState !is LoadState.Ready) loadState = LoadState.Ready
             } catch (e: Exception) {
-                error = describeConnectionError(e)
-            } finally {
-                loading = false
+                loadState = failureOf(e)
             }
         }
     }
@@ -230,7 +243,7 @@ class HomeViewModel @Inject constructor(
         if (creating) return
         viewModelScope.launch {
             creating = true
-            error = null
+            actionError = null
             try {
                 val chosen = backend
                 val id = api.createSession(
@@ -245,7 +258,7 @@ class HomeViewModel @Inject constructor(
                 )
                 onCreated(id)
             } catch (e: Exception) {
-                error = describeConnectionError(e)
+                actionError = describeConnectionError(e)
             } finally {
                 creating = false
             }

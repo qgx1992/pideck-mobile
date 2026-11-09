@@ -252,6 +252,24 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   **凡是「界面自动触发、需要 device/token」的加载函数，都先 `deviceReady.await()` 再取值**，
   别在函数顶部 `device ?: return`；用户在点击后才触发的（发送、停止、翻页）可以不改，
   那时设备早就在了。
+- **取数、状态、界面状态、DI 各有唯一入口（0.5.42 起，别在 ViewModel 里再写一份）**：
+  - **取设备**：`native/app/src/main/java/dev/pideck/nativeapp/data/Connection.kt` 的
+    `ConnectionResolver.resolve(deviceId, timeoutMs)` → `Connection(device, token)`。
+    它内部是「带超时的 `first { }` + 读令牌」，超时 / 设备不存在都返回 null（回设备页）。
+    以前四个 ViewModel 各写一遍这段，于是「设备被删 → `first {}` 永久挂起 → 页面一直转圈」
+    在首页、会话列表、聊天页各犯了一次。**新页面要设备就注入它，不要自己 `repository.devices.first`**。
+    它的依赖是 `DeviceDirectory`（只要 `devices` + `tokenOf`），实现就是 `DeviceRepository`。
+  - **写状态**：`data/SessionStateStore.kt`。`put(deviceId, state)` = 写 `StateCache` + `SessionActivity.observe`
+    两件事一起做；轻量的 `/api/sessions/runtimes` 走 `putRuntimes()`。别再出现「只写了缓存、
+    忘了同步运行态」的调用点（那会让会话行的状态灯有时亮有时不亮）。
+  - **列表页状态**：`ui/common/LoadState.kt`（`Idle` / `Loading` / `Ready` / `Failed(message)`），
+    配 `failureOf(e)`（内部 `describeConnectionError`，401 会顺手写 `AuthNotice`）。
+    首页 `HomeViewModel` 与会话列表 `SessionsViewModel` 的 `loading` / `error` 已经只是它派生的只读属性；
+    要区分「连不上 / 正在拉 / 真的没有内容」时读 `loadState`，别再靠 `items.isEmpty()` 猜。
+    动作类失败（改名、删除、开新会话）走各自的 `actionError`，别和整屏拉取混成一个字段。
+  - **DI**：`di/AppBindings.kt` 用 `@Binds` 把 `PideckApi` 与 `DeviceDirectory` 绑到真实实现
+    （真实实现的 `@Provides` 在 `di/AppModule.kt`）。要给 ViewModel 写行为测试，
+    用 `@TestInstallIn` 换掉 `AppBindings` 塞假实现即可，不必搭 mock server、也不要改生产装配。
 - **新会话的模型偏好只在 pi 上带**（`native/app/src/main/java/dev/pideck/nativeapp/data/Images.kt`
   的 `ChatPayloads.createSessionBody`）：宿主 `createSessionDraft` 的 `model` 是
   `!acp && input.model ? … : void 0`，DSH 则用它自己的模型体系。带 `model` 时形状必须是

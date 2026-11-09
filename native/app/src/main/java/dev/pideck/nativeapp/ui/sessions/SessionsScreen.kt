@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import dev.pideck.nativeapp.ui.common.isLoading
+import dev.pideck.nativeapp.ui.common.LoadState
 import dev.pideck.nativeapp.ui.common.SearchField
 import dev.pideck.nativeapp.ui.common.SessionRowText
 import dev.pideck.nativeapp.ui.common.relativeTime
@@ -151,14 +153,24 @@ fun SessionsScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            // 三种「看起来都是空白」的情况必须分开（0.5.42）：连不上 / 还在拉 / 真的没有会话。
+            // 以前只判 `state == null && error != null`，首帧（state 为空、还没开始拉）会一直转圈。
             when {
-                viewModel.state == null && viewModel.error != null -> ErrorBlock(
+                viewModel.state == null && viewModel.loadState is LoadState.Failed -> ErrorBlock(
                     message = viewModel.error ?: "连接失败",
                     onRetry = { viewModel.refresh() },
                 )
 
-                viewModel.state == null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                viewModel.state == null && viewModel.loadState.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                     CircularProgressIndicator()
+                }
+
+                viewModel.state == null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                    Text(
+                        "还没有连上，点右上角刷新重试",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 viewModel.groups.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {

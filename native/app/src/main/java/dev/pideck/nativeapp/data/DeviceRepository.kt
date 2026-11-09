@@ -34,7 +34,7 @@ private val Context.deviceStore by preferencesDataStore("pideck_devices")
  * - 令牌单独走 EncryptedSharedPreferences（Keystore 里的 AES256-GCM 主密钥），
  *   绝不写进 DataStore 的明文 XML —— 这是相对现有 WebView 壳（localStorage 明文）的改进点。
  */
-class DeviceRepository(private val context: Context) {
+class DeviceRepository(private val context: Context) : DeviceDirectory {
 
     private val devicesKey = stringPreferencesKey("devices")
 
@@ -100,7 +100,7 @@ class DeviceRepository(private val context: Context) {
      * 以前这里直接抛 —— 调用点全在 `viewModelScope.launch` 里，一次异常就把进程带走，
      * 表现正是「冷启动闪退」。
      */
-    fun tokenOf(deviceId: String): String? {
+    override fun tokenOf(deviceId: String): String? {
         repeat(2) { attempt ->
             try {
                 return openTokens().getString(deviceId, null)
@@ -144,7 +144,7 @@ class DeviceRepository(private val context: Context) {
         android.util.Log.w("PiDeckTokens", "令牌库不可用：${e::class.java.simpleName}: ${e.message}")
     }
 
-    val devices: Flow<List<Device>> = context.deviceStore.data.map { prefs ->
+    override val devices: Flow<List<Device>> = context.deviceStore.data.map { prefs ->
         val raw = prefs[devicesKey] ?: return@map emptyList()
         runCatching {
             PideckJson.decodeFromString(ListSerializer(Device.serializer()), raw)

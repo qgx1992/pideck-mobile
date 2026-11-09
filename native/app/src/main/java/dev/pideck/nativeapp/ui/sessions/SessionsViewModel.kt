@@ -13,8 +13,12 @@ import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.PideckApi
 import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.Session
-import dev.pideck.nativeapp.data.SessionActivity
-import dev.pideck.nativeapp.data.StateCache
+import dev.pideck.nativeapp.data.ConnectionResolver
+import dev.pideck.nativeapp.data.SessionStateStore
+import dev.pideck.nativeapp.ui.common.LoadState
+import dev.pideck.nativeapp.ui.common.failureOf
+import dev.pideck.nativeapp.ui.common.isLoading
+import dev.pideck.nativeapp.ui.common.message
 import dev.pideck.nativeapp.data.StateFetch
 import dev.pideck.nativeapp.data.describeConnectionError
 import dev.pideck.nativeapp.watch.RunWatcher
@@ -75,8 +79,10 @@ internal fun projectGroupsOf(
 @HiltViewModel
 class SessionsViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
+    private val connections: ConnectionResolver,
     private val repository: DeviceRepository,
     private val api: PideckApi,
+    private val stateStore: SessionStateStore,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -93,11 +99,18 @@ class SessionsViewModel @Inject constructor(
     var state by mutableStateOf<PideckState?>(null)
         private set
 
-    var loading by mutableStateOf(false)
+    /** 这一屏拉到哪一步了（0.5.42 统一，见 `ui/common/LoadState.kt`）。 */
+    var loadState by mutableStateOf<LoadState>(LoadState.Idle)
         private set
 
-    var error by mutableStateOf<String?>(null)
+    /** 动作类失败（改名 / 删除 / 复制 / 移出工作区），与整屏拉取分开。 */
+    var actionError by mutableStateOf<String?>(null)
         private set
+
+    val loading: Boolean get() = loadState.isLoading
+
+    /** 界面看的那一行红字：动作错误优先，其次是这一屏的拉取失败。 */
+    val error: String? get() = actionError ?: loadState.message
 
     val hostVersion: String? get() = state?.version
 
@@ -194,15 +207,13 @@ class SessionsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            runCatching {
-                repository.devices.first { list -> list.any { it.id == deviceId } }
-                    .firstOrNull { it.id == deviceId }
-            }.getOrNull()
-                ?.let { found ->
-                    device = found
-                    deviceName = found.name
-                    token = runCatching { repository.tokenOf(found.id) }.getOrNull()
-                }
+            // 设备解析统一走 ConnectionResolver：设备被删 / DataStore 不吐时有 5 秒上限，
+            // 不会再让 init 永久挂住（以前这里是 `devices.first { … }`，不返回就一直转圈）。
+            connections.resolve(deviceId)?.let { conn ->
+                device = conn.device
+                deviceName = conn.device.name
+                token = conn.token
+            }
             refresh()
         }
     }
@@ -227,7 +238,7 @@ class SessionsViewModel @Inject constructor(
                 etag = null
                 refresh()
             } catch (e: Exception) {
-                error = describeConnectionError(e)
+                actionError = describeConnectionError(e)
             }
         }
     }
@@ -238,11 +249,10 @@ class SessionsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 api.deleteSession(target, token, id)
-                if (StateCache.session(deviceId, id) != null) Unit
                 etag = null
                 refresh()
             } catch (e: Exception) {
-                error = describeConnectionError(e)
+                actionError = describeConnectionError(e)
             }
         }
     }
@@ -260,7 +270,7 @@ class SessionsViewModel @Inject constructor(
                 refresh()
                 onDone(newId)
             } catch (e: Exception) {
-                error = describeConnectionError(e)
+                actionError = describeConnectionError(e)
                 onDone(null)
             }
         }
@@ -275,13 +285,14 @@ class SessionsViewModel @Inject constructor(
                 etag = null
                 refresh()
             } catch (e: Exception) {
-                error = describeConnectionError(e)
+                actionError = describeConnectionError(e)
             }
         }
     }
 
     fun clearError() {
-        error = null
+        actionError = null
+        if (loadState is LoadState.Failed) loadState = LoadState.Ready
     }
 
     private var runtimesBusy = false
@@ -299,7 +310,7 @@ class SessionsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val runtimes = api.runtimes(target, token)
-                SessionActivity.observeRuntimes(runtimes)
+                stateStore.putRuntimes(runtimes)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -314,25 +325,22 @@ class SessionsViewModel @Inject constructor(
         val target = device ?: return
         if (loading) return
         viewModelScope.launch {
-            loading = true
-            error = null
+            loadState = LoadState.Loading
             try {
                 when (val fetched = api.state(target, token, etag)) {
                     is StateFetch.Fresh -> {
                         state = fetched.state
                         etag = fetched.etag
-                        StateCache.put(deviceId, fetched.state)
-                        SessionActivity.observe(fetched.state)
+                        stateStore.put(deviceId, fetched.state)
                         // 有会话在跑就挂上看护（跑完了一条通知），没跑就等下次再说。
                         if (fetched.state.runtimes.any { it.isRunning }) RunWatcher.start(context)
                     }
                     StateFetch.NotModified -> Unit
                 }
                 repository.touch(target.id)
+                loadState = LoadState.Ready
             } catch (e: Exception) {
-                error = describeConnectionError(e)
-            } finally {
-                loading = false
+                loadState = failureOf(e)
             }
         }
     }

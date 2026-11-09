@@ -10,6 +10,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.pideck.nativeapp.data.AuthNotice
 import dev.pideck.nativeapp.data.DeviceRepository
+import dev.pideck.nativeapp.data.SessionStateStore
 import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.PideckException
 import dev.pideck.nativeapp.data.StateFetch
@@ -30,6 +31,7 @@ import javax.inject.Inject
 class StartViewModel @Inject constructor(
     private val repository: DeviceRepository,
     private val api: PideckApi,
+    private val stateStore: SessionStateStore,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -39,7 +41,10 @@ class StartViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
+            // 同 ConnectionResolver 的理由：读盘异常 / 迟迟不吐时不能把启动页卡死在这里
+            val devices = withTimeoutOrNull(3_000) {
+                runCatching { repository.devices.first() }.getOrDefault(emptyList())
+            } ?: emptyList()
             val remembered = runCatching { Prefs.lastSession(context) }.getOrNull()?.first
             val device = devices.firstOrNull { it.id == remembered } ?: devices.firstOrNull()
             if (device == null) {
@@ -79,7 +84,7 @@ class StartViewModel @Inject constructor(
         if (result.isSuccess) {
             val fresh = result.getOrNull()
             if (fresh is StateFetch.Fresh) {
-                dev.pideck.nativeapp.data.StateCache.put(device.id, fresh.state)
+                stateStore.put(device.id, fresh.state)
             }
             AuthNotice.clear()
         }
