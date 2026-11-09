@@ -28,6 +28,10 @@ import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.PrivilegeControl
 import dev.pideck.nativeapp.data.PromptSummary
 import dev.pideck.nativeapp.data.LocalPrompts
+import dev.pideck.nativeapp.data.TranslateTarget
+import dev.pideck.nativeapp.data.TranslationState
+import dev.pideck.nativeapp.data.defaultTranslateTarget
+import dev.pideck.nativeapp.data.translateInstruction
 import dev.pideck.nativeapp.data.QuickMessages
 import dev.pideck.nativeapp.data.SecurityState
 import dev.pideck.nativeapp.data.parseSecurityState
@@ -273,6 +277,15 @@ class ChatViewModel @Inject constructor(
     private var askJob: Job? = null
     private var askTarget: RuntimeTarget? = null
     private var askMerger = ReplyMerger()
+
+    /** 浮窗里那段译文（思考卡点「翻译」时才有）。 */
+    var translation by mutableStateOf<TranslationState?>(null)
+        private set
+
+    /** 译文对应的原文与运行时：重翻 / 改译方向都靠它，关浮窗要把匿名会话卸掉。 */
+    private var translateSource = ""
+    private var translateJob: Job? = null
+    private var translateRuntime: RuntimeTarget? = null
 
     init {
         restoreBusySendMode()
@@ -2286,6 +2299,108 @@ class ChatViewModel @Inject constructor(
             runCatching {
                 api.stopRuntime(target, token, runtime.sessionId, runtime.agentId, runtime.runtimeGeneration)
             }
+        }
+    }
+
+    /**
+     * 把浮窗里那段正文交给宿主翻一遍。
+     *
+     * 走的是与「并行发送」同一条路：匿名会话（`noSession`，不落盘）→ `prompt` → 读回复流 →
+     * 收尾 `runtime/stop`。翻完立刻卸运行时，别让它挂在那儿占上下文。
+     */
+    fun translate(text: String, target: TranslateTarget = defaultTranslateTarget(text)) {
+        val target_device = device ?: return
+        val body = text.trim()
+        if (body.isEmpty()) return
+        val projectId = projectIdOf()
+        if (projectId == null) {
+            translation = TranslationState(target = target, error = "这个会话没有归属项目，开不了匿名会话")
+            return
+        }
+        translateJob?.cancel()
+        stopTranslateRuntime()
+        translateSource = body
+        translation = TranslationState(target = target, busy = true)
+        val merger = ReplyMerger()
+        translateJob = viewModelScope.launch {
+            try {
+                val anon = api.createAnonymousSession(target_device, token, projectId)
+                val delivery = api.sendPrompt(
+                    target_device,
+                    token,
+                    anon,
+                    ChatPayloads.promptBody(newRequestId(), translateInstruction(body, target)),
+                )
+                translateRuntime = delivery.agentId?.let { agentId ->
+                    RuntimeTarget(anon, agentId, delivery.runtimeGeneration ?: 0L)
+                }
+                if (!delivery.accepted) {
+                    translation = TranslationState(
+                        target = target,
+                        error = delivery.error ?: "宿主没有接受这条翻译请求",
+                    )
+                    return@launch
+                }
+                api.sessionStream(target_device, token, anon).collect { frame ->
+                    val snapshot = when {
+                        frame.data.trim() == "[DONE]" -> merger.finish()
+                        else -> {
+                            val parsed = runCatching {
+                                PideckJson.parseToJsonElement(frame.data) as? JsonObject
+                            }.getOrNull()
+                            if (parsed != null) merger.applyFrame(parsed) else merger.snapshot()
+                        }
+                    } ?: return@collect
+                    translation = TranslationState(
+                        target = target,
+                        busy = !snapshot.finished,
+                        text = snapshot.text,
+                        error = snapshot.errorText,
+                    )
+                    if (snapshot.finished) throw AskStreamDone()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AskStreamDone) {
+                // 正常收尾：译文已在上面写进状态
+                translation = translation?.copy(busy = false)
+            } catch (e: Throwable) {
+                translation = TranslationState(target = target, error = describeConnectionError(e))
+            } finally {
+                withContext(NonCancellable) { stopTranslateRuntimeNow() }
+            }
+        }
+    }
+
+    /** 「改译成英文 / 中文」：拿同一段原文按反方向再翻一次。 */
+    fun flipTranslation() {
+        val state = translation ?: return
+        if (state.busy) return
+        val source = translateSource
+        if (source.isBlank()) return
+        translate(source, state.target.flipped())
+    }
+
+    /** 关浮窗：取消订阅、清状态、卸掉匿名会话的运行时。 */
+    fun closeTranslation() {
+        translateJob?.cancel()
+        translateJob = null
+        translation = null
+        translateSource = ""
+        stopTranslateRuntime()
+    }
+
+    private fun stopTranslateRuntime() {
+        viewModelScope.launch { stopTranslateRuntimeNow() }
+    }
+
+    private suspend fun stopTranslateRuntimeNow() {
+        val target = device
+        val runtime = translateRuntime ?: return
+        translateRuntime = null
+        if (target == null) return
+        runCatching {
+            api.stopRuntime(target, token, runtime.sessionId, runtime.agentId, runtime.runtimeGeneration)
         }
     }
 

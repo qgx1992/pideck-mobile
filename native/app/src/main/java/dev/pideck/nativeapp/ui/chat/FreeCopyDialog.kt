@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -16,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import dev.pideck.nativeapp.data.TranslationState
 import dev.pideck.nativeapp.ui.theme.AppButton
 import dev.pideck.nativeapp.ui.theme.AppButtonStyle
 import dev.pideck.nativeapp.ui.theme.AppIconButton
@@ -42,6 +45,8 @@ data class DetailContent(
     val hint: String,
     val text: String,
     val mono: Boolean = false,
+    /** 思考过程这类「读得想让人翻一下」的正文才给「翻译」按钮，工具卡不给。 */
+    val translatable: Boolean = false,
 )
 
 /**
@@ -80,6 +85,10 @@ fun DetailDialog(
     content: DetailContent,
     onCopyAll: (String) -> Unit,
     onDismiss: () -> Unit,
+    translation: TranslationState? = null,
+    onTranslate: (() -> Unit)? = null,
+    onFlipTranslation: (() -> Unit)? = null,
+    onCopyTranslation: (String) -> Unit = {},
 ) {
     Dialog(
         onDismissRequest = onDismiss,
@@ -120,7 +129,7 @@ fun DetailDialog(
                     )
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
@@ -141,6 +150,62 @@ fun DetailDialog(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
+                    if (translation != null) {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(vertical = 12.dp),
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "译文 · ${translation.target.label}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (!translation.busy && onFlipTranslation != null) {
+                                TextButton(onClick = onFlipTranslation) {
+                                    Text(
+                                        "改译成${translation.target.flipped().label}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
+                            if (!translation.busy && translation.text.isNotBlank()) {
+                                TextButton(onClick = { onCopyTranslation(translation.text) }) {
+                                    Text("复制译文", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                        when {
+                            translation.busy -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "正在翻…（用的是宿主上那个 agent，和你平时的模型同一个）",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+
+                            translation.error != null -> Text(
+                                text = translation.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+
+                            translation.text.isNotBlank() -> SelectionContainer {
+                                Text(
+                                    text = translation.text,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                    }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 Row(
@@ -156,6 +221,19 @@ fun DetailDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
+                    if (onTranslate != null) {
+                        TextButton(onClick = onTranslate, enabled = translation?.busy != true) {
+                            Text(
+                                text = when {
+                                    translation == null -> "翻译"
+                                    translation.busy -> "翻译中…"
+                                    else -> "重新翻译"
+                                },
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        }
+                        Spacer(Modifier.width(6.dp))
+                    }
                     TextButton(onClick = onDismiss) { Text("关闭") }
                     Spacer(Modifier.width(6.dp))
                     AppButton(

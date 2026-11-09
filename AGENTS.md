@@ -147,6 +147,14 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 操作手册，导致「照文档做会得到 0.4.12 的包」这种误导。零碎的踩坑记录（安全区、扫码取景、返回键分层、
 `fixed` 覆盖层让位等）在 git 历史与归档分支里都还在，不要再往本文件搬回来。
 
+- **浮窗里的「翻译」只有宿主 agent 这一条路**（`native/app/src/main/java/dev/pideck/nativeapp/data/Translation.kt`
+  + `ChatViewModel.translate`）：本机没有离线翻译（ML Kit 要额外 AAR 与模型包，构建走 `--offline`），
+  桌面端的划词翻译是 `agent-profiles:invoke` 这条 Electron IPC，`/api/*` 里没有，别去找。
+  实现就是匿名会话（`noSession`）→ `prompt`（指令里写死「只输出译文、不要使用任何工具」）→
+  读回复流 → 收尾 `runtime/stop`，与「并行发送」同一套机器；方向判断在 `defaultTranslateTarget`
+  （汉字占非空白字符 ≥15% 当中文）。浮窗的翻译按钮只给 `DetailContent.translatable = true` 的
+  （思考卡），工具卡不给 —— 命令输出里翻 JSON 参数没有意义。
+
 ## 原生客户端（0.5.x，2026-11 起接管）
 
 现在的客户端是纯 Kotlin + Compose，源码在 `native/app/src/main/java/dev/pideck/nativeapp/`，

@@ -139,6 +139,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.data.BusySendMode
+import dev.pideck.nativeapp.data.defaultTranslateTarget
 import dev.pideck.nativeapp.data.TurnStats
 import dev.pideck.nativeapp.data.formatTurnStats
 import dev.pideck.nativeapp.data.TimelineItem
@@ -768,7 +769,7 @@ fun ChatScreen(
                                 is TimelineItem.AssistantMessage -> AssistantBlock(
                                     item = item,
                                     onLongPress = { actionTarget = item },
-                                    onOpenDetail = { detail = it },
+                                    onOpenDetail = { viewModel.closeTranslation(); detail = it },
                                 )
                             }
 
@@ -988,9 +989,34 @@ fun ChatScreen(
             onCopyAll = { text ->
                 clipboard.setText(AnnotatedString(text))
                 detail = null
+                viewModel.closeTranslation()
                 scope.launch { snackbar.showSnackbar("已复制 ${text.length} 字") }
             },
-            onDismiss = { detail = null },
+            onDismiss = {
+                detail = null
+                viewModel.closeTranslation()
+            },
+            translation = if (content.translatable) viewModel.translation else null,
+            onTranslate = if (content.translatable) {
+                {
+                    val open = viewModel.translation
+                    viewModel.translate(
+                        text = content.text,
+                        target = open?.target ?: defaultTranslateTarget(content.text),
+                    )
+                }
+            } else {
+                null
+            },
+            onFlipTranslation = if (content.translatable) {
+                { viewModel.flipTranslation() }
+            } else {
+                null
+            },
+            onCopyTranslation = { text ->
+                clipboard.setText(AnnotatedString(text))
+                scope.launch { snackbar.showSnackbar("已复制译文 ${text.length} 字") }
+            },
         )
     }
     if (showHistory) {
@@ -1152,8 +1178,9 @@ private fun AssistantBlock(
                     onOpenDetail(
                         DetailContent(
                             title = if (item.streaming) "思考过程（进行中）" else "思考过程",
-                            hint = "太长不想滚？长按选中一段就行；也可以直接复制全文",
+                            hint = "太长不想滚？长按选中一段就行；也可以直接复制全文，或让宿主翻一遍",
                             text = thinking,
+                            translatable = true,
                         ),
                     )
                 },
@@ -1399,8 +1426,9 @@ private fun ProcessGroupBlock(
                                         } else {
                                             "思考过程"
                                         },
-                                        hint = "太长不想滚？长按选中一段就行；也可以直接复制全文",
+                                        hint = "太长不想滚？长按选中一段就行；也可以直接复制全文，或让宿主翻一遍",
                                         text = member.piece.text,
+                                        translatable = true,
                                     ),
                                 )
                             },

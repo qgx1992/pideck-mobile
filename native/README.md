@@ -11,7 +11,7 @@
 - 自己一套 Gradle 工程，版本自己锁（Kotlin 2.0.21 / AGP 8.7.3 / Compose BOM 2024.12.01 / Hilt 2.52）；
 - 分层：`data/`（模型 + HTTP/SSE + 解析）、`ui/`（chat / home / sessions / devices / settings / pairing）、
   `watch/`（前台服务 + 通知）、`di/`（Hilt）；
-- 测试全在 `app/src/test/`，335 条纯 JVM 单测（解析、分帧、分组、行索引、统计口径），无 Compose 测试。
+- 测试全在 `app/src/test/`，342 条纯 JVM 单测（解析、分帧、分组、行索引、统计口径），无 Compose 测试。
 
 ## 构建
 
