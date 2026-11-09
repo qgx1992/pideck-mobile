@@ -4,14 +4,14 @@
 为什么从 WebView 壳迁到全原生；0.4.x 的 Capacitor 壳（`app/`）与更早的 TypeScript 协议核心（`src/`、
 `tests/`）已在 0.5.41 从 master 删除，完整内容留在分支 `archive/webview-shell`。
 
-版本 0.5.40 / `versionCode 540`，包名 `top.caoayu.pideck`，Kotlin 2.0 + Jetpack Compose。
+版本 0.5.41 / `versionCode 541`，包名 `top.caoayu.pideck`，Kotlin 2.0 + Jetpack Compose。
 
 ## 工程结构
 
 - 自己一套 Gradle 工程，版本自己锁（Kotlin 2.0.21 / AGP 8.7.3 / Compose BOM 2024.12.01 / Hilt 2.52）；
 - 分层：`data/`（模型 + HTTP/SSE + 解析）、`ui/`（chat / home / sessions / devices / settings / pairing）、
   `watch/`（前台服务 + 通知）、`di/`（Hilt）；
-- 测试全在 `app/src/test/`，289 条纯 JVM 单测（解析、分帧、分组、行索引、统计口径），无 Compose 测试。
+- 测试全在 `app/src/test/`，300 条纯 JVM 单测（解析、分帧、分组、行索引、统计口径），无 Compose 测试。
 
 ## 构建
 
@@ -78,7 +78,7 @@ cd native
 | debug | `top.caoayu.pideck.native` | `.native` 后缀，与手机里的调试版同 id，可覆盖调试版；也能与正式包共存 |
 
 源码 namespace 仍是 `dev.pideck.nativeapp`（`applicationId` 与它无关，改名只动 `app/build.gradle.kts`）。
-版本号从 0.5.0 起按 `major*1000 + minor*100 + patch`（0.5.40 → 540、0.5.9 → 509 < 0.5.10 → 510），
+版本号从 0.5.0 起按 `major*1000 + minor*100 + patch`（0.5.41 → 541、0.5.9 → 509 < 0.5.10 → 510），
 必须始终高于壳最后发过的 412，否则 Android 会以「版本回退」拒绝覆盖安装。规则见仓库根 `AGENTS.md`。
 
 ## 出包

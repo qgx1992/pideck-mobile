@@ -155,7 +155,7 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 出包与验证（本地）：
 
 ```bash
-cd native && ./gradlew --offline -q :app:testDebugUnitTest   # 289 条 JVM 单测
+cd native && ./gradlew --offline -q :app:testDebugUnitTest   # 300 条 JVM 单测
 cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -201,11 +201,20 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   记成本地默认（0.5.25 记过，0.5.26 撤了：猜「上次用的」比跟 pi 对齐更容易让人困惑）。
   列表行与聊天页顶栏的后端标记统一走 `AgentBackend.badgeOf(backend, acpToolName)`，别各写一份；
   渲染用共用的 `ui/theme/Controls.kt` 的 `BackendBadge`。
-  注意**会话行有三份布局**：`ui/sessions/SessionsScreen.kt` 的 `SessionRow`（全部会话）、
+  注意**会话行有四处布局**：`ui/sessions/SessionsScreen.kt` 的 `SessionRow`（全部会话）、
   `ui/home/HomeScreen.kt` 的 `RecentSessionRow`（首页「最近的会话」）、
-  `ui/chat/SessionDrawer.kt` 的 `DrawerSessionRow`（聊天页左侧抽屉）—— 0.5.26 改了第一处，
-  0.5.27 补了第二处，用户又发现抽屉里没有（0.5.28 补齐）。加任何行级元素都要三处一起改，
-  改完在三个入口各看一眼，别只测「全部会话」。
+  `ui/chat/SessionDrawer.kt` 的 `DrawerSessionRow`（聊天页左侧抽屉）、
+  `ui/chat/DrawerActivePane.kt` 的 `ActiveSessionRow`（抽屉「活动」段）。0.5.26 改了第一处、
+  0.5.27 补第二处，用户又发现抽屉里没有（0.5.28 补齐），到 0.5.41 才发现「活动」段连后端标记都没有。
+  **所以 0.5.41 起不许再手抄那段文字**：标题 + 元信息 + 后端标记统一走
+  `ui/common/SessionRowText.kt` 的 `SessionRowText(...)`，外壳（缩进、圆角、点击手势、右侧状态）各留各的。
+  加行级元素时改 `SessionRowText`，四处同时生效；新增第五处也算「用共用块」，别再复制粘贴。
+  `ui/common/SessionRowTextGuardTest.kt` 直接读这四份源码对账（要求出现 `SessionRowText(`、
+  不许出现 `BackendBadge(`），谁把这段手抄回去测试就红。
+- **相对时间只有一份**：`ui/common/TimeText.kt` 的 `relativeTime()`，口径照桌面端 `formatRelativeTime`
+  （刚刚 / N 分钟前 / N 小时前 / N 天前 / 30 天以上 N 个月前）。0.5.41 之前 `SessionsScreen` 给「93 天前」、
+  `SessionDrawer` 给「08-08」，同一个会话两处显示不同。别再拿 `SimpleDateFormat` / `toLocaleXxx` 格式化时间
+  （CI runner 是 en-US，会与本地分叉）。
 - **live 联调测试别拿 idle 运行时当判据**：`RuntimeStateLiveTest` 曾经挑 `runtimes.firstOrNull { !it.isRunning }`，
   而 idle 的 runtime 上下文窗口已经卸载（`contextWindow = 0`）→ 必红。挑正在跑的那个，
   没有在跑的才 `assumeTrue` 跳过。
@@ -359,7 +368,8 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   `DrawerActivePane` 里每 5 秒（`RUNTIMES_POLL_MS`）再打一次，离开该段随组合注销即停。
   轻量接口没有 `pendingUiRequests`，`waiting` 传 null 时沿用 `lastWaiting`，别当成空集合。
   行是独立组件 `ActiveSessionRow`，**不要**去改 `DrawerSessionRow` / `SessionRow` / `RecentSessionRow`
-  —— 那三处各自安静（见上面「会话行有三份布局」）。纯函数有单测 `DrawerActivePaneTest`（8 条）。
+  —— 那三处各自安静（见上面「会话行有四处布局」，注意标题那一行现在**必须**用共用的 `SessionRowText`）。
+  纯函数有单测 `DrawerActivePaneTest`（8 条）。
   桌面端上半是 agent 级（子代理单列），手机只到会话级（子代理要逐会话请求 `/api/sessions/:id/subagents`）；
   桌面端的插件分组区（`desktopApi.sessionGroups.list()`）走 IPC，手机拿不到，这两处不复刻。
   改这个文件别用「截到最后一个 `}`」这类写法 —— `ActiveSessionRow` 曾被一次批量改写误删。
@@ -438,6 +448,25 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   - 停止按钮 = `runtime/abort`（只断当前这一轮）。`runtime/stop` 是**卸运行时**，下次发消息要重新激活几十秒，
     只在并行/匿名会话收尾时用。重启是 `runtime/restart`：宿主先写 200 头、每 2 秒一个空格心跳、结束才给 JSON，
     所以 UI 要置灰等它跑完（OkHttp readTimeout 已是 0）。
+- **两个 OkHttp 客户端，用途不同（0.5.41）**：`native/app/src/main/java/dev/pideck/nativeapp/data/PideckApi.kt`
+  里 `client` 是给 SSE 用的（`readTimeout(0)`，一段时间没有帧是正常的），`jsonClient` 是它的副本，
+  读超时 `SHORT_READ_TIMEOUT_SECONDS = 45`，**所有一次性请求（`state` / `messagesPage` / `postJson` / `getText` /
+  `rawGet` / `createSession`）都必须走它**。以前全部走无限超时的那个：撞上半开连接时一次 GET 就永久挂着，
+  表现是「首页一直转圈」「轮询静默停摆」。守门测试 `data/ApiClientTimeoutTest.kt`。
+- **一轮发送的三个守卫**（0.5.41，`ui/chat/ChatViewModel.kt` 的 `send()`）：
+  ① 空闲看护 —— collect 包在 `coroutineScope { launch(stream) + launch(guard) }` 里，guard 每
+  `STREAM_IDLE_CHECK_MS = 15s` 量一次「距上一帧多久」，超过 `STREAM_IDLE_TIMEOUT_MS = 3min` 就
+  `stream.cancel()` 并写一句提示（只 cancel 收集协程，不 cancel 外层 try/finally，收尾必须跑完）；
+  ② `finally` 里的收尾（补拉历史 + 结算统计）包 `withContext(NonCancellable)` —— 点停止会把整个协程 cancel，
+  否则第 ② 次补拉前的 `delay(600)` 立刻抛 CancellationException，「停止后的回答不出现」永远修不好；
+  ③ `refreshHistory()` 用 `historyRefreshSeq` 序号守卫（只有最新一次允许落地），别把守卫删成「最后返回的赢」
+  —— 旧请求后到会覆盖新结果，严重时 LazyColumn 抛 `Key was already used`。
+- **工作区面板失败必须说出来**：`refreshWorkspace()` 里四个请求用局部 `attempt(label) { … }` 收集失败原因，
+  汇总成 `workspaceError = "部分面板没读到（其余照常显示）：…"`。别再退回 `runCatching{}.getOrNull()`：
+  断网/401 时界面会显示「没有待办 / 没有改动 / 空文件树」，用户只会以为数据没了。
+- **Compose 状态只能回主线程写**：`ui/sessions/GroupCollapse.kt` 的 `attach()` 接的是
+  `Dispatchers.IO` 的 scope（`PiDeckApp.onCreate` 里的 `prefsScope`），读盘留在 IO、赋值包
+  `withContext(Dispatchers.Main.immediate)`。快照状态线程安全，但主线程不会因 IO 线程的写入被唤醒重绘。
 - **授权失效要显式验、显式说**：冷启动 `native/app/src/main/java/dev/pideck/nativeapp/ui/StartViewModel.kt`
   先对存着的设备打一次 `/api/state`（3 秒超时），401/403 就落设备页 + `data/AuthNotice.kt` 的常驻提示
   （「授权已失效，重新配对」），别进首页给一屏红字（用户只会反复重进）。`describeConnectionError` 撞到 401/403

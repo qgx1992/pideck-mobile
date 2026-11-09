@@ -10,16 +10,16 @@
 
 **本项目全程由 AI 开发**（从第一行 Compose 代码到最后那个 APK），感兴趣可以点个 ⭐。
 
-当前版本 **0.5.40**（`versionCode 540`），包名 `top.caoayu.pideck`，
+当前版本 **0.5.41**（`versionCode 541`），包名 `top.caoayu.pideck`，
 Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
-> **适配的桌面端版本：0.10.0**（截至 0.5.40 对过一遍路由、字段与流帧）。
+> **适配的桌面端版本：0.10.0**（截至 0.5.41 对过一遍路由、字段与流帧）。
 > 桌面端升级后会先跑探针与单测再跟；版本低于 0.10.0 时设置页会给一行提示，
 > 见下表「兼容性」一行。
 
 ```bash
 cd native
-./gradlew :app:testDebugUnitTest    # 289 条 JVM 单测
+./gradlew :app:testDebugUnitTest    # 300 条 JVM 单测
 ./gradlew :app:assembleRelease      # app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -29,7 +29,7 @@ cd native
 
 ---
 
-## 它现在能做什么（0.5.40）
+## 它现在能做什么（0.5.41）
 
 | 能力 | 说明 |
 |---|---|
@@ -61,7 +61,7 @@ native/                       唯一在发的产物
 │  ├─ ui/home · sessions · devices · settings · pairing · splash
 │  ├─ watch/                 RunWatchService（前台服务）+ 通知
 │  └─ di/                    Hilt
-└─ app/src/test/             289 条 JVM 单测（纯逻辑；含真桌面端联调的 Live* 用例，无设置时自动跳过）
+└─ app/src/test/             300 条 JVM 单测（纯逻辑；含真桌面端联调的 Live* 用例，无设置时自动跳过）
 ```
 
 设计上的三条约定：
