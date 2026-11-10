@@ -32,6 +32,7 @@ object Prefs {
     private val KEY_BUSY_MODE = stringPreferencesKey("busy_send_mode")
     private val KEY_PROCESS_GROUP = booleanPreferencesKey("process_group_display")
     private val KEY_EXPAND_INTERIM = booleanPreferencesKey("expand_interim_stream")
+    private val KEY_AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
 
 
     /** 主题变化用 StateFlow 播出去，MainActivity 直接 collect。 */
@@ -93,6 +94,15 @@ object Prefs {
     var expandInterimStream: Boolean = true
         private set
 
+    /**
+     * 启动时自动查一次 GitHub 有没有新 Release（默认开）。
+     *
+     * 关掉之后只有设置页里那个「检查更新」按钮会发请求 —— 这是唯一一处对外的网络请求。
+     */
+    @Volatile
+    var autoCheckUpdate: Boolean = true
+        private set
+
     private var loaded = false
 
     /** 首次从磁盘读完就置 true —— 折叠状态要等这个，否则读到的是默认值。 */
@@ -121,6 +131,7 @@ object Prefs {
                 expandInterimStream = expandInterim
                 processGroupFlow.value = groupProcess
                 expandInterimFlow.value = expandInterim
+                autoCheckUpdate = data[KEY_AUTO_CHECK_UPDATE] ?: true
                 loadedFlow.value = true
             }
         }
@@ -184,6 +195,11 @@ object Prefs {
         processGroupDisplay = enabled
         processGroupFlow.value = enabled
         context.prefsStore.edit { it[KEY_PROCESS_GROUP] = enabled }
+    }
+
+    suspend fun setAutoCheckUpdate(context: Context, enabled: Boolean) {
+        autoCheckUpdate = enabled
+        context.prefsStore.edit { it[KEY_AUTO_CHECK_UPDATE] = enabled }
     }
 
     suspend fun setExpandInterimStream(context: Context, enabled: Boolean) {

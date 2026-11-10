@@ -48,6 +48,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,6 +58,9 @@ import dev.pideck.nativeapp.data.AgentBackend
 import dev.pideck.nativeapp.data.AvailableModel
 import dev.pideck.nativeapp.data.Project
 import dev.pideck.nativeapp.data.SessionModel
+import dev.pideck.nativeapp.data.UpdateCenter
+import dev.pideck.nativeapp.data.UpdateState
+import dev.pideck.nativeapp.ui.common.openUrl
 import dev.pideck.nativeapp.data.thinkingLabel
 import dev.pideck.nativeapp.data.Session
 import dev.pideck.nativeapp.ui.theme.AppButton
@@ -131,6 +135,32 @@ fun HomeScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // 查到新版就横一条：只在「自动检查」开着且确实有新版本时出现，点开是 Release 页。
+            // 详细的「检查更新」在设置 → 更新（那儿还有一个开关），这里只做提醒。
+            (UpdateCenter.state as? UpdateState.Available)?.let { available ->
+                item("update-banner") {
+                    val context = LocalContext.current
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        onClick = { openUrl(context, available.release.pageUrl) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "有新版 ${available.release.versionName}（本机 ${UpdateCenter.currentVersion}）· 点这里看",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            }
+
             item {
                 Text(
                     "开始一个新会话",

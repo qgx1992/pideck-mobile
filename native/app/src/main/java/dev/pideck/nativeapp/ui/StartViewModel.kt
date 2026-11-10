@@ -14,6 +14,7 @@ import dev.pideck.nativeapp.data.SessionStateStore
 import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.PideckException
 import dev.pideck.nativeapp.data.StateFetch
+import dev.pideck.nativeapp.data.UpdateCenter
 import dev.pideck.nativeapp.data.PideckApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -40,6 +41,12 @@ class StartViewModel @Inject constructor(
         private set
 
     init {
+        // 启动时查一次新版：不阻塞落地、失败静默（结果放 UpdateCenter，首页横条与设置页各自读）。
+        // 与「落在哪一页」完全无关，所以先起协程再决定路由。
+        viewModelScope.launch {
+            Prefs.awaitLoaded()
+            if (Prefs.autoCheckUpdate) UpdateCenter.check()
+        }
         viewModelScope.launch {
             // 同 ConnectionResolver 的理由：读盘异常 / 迟迟不吐时不能把启动页卡死在这里
             val devices = withTimeoutOrNull(3_000) {

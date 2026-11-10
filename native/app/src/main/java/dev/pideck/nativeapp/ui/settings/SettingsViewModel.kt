@@ -15,6 +15,8 @@ import dev.pideck.nativeapp.data.DeviceRepository
 import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.StateCache
 import dev.pideck.nativeapp.data.ThemeMode
+import dev.pideck.nativeapp.data.UpdateCenter
+import dev.pideck.nativeapp.data.UpdateState
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -46,6 +48,15 @@ class SettingsViewModel @Inject constructor(
     var expandInterimStream by mutableStateOf(Prefs.expandInterimStream)
         private set
 
+    /** 启动时要不要自动查一次新版。 */
+    var autoCheckUpdate by mutableStateOf(Prefs.autoCheckUpdate)
+        private set
+
+    /** 检查更新的状态（唯一来源在 [UpdateCenter]，这里只是转给界面看）。 */
+    val updateState: UpdateState get() = UpdateCenter.state
+
+    val currentVersion: String get() = UpdateCenter.currentVersion
+
     var device by mutableStateOf<Device?>(null)
         private set
 
@@ -71,6 +82,7 @@ class SettingsViewModel @Inject constructor(
             collapseRestore = Prefs.collapseRestore
             processGroupDisplay = Prefs.processGroupFlow.first()
             expandInterimStream = Prefs.expandInterimFlow.first()
+            autoCheckUpdate = Prefs.autoCheckUpdate
         }
         viewModelScope.launch {
             val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
@@ -111,6 +123,16 @@ class SettingsViewModel @Inject constructor(
     fun chooseExpandInterimStream(enabled: Boolean) {
         expandInterimStream = enabled
         viewModelScope.launch { Prefs.setExpandInterimStream(context, enabled) }
+    }
+
+    fun toggleAutoCheckUpdate(enabled: Boolean) {
+        autoCheckUpdate = enabled
+        viewModelScope.launch { Prefs.setAutoCheckUpdate(context, enabled) }
+    }
+
+    /** 手点「检查更新」：不管之前查过什么都重来一次。 */
+    fun checkUpdate() {
+        viewModelScope.launch { UpdateCenter.check(force = true) }
     }
 
     fun removeDevice(id: String) {

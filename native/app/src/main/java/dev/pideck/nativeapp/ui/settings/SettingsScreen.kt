@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,6 +44,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.BuildConfig
@@ -52,6 +54,9 @@ import dev.pideck.nativeapp.ui.theme.AppIconButton
 import dev.pideck.nativeapp.ui.theme.SelectChip
 import dev.pideck.nativeapp.data.HostCompat
 import dev.pideck.nativeapp.data.ThemeMode
+import dev.pideck.nativeapp.data.UpdateCheck
+import dev.pideck.nativeapp.data.UpdateState
+import dev.pideck.nativeapp.ui.common.openUrl
 
 /**
  * 设置项的下拉选择器：一枚和首页同款的胶囊，点开是带勾的菜单。
@@ -282,6 +287,78 @@ fun SettingsScreen(
                     )
                 }
             }
+
+            Spacer(Modifier.height(12.dp))
+            SectionTitle("更新")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("启动时自动检查", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "开着时，每次打开 App 去 GitHub 看一眼有没有新版本（一条请求，查不到不提示）。关掉之后只有下面这个按钮会发请求。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = viewModel.autoCheckUpdate,
+                    onCheckedChange = { viewModel.toggleAutoCheckUpdate(it) },
+                )
+            }
+            val update = viewModel.updateState
+            val context = LocalContext.current
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AppButton(
+                    text = "检查更新",
+                    onClick = { viewModel.checkUpdate() },
+                    style = AppButtonStyle.Tonal,
+                    icon = Icons.Default.Refresh,
+                    enabled = update !is UpdateState.Checking,
+                )
+                Text(
+                    dev.pideck.nativeapp.data.UpdateCenter.describeState(update),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = when (update) {
+                        is UpdateState.Available -> MaterialTheme.colorScheme.primary
+                        is UpdateState.Failed -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            // 有新版本才出现这两个出口：想去页面看说明就去页面，想直接装就直接下 APK。
+            // 直链指向 Release 附件（CI 签的包），不是 8080 那边的本地包 —— 两者签名不同、不能互相覆盖升级。
+            (update as? UpdateState.Available)?.let { available ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AppButton(
+                        text = "看这一版改了什么",
+                        onClick = { openUrl(context, available.release.pageUrl) },
+                        style = AppButtonStyle.Ghost,
+                    )
+                    available.release.apkUrl?.let { apk ->
+                        AppButton(
+                            text = "直接下 APK",
+                            onClick = { openUrl(context, apk) },
+                            style = AppButtonStyle.Ghost,
+                        )
+                    }
+                }
+            }
+            Text(
+                "更新源是 GitHub Releases（${UpdateCheck.REPO}）。这里不自动装包：下载完点开系统安装器，覆盖安装即可，数据都在。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
 
             Spacer(Modifier.height(12.dp))
             SectionTitle("关于")
