@@ -155,6 +155,20 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
   （汉字占非空白字符 ≥15% 当中文）。浮窗的翻译按钮只给 `DetailContent.translatable = true` 的
   （思考卡），工具卡不给 —— 命令输出里翻 JSON 参数没有意义。
 
+### 检查更新：只有一条对外请求（0.5.49 起）
+
+- 唯一来源是 GitHub Releases 的 `/releases/latest`（`data/UpdateCheck.kt` 的 `LATEST_URL`），
+  **不要**去宿主 `/api/*` 找 —— 宿主的 Web 服务只管桌面端自己，它不知道 Releases 里有什么。
+- 比版本用 `UpdateCheck.isNewer`（点分段逐段比），**不要**用 `versionCode = major*1000+minor*100+patch`
+  反推：patch 跨 99 时 `0.5.100` 与 `0.6.0` 都算 600，一比就错。
+- 状态只有一处（`data/UpdateCenter.kt` 的 `mutableStateOf`）：设置页读它写状态文案，首页读它出横条。
+  同一时刻只放一条请求（`inFlight`），查到新版后不重复查，手点按钮走 `check(force = true)`。
+- 「启动时自动检查」是 `Prefs.autoCheckUpdate`（默认开），由 `ui/StartViewModel.kt` 在决定落地页的
+  那个协程旁边另起一条去查（`Prefs.awaitLoaded()` 之后读开关）。失败静默：没网的人不该每次启动都看到红字。
+- 本 App **不自动装包**：只给「看 Release 页」和「直接下 APK」两个出口（`ui/common/Links.kt` 的 `openUrl`）。
+- 发版时想验证这套逻辑：本地包号比 Release 低一档即可（0.5.49 装本地、0.5.50 发 Release），
+  设置里应当报「有新版 0.5.50」。
+
 ## 原生客户端（0.5.x，2026-11 起接管）
 
 现在的客户端是纯 Kotlin + Compose，源码在 `native/app/src/main/java/dev/pideck/nativeapp/`，
