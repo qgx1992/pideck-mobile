@@ -29,7 +29,6 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.clickable
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -214,13 +213,21 @@ fun ChatScreen(
     // 现在只在两个时刻改标记：用户开始拖列表 → false；列表再也滚不动（真到底了）→ true。
     // 追加内容不算「用户滚动」，所以不会把标记打掉。
     var atBottom by remember { mutableStateOf(true) }
-    val dragging by listState.interactionSource.collectIsDraggedAsState()
-    LaunchedEffect(dragging) {
-        if (dragging) atBottom = false
-    }
+    // 「离开底部」只有一种成立方式：**用户自己滚动**，并且滚完确实还能往下滚。
+    //
+    // 以前是「一开始拖就把标记打掉」，于是贴底时手指往上顶一下（到底后的回弹）也会掉标记、
+    // 冒出「回到底部」按钮 —— 明明就在底部。现在同时看两件事：
+    //   正在滚动（`isScrollInProgress`，拖和甩都算）+ 还能往下滚（`canScrollForward`）。
+    // 只有两个都为真才认定「用户翻上去了」；只要再也滚不动，就回到贴底。
+    // 流式追加内容时 `canScrollForward` 会短暂为真，但那时没有用户在滚，不会误判。
     LaunchedEffect(listState) {
-        snapshotFlow { listState.canScrollForward }
-            .collect { canForward -> if (!canForward) atBottom = true }
+        snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
+            .collect { (moving, canForward) ->
+                when {
+                    moving && canForward -> atBottom = false
+                    !canForward -> atBottom = true
+                }
+            }
     }
 
     // 贴底时把列表钉在最底部：scrollOffset 给一个大值，LazyList 会自己夹到最大滚动量，
