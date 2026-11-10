@@ -23,6 +23,7 @@ import dev.pideck.nativeapp.data.CacheStat
 import dev.pideck.nativeapp.data.CacheStatBuilder
 import dev.pideck.nativeapp.data.ChatPayloads
 import dev.pideck.nativeapp.data.PendingUiRequest
+import dev.pideck.nativeapp.data.ForkEdit
 import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.PrivilegeControl
@@ -1775,6 +1776,112 @@ class ChatViewModel @Inject constructor(
         turnFirstTextAt = 0L
         turnFirstAnyAt = 0L
         turnEndedAt = 0L
+    }
+
+
+    // ── 编辑并重发（pi 的 fork） ───────────────────────────────────────────
+    //
+    // 宿主只给 pi 后端开放这套动作（`runtime/get-fork-messages` + `runtime/fork`），
+    // dsh / acp 的会话在界面上就不出现这个入口。fork 会在磁盘上另起一个 pi 会话文件，
+    // 旧文件保留，所以「改错了」还能回桌面端找回原样。
+
+    /** 正在编辑的那条用户消息（null = 对话框没开）。 */
+    var editItem by mutableStateOf<TimelineItem.UserMessage?>(null)
+        private set
+
+    var editDraft by mutableStateOf("")
+        private set
+
+    var editBusy by mutableStateOf(false)
+        private set
+
+    var editError by mutableStateOf<String?>(null)
+        private set
+
+    fun openEditMessage(item: TimelineItem.UserMessage) {
+        if (backend != null && backend != "pi") {
+            actionNote = "这个会话不是 pi 后端，宿主没给它 fork 入口"
+            return
+        }
+        editItem = item
+        editDraft = item.text
+        editError = null
+    }
+
+    fun editDraftChanged(value: String) {
+        editDraft = value
+    }
+
+    fun closeEditMessage() {
+        if (editBusy) return
+        editItem = null
+        editError = null
+    }
+
+    /**
+     * 把这条用户消息「改一句重发」：宿主按 `entryId` fork 出新的会话分支，然后照常发这句新的。
+     *
+     * 顺序是宿主定的：`activate`（运行时没起来时）→ `get-fork-messages`（按正文反查 entryId，
+     * 消息里没有 entryId）→ `fork {entryId, mutationFork:true}` → 走 [send] 把新文本发出去。
+     * `mutationFork` 只传显式 true：宿主把其余值一律当 false。
+     */
+    fun confirmEditMessage() {
+        val item = editItem ?: return
+        val text = editDraft.trim()
+        if (text.isEmpty() || editBusy) return
+        val target = device ?: return
+        viewModelScope.launch {
+            editBusy = true
+            editError = null
+            try {
+                var runtime = runtimeTarget()
+                if (runtime == null) {
+                    // 冷会话：先让宿主把运行时拉起来（host 只校验 target.sessionId 对得上）
+                    runCatching {
+                        api.runtimeCommand(
+                            target,
+                            token,
+                            RuntimeTarget(sessionId, "", 0L),
+                            "activate",
+                        )
+                    }
+                    refreshStateQuietly(target)
+                    runtime = runtimeTarget()
+                }
+                if (runtime == null) {
+                    editError = "这个会话的运行时还没起来 —— 先发一句话再来改"
+                    return@launch
+                }
+                val raw = api.runtimeCommand(target, token, runtime, "get-fork-messages")
+                val entryId = ForkEdit.entryIdFor(raw, item.text)
+                if (entryId == null) {
+                    editError = "宿主没给这条消息的 fork 入口（只有落过盘的 pi 会话可以改）"
+                    return@launch
+                }
+                api.runtimeCommand(
+                    target,
+                    token,
+                    runtime,
+                    "fork",
+                    buildJsonObject {
+                        put("entryId", entryId)
+                        put("mutationFork", true)
+                        put("branchMode", false)
+                    },
+                )
+                editItem = null
+                editDraft = ""
+                // fork 之后会话文件换了，历史要重拉一次（旧的后半段不该再显示）
+                refreshHistory()
+                send(text)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                editError = describeConnectionError(e)
+            } finally {
+                editBusy = false
+            }
+        }
     }
 
     fun refreshHistory() {

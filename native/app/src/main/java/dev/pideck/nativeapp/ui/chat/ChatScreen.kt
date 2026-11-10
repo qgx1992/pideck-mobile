@@ -93,6 +93,7 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
@@ -909,6 +910,10 @@ fun ChatScreen(
                 actionTarget = null
                 freeCopyTarget = target
             },
+            onEditMessage = {
+                actionTarget = null
+                (target as? TimelineItem.UserMessage)?.let(viewModel::openEditMessage)
+            },
             onCopy = { text ->
                 clipboard.setText(AnnotatedString(text))
                 actionTarget = null
@@ -917,6 +922,10 @@ fun ChatScreen(
         )
     }
 
+
+    viewModel.editItem?.let {
+        EditMessageDialog(viewModel)
+    }
 
     if (showModelSheet) {
         ModelSheet(
@@ -2219,6 +2228,57 @@ private fun clock(millis: Long): String =
  * 只做「拿走内容」这一类动作（复制全文 / 复制代码块 / 复制思考过程），
  * 不做编辑或删除 —— 消息的权威副本在桌面端，这边改不动也不该假装能改。
  */
+/**
+ * 「编辑并重发」：改的是**这一条**用户消息，宿主会按 fork 出新的会话分支再把这句发出去。
+ *
+ * 原话保留一句话提醒「旧的分支还在磁盘上」，因为 pi 的 fork 不是就地改写。
+ */
+@Composable
+private fun EditMessageDialog(viewModel: ChatViewModel) {
+    AlertDialog(
+        onDismissRequest = { viewModel.closeEditMessage() },
+        title = { Text("编辑并重发") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = viewModel.editDraft,
+                    onValueChange = viewModel::editDraftChanged,
+                    label = { Text("这一句改成") },
+                    enabled = !viewModel.editBusy,
+                    minLines = 2,
+                    maxLines = 8,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                viewModel.editError?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Text(
+                    "会从这句开始 fork 出一个新分支，原来的分支留在会话文件里（桌面端还能找回）。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = viewModel::confirmEditMessage,
+                enabled = viewModel.editDraft.isNotBlank() && !viewModel.editBusy,
+            ) {
+                Text(if (viewModel.editBusy) "处理中…" else "重发")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { viewModel.closeEditMessage() }, enabled = !viewModel.editBusy) {
+                Text("取消")
+            }
+        },
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MessageActionsSheet(
@@ -2226,6 +2286,7 @@ private fun MessageActionsSheet(
     onDismiss: () -> Unit,
     onCopy: (String) -> Unit,
     onFreeCopy: () -> Unit,
+    onEditMessage: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
     val text = when (item) {
@@ -2258,6 +2319,15 @@ private fun MessageActionsSheet(
                 enabled = text.isNotBlank(),
                 onClick = onFreeCopy,
             )
+            if (item is TimelineItem.UserMessage) {
+                // 只对 pi 后端出现（dsh / acp 宿主没有 fork 动作），判定在 ViewModel 里
+                SheetAction(
+                    label = "编辑并重发",
+                    detail = "从这一句 fork 出新分支",
+                    enabled = text.isNotBlank(),
+                    onClick = onEditMessage,
+                )
+            }
             if (codes.isNotEmpty()) {
                 SheetAction(
                     label = "复制代码块",
