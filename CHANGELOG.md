@@ -1,3 +1,16 @@
+## 0.5.54 — 2026-11-10
+
+**长按自己发的那句 → 「编辑并重发」。**
+
+- 走宿主已有的 pi fork 协议：`runtime/activate`（运行时没起来时）→ `runtime/get-fork-messages`
+  → `runtime/fork {entryId, mutationFork: true}` → 照常 `prompt` 发新文本。
+- 宿主回包里的 `get_fork_messages` 只有 `{entryId, text}`，消息本身没带 entryId，所以按正文反查；
+  同一句说过两次时取**最后一条**（`data/ForkEdit.kt`，纯函数，8 条单测）。
+- fork 会另起一个 pi 会话文件，旧分支留在磁盘上 —— 对话框里写明了这一点。
+- 只对 pi 后端出现：dsh / acp 的宿主没有 fork 动作；判定在 `ChatViewModel.openEditMessage`，
+  界面不自己猜。
+- 单测 351 → 359。
+
 ## 0.5.53 — 2026-11-10
 
 **运行态改走宿主的推流（`/api/events`），不再只靠 5 秒轮询。**
