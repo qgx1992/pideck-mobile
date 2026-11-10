@@ -1,44 +1,55 @@
 package dev.pideck.nativeapp.data
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 
 /**
  * 「编辑并重发」用到的 pi fork 协议。
  *
- * 宿主那侧走的是 `runtime/get-fork-messages` + `runtime/fork {entryId, mutationFork}`：
- * `get_fork_messages` 的 RPC 回包是 `{messages: [{entryId, text}]}`，Web 路由再包一层
- * `{result: …}`。手机上只有消息正文（`meta` 里没有 entryId），所以按正文反查 ——
- * **从后往前找第一条相同正文**：同一句话说过两次时，用户在气泡上长按的通常是最新那条。
+ * 宿主那侧走的是 `runtime/get-fork-messages` + `runtime/fork {entryId, mutationFork}`。
+ * 0.11.x 的实测回包**套了三层**（0.5.54 第一版只认平铺形状，于是永远说「宿主没给 fork 入口」）：
+ *
+ * ```json
+ * {"result":{"ok":true,"value":{"target":{…},"value":[{"entryId":"55aef2ba","text":"不用了，我自己操作"}]}}}
+ * ```
+ *
+ * 所以这里不再猜具体层级，直接递归找「第一个装着 `entryId` 的数组」。
  */
 object ForkEdit {
 
     /** 一条可以 fork 的入口（pi 的 `get_fork_messages` 一项）。 */
     data class ForkPoint(val entryId: String, val text: String)
 
-    /**
-     * 解析 `runtime/get-fork-messages` 的回包。
-     *
-     * 认三种形状（宿主版本不同包法不同）：`{result:[…]}`、`{result:{messages:[…]}}`、
-     * 直接 `{messages:[…]}`。解析不出就给空列表 —— 调用方按「拿不到入口」提示。
-     */
+    private const val MAX_DEPTH = 6
+
+    /** 解析 `runtime/get-fork-messages` 的回包；认不出就是空列表。 */
     fun points(raw: String): List<ForkPoint> {
-        val root = runCatching { PideckJson.parseToJsonElement(raw) }.getOrNull() as? JsonObject
+        val root = runCatching { PideckJson.parseToJsonElement(raw) }.getOrNull()
             ?: return emptyList()
-        val payload = root["result"] ?: root
-        val array: JsonArray = when (payload) {
-            is JsonArray -> payload
-            is JsonObject -> (payload["messages"] as? JsonArray) ?: return emptyList()
-            else -> return emptyList()
-        }
-        return array.mapNotNull { element ->
-            val obj = element as? JsonObject ?: return@mapNotNull null
-            val id = (obj["entryId"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
-            val text = (obj["text"] as? JsonPrimitive)?.content ?: ""
-            id?.let { ForkPoint(it, text) }
+        return arrayOfPoints(root, 0)
+    }
+
+    private fun arrayOfPoints(node: JsonElement, depth: Int): List<ForkPoint> {
+        if (depth > MAX_DEPTH) return emptyList()
+        return when (node) {
+            is JsonArray -> {
+                val parsed = node.mapNotNull { element ->
+                    val obj = element as? JsonObject ?: return@mapNotNull null
+                    val id = (obj["entryId"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+                    val text = (obj["text"] as? JsonPrimitive)?.content ?: ""
+                    id?.let { ForkPoint(it, text) }
+                }
+                // 数组里没有 entryId 时继续往下找（回包里可能还嵌着别的数组）
+                if (parsed.isNotEmpty()) parsed else node.firstOrNull { arrayOfPoints(it, depth + 1).isNotEmpty() }?.let { arrayOfPoints(it, depth + 1) }.orEmpty()
+            }
+
+            is JsonObject -> node.values
+                .firstOrNull { arrayOfPoints(it, depth + 1).isNotEmpty() }
+                ?.let { arrayOfPoints(it, depth + 1) }
+                .orEmpty()
+            else -> emptyList()
         }
     }
 
@@ -53,17 +64,23 @@ object ForkEdit {
         return points(raw).lastOrNull { it.text.trim() == wanted }?.entryId
     }
 
-    /** 宿主回包里的 `result` 若自带提示，就把它原样带出来给用户看。 */
+    /** 宿主回包里若带 `error`（`{result:{ok:false,error:"…"}}` 之类），原样交给界面。 */
     fun failureText(raw: String): String? {
-        val root = runCatching { PideckJson.parseToJsonElement(raw).jsonObject }.getOrNull()
+        val root = runCatching { PideckJson.parseToJsonElement(raw) }.getOrNull()
             ?: return null
-        val result = root["result"] as? JsonObject ?: return null
-        val error = (result["error"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
-        return error
+        return errorOf(root, 0)
     }
 
-    /** 测试与调试用：把 `{messages:[…]}` 的条数读出来。 */
-    internal fun count(raw: String): Int = runCatching {
-        PideckJson.parseToJsonElement(raw).jsonObject["result"]!!.jsonArray.size
-    }.getOrDefault(0)
+    private fun errorOf(node: JsonElement, depth: Int): String? {
+        if (depth > MAX_DEPTH) return null
+        return when (node) {
+            is JsonObject -> {
+                val direct = (node["error"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+                direct ?: node.values.firstNotNullOfOrNull { errorOf(it, depth + 1) }
+            }
+
+            is JsonArray -> node.firstNotNullOfOrNull { errorOf(it, depth + 1) }
+            else -> null
+        }
+    }
 }

@@ -9,7 +9,9 @@
 - fork 会另起一个 pi 会话文件，旧分支留在磁盘上 —— 对话框里写明了这一点。
 - 只对 pi 后端出现：dsh / acp 的宿主没有 fork 动作；判定在 `ChatViewModel.openEditMessage`，
   界面不自己猜。
-- 单测 351 → 359。
+- **同版第二稿**：0.11.x 的 `get-fork-messages` 回包是三层嵌套（`result.value.value[]`），
+  第一版只认平铺形状，真机上永远报「宿主没给 fork 入口」；改成递归找「装着 entryId 的数组」。
+- 单测 351 → 360。
 
 ## 0.5.53 — 2026-11-10
 

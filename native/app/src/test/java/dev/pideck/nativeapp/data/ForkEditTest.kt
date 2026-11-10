@@ -57,4 +57,14 @@ class ForkEditTest {
         assertEquals("boom", ForkEdit.failureText("""{"result":{"error":"boom"}}"""))
         assertNull(ForkEdit.failureText(flat))
     }
+
+    @Test
+    fun `host 0_11 triple nested payload is parsed`() {
+        // 实测回包（0.11.3）：result.ok / value.target / value.value[]
+        val raw = """{"result":{"ok":true,"value":{"target":{"sessionId":"s","agentId":"a","runtimeGeneration":1},"value":[{"entryId":"55aef2ba","text":"不用了，我自己操作"},{"entryId":"62a9b848","text":"生图skill是哪个"}]}}}"""
+        val points = ForkEdit.points(raw)
+        assertEquals(2, points.size)
+        assertEquals("55aef2ba", ForkEdit.entryIdFor(raw, "不用了，我自己操作"))
+        assertEquals("62a9b848", ForkEdit.entryIdFor(raw, " 生图skill是哪个 "))
+    }
 }
