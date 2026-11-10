@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
@@ -38,6 +39,14 @@ import kotlin.coroutines.resumeWithException
  * 这样 Ktor mock 与真机可以用同一份实现跑同一批断言。
  */
 interface PideckApi {
+    /**
+     * 宿主的 `/api/events`：SSE，`event: state` 的 `data` 就是整份 `/api/state` 载荷。
+     *
+     * 宿主自己做了 400ms 去抖 + 5s 兜底 tick，内容没变不推帧；15s 一个 `: ping` 心跳，
+     * 所以这条流能长期挂着（走 SSE 的 `client`，读不超时）。
+     */
+    fun stateEvents(device: Device, token: String?): Flow<String>
+
     suspend fun state(device: Device, token: String?, etag: String? = null): StateFetch
 
     suspend fun messagesPage(
@@ -252,6 +261,16 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         .build()
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
+
+    override fun stateEvents(device: Device, token: String?): Flow<String> {
+        val request = requestBuilder(device, token, "/api/events")
+            .header("accept", "text/event-stream")
+            .build()
+        return streamOf(request).mapNotNull { frame ->
+            // 只有 state 帧带载荷；心跳是注释行，EventSource 不会当事件抛上来
+            if (frame.type == "state") frame.data?.takeIf { it.isNotBlank() } else null
+        }
+    }
 
     override suspend fun state(device: Device, token: String?, etag: String?): StateFetch =
         withContext(Dispatchers.IO) {

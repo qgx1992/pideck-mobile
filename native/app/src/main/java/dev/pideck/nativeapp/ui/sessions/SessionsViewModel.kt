@@ -21,7 +21,9 @@ import dev.pideck.nativeapp.ui.common.message
 import dev.pideck.nativeapp.data.StateFetch
 import dev.pideck.nativeapp.data.describeConnectionError
 import dev.pideck.nativeapp.watch.RunWatcher
+import dev.pideck.nativeapp.data.PideckJson
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -88,6 +90,9 @@ class SessionsViewModel @Inject constructor(
     private var device: Device? = null
     private var token: String? = null
     private var etag: String? = null
+
+    /** `/api/events` 推流的收集协程（设备就绪后挂上；失败不重连，靠轮询兜底）。 */
+    private var streamJob: Job? = null
     private var firstResume = true
 
     var deviceName by mutableStateOf<String?>(null)
@@ -212,6 +217,37 @@ class SessionsViewModel @Inject constructor(
                 token = conn.token
             }
             refresh()
+            startStateStream()
+        }
+    }
+
+    /**
+     * `/api/events` 推流：宿主把整份状态推下来（等同 `/api/state`），比 5 秒轮询及时得多。
+     *
+     * 失败静默 —— 断网时退回原来的 `/api/state`（进页面 / 回前台）与抽屉里 `/api/sessions/runtimes`
+     * 轮询，功能不受影响。流里来的更新会让本地 ETag 作废，否则下一次 `refresh()` 会拿旧 ETag
+     * 换回 304，把刚推下来的状态又按「没变化」处理。
+     */
+    private fun startStateStream() {
+        val target = device ?: return
+        if (streamJob?.isActive == true) return
+        streamJob = viewModelScope.launch {
+            try {
+                api.stateEvents(target, token).collect { json ->
+                    val payload = runCatching {
+                        PideckJson.decodeFromString(PideckState.serializer(), json)
+                    }.getOrNull() ?: return@collect
+                    state = payload
+                    etag = null
+                    stateStore.put(deviceId, payload)
+                    if (loadState !is LoadState.Ready) loadState = LoadState.Ready
+                    if (payload.runtimes.any { it.isRunning }) platform.watchRuns()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // 推流断了就靠轮询兜底，不打扰用户
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 package dev.pideck.nativeapp.data
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -39,6 +40,9 @@ open class FakePideckApi : PideckApi {
 
     override suspend fun renameSession(device: Device, token: String?, sessionId: String, title: String): Unit =
         throw NotImplementedError("FakePideckApi.renameSession 未打桩")
+
+    /** 推流默认给一条空流：ViewModel 的 init 会挂它，抛异常会冒到测试线程上当失败。 */
+    override fun stateEvents(device: Device, token: String?): Flow<String> = emptyFlow()
 
     override suspend fun createProject(device: Device, token: String?, path: String): Project? =
         throw NotImplementedError("FakePideckApi.createProject 未打桩")
