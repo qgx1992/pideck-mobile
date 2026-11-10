@@ -13,6 +13,13 @@ data class ToolView(
     val input: String? = null,
     val output: String? = null,
     val errorText: String? = null,
+    /**
+     * 工具结果里带的图片（宿主 0.11.0 起：生图类扩展把图放在工具结果里）。
+     *
+     * 历史投影会挂 `images: [{type, data, mimeType}]`（裸 base64）；
+     * 流式那边的 tool part 没有这个字段，所以这一路只有补拉历史之后才有图。
+     */
+    val images: List<MessageImage> = emptyList(),
 ) {
     val isError: Boolean get() = state == "output-error"
     val isSettled: Boolean get() = state == "output-available" || state == "output-error"
@@ -65,6 +72,7 @@ fun List<ChatMessage>.toTimelineItems(): List<TimelineItem> = mapNotNull { messa
                             input = meta.string("args") ?: meta.raw("args"),
                             output = meta.raw("result")?.takeIf { it.isNotBlank() && it != "null" },
                             errorText = if (error) meta.string("detailText") ?: message.text else null,
+                            images = message.images.filter { it.data.isNotBlank() },
                         ),
                     ),
                     timestamp = message.timestamp,

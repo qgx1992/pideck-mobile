@@ -1525,6 +1525,7 @@ private fun ToolCard(tool: ToolView, onOpen: () -> Unit = {}) {
             .fillMaxWidth()
             .softPress(RoundedCornerShape(10.dp), onOpen),
     ) {
+        Column {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1558,6 +1559,15 @@ private fun ToolCard(tool: ToolView, onOpen: () -> Unit = {}) {
                     modifier = Modifier.size(15.dp),
                 )
             }
+        }
+        // 工具结果里的图片（宿主 0.11.0 起）：折叠态就给缩略图，不然用户只看到一句保存路径。
+        if (tool.images.isNotEmpty()) {
+            MessageImages(
+                images = tool.images,
+                keyPrefix = "tool-${tool.id}",
+                modifier = Modifier.padding(horizontal = 10.dp).padding(bottom = 8.dp),
+            )
+        }
         }
     }
 }

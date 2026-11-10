@@ -2,6 +2,8 @@ package dev.pideck.nativeapp.data
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -126,5 +128,33 @@ class TimelineTest {
         val images = (page.messages.toTimelineItems().single() as TimelineItem.UserMessage).images
         assertEquals(1, images.size)
         assertEquals("image/jpeg", images.single().mimeType)
+    }
+
+    @Test
+    fun `tool result images are kept on the tool card`() {
+        val message = ChatMessage(
+            id = "t-img",
+            role = "tool",
+            text = "✓ imagegen",
+            timestamp = 1_700_000_000_000,
+            meta = buildJsonObject {
+                put("toolName", JsonPrimitive("imagegen"))
+                put("status", JsonPrimitive("done"))
+                put("result", JsonPrimitive("saved to /tmp/a.png"))
+            },
+            images = listOf(MessageImage(type = "image", data = "/9j/AAAA", mimeType = "image/png")),
+        )
+        val item = listOf(message).toTimelineItems().single() as TimelineItem.AssistantMessage
+        assertEquals(1, item.tools.single().images.size)
+        assertEquals("image/png", item.tools.single().images.single().mimeType)
+    }
+
+    @Test
+    fun `history json with tool images decodes`() {
+        val json = """{"messages":[{"id":"t1","role":"tool","text":"✓ imagegen","timestamp":1700000000000,
+            "meta":{"toolName":"imagegen"},"images":[{"type":"image","data":"iVBORw0KGgo","mimeType":"image/png"}]}],"total":1}"""
+        val page = PideckJson.decodeFromString(SessionMessagePage.serializer(), json)
+        val item = page.messages.toTimelineItems().single() as TimelineItem.AssistantMessage
+        assertEquals(1, item.tools.single().images.size)
     }
 }

@@ -325,6 +325,11 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   `/api/state.version` 是桌面端 0.10.0 才加的常量字段，老宿主解析出来是 null。
   设置页已显示版本，`BASELINE` 只在本客户端**真的重新对过一遍接口**时才涨；低于基线给提示，
   版本未知不给 —— 拿不到版本不等于宿主旧。
+  0.11.0–0.11.3 实测（手机端 0.5.51 起以 0.11.0 为基线）：路由集合 33 条全同、
+  `toPublicSession` 字段逐字节相同、`/api/state` 键相同、流帧类型相同；唯一新增是 `role:"tool"`
+  的消息会带 `images`（生图类扩展把图放进工具结果，裸 base64），手机端在 `data/Timeline.kt` 的
+  `ToolView.images` 上接住、`ToolCard` 折叠态就渲染缩略图。流式那一帧里宿主没给图，
+  所以刚跑完要等一次补拉历史。
   对账方法：把桌面端 `resources/app.asar` 用 `npx @electron/asar extract` 解开，
   比路由字符串集合、`getState()` / `toPublicSession` / `/api/chat` 的处理代码、以及 `data-*` 流帧集合。
   0.10.0 实测：路由 28 条全同、七处处理代码逐字节相同、`/api/state` 只多了 `version`、

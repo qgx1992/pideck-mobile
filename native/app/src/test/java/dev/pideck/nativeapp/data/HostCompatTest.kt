@@ -27,8 +27,9 @@ class HostCompatTest {
     fun olderThanBaseline() {
         assertTrue(HostCompat.isOlderThanBaseline("0.9.9"))
         assertTrue(HostCompat.isOlderThanBaseline("0.9.99"))
-        assertFalse(HostCompat.isOlderThanBaseline("0.10.0"))
-        assertFalse(HostCompat.isOlderThanBaseline("0.10.1"))
+        assertFalse(HostCompat.isOlderThanBaseline("0.11.0"))
+        assertTrue(HostCompat.isOlderThanBaseline("0.10.0"))
+        assertTrue(HostCompat.isOlderThanBaseline("0.10.3"))
         assertFalse(HostCompat.isOlderThanBaseline("1.0.0"))
     }
 
@@ -40,7 +41,7 @@ class HostCompatTest {
 
     @Test
     fun hintOnlyForOlderHosts() {
-        assertNull(HostCompat.hint("0.10.0"))
+        assertNull(HostCompat.hint("0.11.3"))
         val hint = HostCompat.hint("0.9.9")
         assertTrue(hint != null && hint.contains(HostCompat.BASELINE))
     }
