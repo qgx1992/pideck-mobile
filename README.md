@@ -10,16 +10,16 @@
 
 **本项目全程由 AI 开发**（从第一行 Compose 代码到最后那个 APK），感兴趣可以点个 ⭐。
 
-当前版本 **0.5.50**（`versionCode 550`），包名 `top.caoayu.pideck`，
+当前版本 **0.5.51**（`versionCode 551`），包名 `top.caoayu.pideck`，
 Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
-> **适配的桌面端版本：0.10.0**（截至 0.5.41 对过一遍路由、字段与流帧）。
-> 桌面端升级后会先跑探针与单测再跟；版本低于 0.10.0 时设置页会给一行提示，
+> **适配的桌面端版本：0.11.0**（0.11.0–0.11.3 与 0.10.0 的路由、字段、流帧一致；0.5.51 重新对过一遍）。
+> 桌面端升级后会先跑探针与单测再跟；版本低于 0.11.0 时设置页会给一行提示，
 > 见下表「兼容性」一行。
 
 ```bash
 cd native
-./gradlew :app:testDebugUnitTest    # 349 条 JVM 单测
+./gradlew :app:testDebugUnitTest    # 351 条 JVM 单测
 ./gradlew :app:assembleRelease      # app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -29,7 +29,7 @@ cd native
 
 ---
 
-## 它现在能做什么（0.5.50）
+## 它现在能做什么（0.5.51）
 
 | 能力 | 说明 |
 |---|---|
@@ -48,7 +48,7 @@ cd native
 | **快捷消息** | 同一面板第一段：点一条插进输入框、箭头直接发送；清单存在手机上（桌面端那份是 IPC 私有配置，手机读不到） |
 | **本机模板** | 提示词库上半段：新建/预览/删除长模板，存在手机上补位（桌面端 `~/.pi/agent/prompts` 的 .md 模板只有 IPC） |
 | **更新** | 设置 → 更新：手点「检查更新」+「启动时自动检查」开关；读 GitHub Releases 的 tag 逐段比版本，有新版本时首页顶上横一条提醒，可跳 Release 页或直接下 APK |
-| **兼容性** | 按桌面端 0.10.0 对过接口（路由、字段、流帧都未变）；设置页显示桌面端版本，低于 0.10.0 时给一行适配提示 |
+| **兼容性** | 按桌面端 0.11.0 对过接口（路由、字段、流帧都未变；新增 tool 消息的 `images`）；设置页显示桌面端版本，低于 0.11.0 时给一行适配提示 |
 | **后台** | 有会话在跑就拉起 `dataSync` 前台服务，跑完发通知（可在设置里关）；回到前台自动续上 |
 | **外观** | 深 / 浅 / 跟随系统；系统栏颜色跟随主题（Android 15 强制 edge-to-edge 后按窗口背景取色） |
 
@@ -62,7 +62,7 @@ native/                       唯一在发的产物
 │  ├─ ui/home · sessions · devices · settings · pairing · splash
 │  ├─ watch/                 RunWatchService（前台服务）+ 通知
 │  └─ di/                    Hilt
-└─ app/src/test/             349 条 JVM 单测（纯逻辑；含真桌面端联调的 Live* 用例，无设置时自动跳过）
+└─ app/src/test/             351 条 JVM 单测（纯逻辑；含真桌面端联调的 Live* 用例，无设置时自动跳过）
 ```
 
 设计上的三条约定：
