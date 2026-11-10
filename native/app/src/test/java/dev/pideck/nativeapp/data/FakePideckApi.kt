@@ -40,6 +40,9 @@ open class FakePideckApi : PideckApi {
     override suspend fun renameSession(device: Device, token: String?, sessionId: String, title: String): Unit =
         throw NotImplementedError("FakePideckApi.renameSession 未打桩")
 
+    override suspend fun createProject(device: Device, token: String?, path: String): Project? =
+        throw NotImplementedError("FakePideckApi.createProject 未打桩")
+
     override suspend fun deleteSession(device: Device, token: String?, sessionId: String): Unit =
         throw NotImplementedError("FakePideckApi.deleteSession 未打桩")
 

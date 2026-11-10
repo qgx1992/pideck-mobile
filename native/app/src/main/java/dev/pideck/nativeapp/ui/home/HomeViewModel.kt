@@ -230,6 +230,64 @@ class HomeViewModel @Inject constructor(
         selectedProjectId = projectId
     }
 
+    /** 新建工作区的输入框与状态（首页那颗胶囊的下拉里有一项「新建工作区…」）。 */
+    var workspaceEditorOpen by mutableStateOf(false)
+
+    var workspacePath by mutableStateOf("")
+
+    var workspaceBusy by mutableStateOf(false)
+
+    var workspaceError by mutableStateOf<String?>(null)
+
+    fun openWorkspaceEditor() {
+        workspacePath = ""
+        workspaceError = null
+        workspaceEditorOpen = true
+    }
+
+    fun closeWorkspaceEditor() {
+        if (workspaceBusy) return
+        workspaceEditorOpen = false
+    }
+
+    fun editWorkspacePath(value: String) {
+        workspacePath = value
+    }
+
+    /**
+     * 在桌面端那台机器上登记一个目录作为工作区。
+     *
+     * 宿主只认「路径非空」：路径写错也会建出来一个空项目，所以成功后把新建的那个直接选上
+     * （`POST` 有回包就按 id 选，没回包就按路径找），让用户立刻看到结果。
+     */
+    fun createWorkspace() {
+        val target = device ?: return
+        val path = workspacePath.trim()
+        if (path.isEmpty() || workspaceBusy) return
+        viewModelScope.launch {
+            workspaceBusy = true
+            workspaceError = null
+            try {
+                val created = api.createProject(target, token, path)
+                // 新建的项目一定不在旧快照里，清掉 ETag 逼一次全量，别拿 304 把新项目挡掉
+                etag = null
+                load()
+                val id = created?.id
+                if (id != null) {
+                    selectedProjectId = id
+                    workspaceEditorOpen = false
+                    workspacePath = ""
+                } else {
+                    workspaceError = "桌面端没有回报这个工作区，刷新一下看看"
+                }
+            } catch (e: Exception) {
+                workspaceError = describeConnectionError(e)
+            } finally {
+                workspaceBusy = false
+            }
+        }
+    }
+
     /**
      * 在 [projectId] 下开一个空会话，成功后把 id 交回 UI（UI 负责跳转）。
      *

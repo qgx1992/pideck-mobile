@@ -96,6 +96,14 @@ interface PideckApi {
     /** 改会话标题（侧栏长按 → 重命名）。运行中的会话也允许改，桌面端显示的是同一份记录。 */
     suspend fun renameSession(device: Device, token: String?, sessionId: String, title: String)
 
+    /**
+     * 在本机新增一个工作区（`POST /api/projects {path}`，路径必须是桌面端能读到的目录）。
+     *
+     * 手机没有目录选择器，只能手输；宿主只校验「非空」，路径不存在会在列表里显示成空项目，
+     * 所以调用方要把失败原因说清楚。
+     */
+    suspend fun createProject(device: Device, token: String?, path: String): Project?
+
     /** 删会话记录（连文件一起，桌面端也一样，不可撤销）。 */
     suspend fun deleteSession(device: Device, token: String?, sessionId: String)
 
@@ -494,6 +502,18 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
                 "/api/projects/${URLEncoder.encode(projectId, "UTF-8")}/delete",
                 buildJsonObject { },
             )
+        }
+    }
+
+    override suspend fun createProject(
+        device: Device,
+        token: String?,
+        path: String,
+    ): Project? = withContext(Dispatchers.IO) {
+        val text = postJson(device, token, "/api/projects", buildJsonObject { put("path", path) })
+        val root = PideckJson.parseToJsonElement(text) as? JsonObject ?: return@withContext null
+        root["project"]?.let { element ->
+            runCatching { PideckJson.decodeFromJsonElement(Project.serializer(), element) }.getOrNull()
         }
     }
 

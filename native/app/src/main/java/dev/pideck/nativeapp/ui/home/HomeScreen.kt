@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Hub
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -337,8 +339,7 @@ private fun WorkspacePicker(viewModel: HomeViewModel) {
             icon = Icons.Outlined.FolderOpen,
             trailing = Icons.Filled.KeyboardArrowDown,
             accent = selected == null,
-            // 一个工作区都没有时别让它可点：空下拉只会让人以为卡住了
-            enabled = viewModel.projects.isNotEmpty() && !viewModel.creating,
+            enabled = !viewModel.creating,
             modifier = Modifier.fillMaxWidth(),
         )
         DropdownMenu(
@@ -346,6 +347,18 @@ private fun WorkspacePicker(viewModel: HomeViewModel) {
             onDismissRequest = { expanded = false },
             modifier = Modifier.widthIn(min = 240.dp, max = 340.dp),
         ) {
+            // 手机没有目录选择器，只能手输桌面端上的绝对路径；宿主只校验「非空」
+            DropdownMenuItem(
+                text = { Text("新建工作区…", style = MaterialTheme.typography.bodyMedium) },
+                leadingIcon = {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                },
+                onClick = {
+                    expanded = false
+                    viewModel.openWorkspaceEditor()
+                },
+            )
+            if (viewModel.projects.isNotEmpty()) HorizontalDivider()
             viewModel.projects.forEach { project ->
                 val isSelected = project.id == viewModel.selectedProjectId
                 DropdownMenuItem(
@@ -387,6 +400,59 @@ private fun WorkspacePicker(viewModel: HomeViewModel) {
             }
         }
     }
+    if (viewModel.workspaceEditorOpen) WorkspaceDialog(viewModel)
+}
+
+/** 新建工作区：手输路径 → 宿主登记 → 建完直接选中。 */
+@Composable
+private fun WorkspaceDialog(viewModel: HomeViewModel) {
+    AlertDialog(
+        onDismissRequest = { viewModel.closeWorkspaceEditor() },
+        title = { Text("新建工作区") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "填桌面端那台机器上的目录绝对路径（用正斜杠最省事），例如 D:/A-my-project/我的项目。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = viewModel.workspacePath,
+                    onValueChange = viewModel::editWorkspacePath,
+                    label = { Text("目录路径") },
+                    singleLine = true,
+                    enabled = !viewModel.workspaceBusy,
+                    keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                viewModel.workspaceError?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Text(
+                    "宿主只检查路径非空：写错了也会建出一个空项目，删掉重来即可。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = viewModel::createWorkspace,
+                enabled = viewModel.workspacePath.isNotBlank() && !viewModel.workspaceBusy,
+            ) {
+                Text(if (viewModel.workspaceBusy) "创建中…" else "创建")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { viewModel.closeWorkspaceEditor() }, enabled = !viewModel.workspaceBusy) {
+                Text("取消")
+            }
+        },
+    )
 }
 
 private fun projectLabel(project: Project): String =
