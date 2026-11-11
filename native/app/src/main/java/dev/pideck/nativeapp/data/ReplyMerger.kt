@@ -164,9 +164,10 @@ class ReplyMerger(
 
             "tool-output-available", "tool-output-error" -> {
                 val toolCallId = frame.str("toolCallId").orEmpty()
-                if (toolCallId.isEmpty() || toolCallId !in inputSent || toolCallId in settled) return snapshot()
+                if (toolCallId.isEmpty() || toolCallId in settled) return snapshot()
                 settled += toolCallId
                 inputSent -= toolCallId
+                ensureMessage()
                 val index = parts.indexOfFirst { it is ReplyPart.Tool && it.toolCallId == toolCallId }
                 if (index >= 0) {
                     val tool = parts[index] as ReplyPart.Tool
@@ -175,6 +176,18 @@ class ReplyMerger(
                     } else {
                         tool.copy(state = "output-available", output = frame["output"])
                     }
+                } else {
+                    // 重连时宿主重放的是「本轮已产出的帧」，可能从 output 那一段开始；
+                    // 中途也可能丢一帧 input。以前这里要求 `toolCallId in inputSent`，缺 input 就整帧丢掉，
+                    // 工具卡会永远停在「正在执行」。没有 input 也把结果建出来。
+                    parts += ReplyPart.Tool(
+                        toolCallId = toolCallId,
+                        toolName = frame.str("toolName")?.ifBlank { null } ?: "tool",
+                        state = if (type == "tool-output-error") "output-error" else "output-available",
+                        input = frame["input"],
+                        output = frame["output"],
+                        errorText = frame.str("errorText") ?: "Tool failed",
+                    )
                 }
                 return snapshot()
             }

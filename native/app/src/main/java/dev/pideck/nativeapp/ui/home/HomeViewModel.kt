@@ -202,7 +202,17 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /** 上一次 load 开始的时刻：回前台时太近就不重复拉（切页来回点不至于每次都打宿主）。 */
+    private var lastLoadAt = 0L
+
+    fun onForeground() {
+        if (System.currentTimeMillis() - lastLoadAt < 20_000L) return
+        load()
+        loadModels()
+    }
+
     fun load() {
+        lastLoadAt = System.currentTimeMillis()
         val target = device ?: run {
             loadState = failureOf("设备已不存在，回设备页重新添加")
             return

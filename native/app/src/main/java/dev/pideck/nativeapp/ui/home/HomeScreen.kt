@@ -47,6 +47,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -88,6 +90,10 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     var text by rememberSaveable { mutableStateOf("") }
+
+    // 以前首页只在自己 `init` 里拉一次：从聊天页返回时「最近的会话」、运行态、模型胶囊
+    // 全是进 App 那一刻的快照（在桌面端改个名字都要杀掉重进才看得到）。
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
 
     Scaffold(
         topBar = {

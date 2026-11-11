@@ -23,11 +23,11 @@ class SessionStateStore @javax.inject.Inject constructor() {
     /** `/api/state` 的完整快照：缓存 + 运行态 + 等待中的提问（`pendingUiRequests`）。 */
     fun put(deviceId: String, state: PideckState) {
         StateCache.put(deviceId, state)
-        SessionActivity.observe(state)
+        SessionActivity.observe(deviceId, state)
     }
 
     /** 轻量接口 `/api/sessions/runtimes`（约 3KB）：只动运行态，等待集合沿用上一次 state 里的。 */
-    fun putRuntimes(runtimes: List<RuntimeInfo>) {
-        SessionActivity.observeRuntimes(runtimes)
+    fun putRuntimes(deviceId: String, runtimes: List<RuntimeInfo>) {
+        SessionActivity.observeRuntimes(deviceId, runtimes)
     }
 }

@@ -809,7 +809,9 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
                     t != null -> t.message ?: t::class.java.simpleName
                     else -> "SSE 断开"
                 }
-                close(PideckException(reason, t))
+                // `code` 必须带上：`describeConnectionError` 靠它区分 401/403（提示重新配对）
+                // 与普通断线。只给一句「SSE 401」字符串时，三条流上的授权失效都降级成「未知错误」。
+                close(PideckException(reason, t, code = response?.code))
             }
         }
         val source = EventSources.createFactory(client).newEventSource(request, listener)

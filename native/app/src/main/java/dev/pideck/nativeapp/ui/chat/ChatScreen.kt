@@ -346,11 +346,9 @@ fun ChatScreen(
     var detail by remember { mutableStateOf<DetailContent?>(null) }
     var freeCopyTarget by remember { mutableStateOf<TimelineItem?>(null) }
 
-    LaunchedEffect(viewModel.error) {
-        viewModel.error?.let {
-            snackbar.showSnackbar(it)
-            viewModel.dismissError()
-        }
+    // 一次性提示统一走事件：状态里那份可能被下一条覆盖、或在显示期间被清空。
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { snackbar.showSnackbar(it) }
     }
 
     // 右侧工作区面板要盖住顶栏与输入条，所以放在最外层 Box 里（内容区放不下它）
@@ -954,12 +952,6 @@ fun ChatScreen(
             onDismiss = { showThinkingSheet = false },
         )
     }
-    // 改偏好失败（主机拒了 / 离线）用 snackbar 说一声，不占版面
-    LaunchedEffect(viewModel.prefError) {
-        val message = viewModel.prefError ?: return@LaunchedEffect
-        snackbar.showSnackbar(message)
-        viewModel.dismissPrefError()
-    }
     // 历史跳转：滚到那一句并让它停稳。
     // 直接 scrollToItem 有两个坑 —— ① 顶上挂着「加载更早的消息」时行下标要 +1；
     // ② 行高要等布局量完才知道，量之前滚到的是估算位置。所以滚完校验一次，
@@ -1091,11 +1083,6 @@ fun ChatScreen(
             onCompact = { prompt -> viewModel.compact(prompt) },
             onDismiss = { showContext = false },
         )
-    }
-    LaunchedEffect(viewModel.actionNote) {
-        val note = viewModel.actionNote ?: return@LaunchedEffect
-        snackbar.showSnackbar(note)
-        viewModel.dismissActionNote()
     }
     FilePreviewDialog(viewModel = viewModel)
     DiffDialog(viewModel = viewModel)

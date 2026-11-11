@@ -83,6 +83,10 @@ import dev.pideck.nativeapp.data.AuthNotice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -229,8 +233,27 @@ class ChatViewModel @Inject constructor(
     var sending by mutableStateOf(false)
         private set
 
-    var error by mutableStateOf<String?>(null)
-        private set
+    /**
+     * 一次性提示（snackbar）。
+     *
+     * 以前界面用 `LaunchedEffect(error) { showSnackbar(); dismissError() }`：`showSnackbar` 挂起到提示消失
+     * 才返回，这期间 `error` 还停在旧值上 —— 同一句失败再出现一次时值没变，effect 不重启，
+     * 这条提示就丢了（连点两次「重命名」只报第一条）。改成每次赋值都发一条事件。
+     */
+    private val eventFlow = MutableSharedFlow<String>(
+        extraBufferCapacity = 8,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val events: SharedFlow<String> = eventFlow.asSharedFlow()
+
+    private var errorState by mutableStateOf<String?>(null)
+
+    var error: String?
+        get() = errorState
+        private set(value) {
+            errorState = value
+            if (value != null) eventFlow.tryEmit(value)
+        }
 
     /** 服务端说这个会话的消息拿不到（例如历史被清），直接显示原因。 */
     var unavailable by mutableStateOf<String?>(null)
@@ -530,8 +553,14 @@ class ChatViewModel @Inject constructor(
         private set
 
     /** 一次性提示（已导出到哪里 / 压缩已请求），UI 弹完调 [dismissActionNote]。 */
-    var actionNote by mutableStateOf<String?>(null)
-        private set
+    private var actionNoteState by mutableStateOf<String?>(null)
+
+    var actionNote: String?
+        get() = actionNoteState
+        private set(value) {
+            actionNoteState = value
+            if (value != null) eventFlow.tryEmit(value)
+        }
 
     private fun runtimeTarget(): RuntimeTarget? {
         val runtime = stateStore.runtime(deviceId, sessionId) ?: return null
@@ -784,8 +813,14 @@ class ChatViewModel @Inject constructor(
     var modelsBusy by mutableStateOf(false)
         private set
 
-    var prefError by mutableStateOf<String?>(null)
-        private set
+    private var prefErrorState by mutableStateOf<String?>(null)
+
+    var prefError: String?
+        get() = prefErrorState
+        private set(value) {
+            prefErrorState = value
+            if (value != null) eventFlow.tryEmit(value)
+        }
 
     // ---- AI 提问卡（ask_question / confirm / input） ----
     // 状态来源是 /api/state 的 pendingUiRequests；答案回 POST /api/ui-response。
@@ -1558,19 +1593,32 @@ class ChatViewModel @Inject constructor(
 
     /** 常驻订阅会话流；断线退避重连，一轮结束后不退订（对齐服务端 keepAlive）。 */
     private fun startWatching() {
-        val target = device ?: return
+        if (device == null) return
         if (watchJob != null) return
         watchJob = viewModelScope.launch {
+            // 退避从 1.5s 起、翻倍到 15s 封顶。**正常关流也算一次失败**：以前 collect 正常返回时
+            // 把 backoff 归零，于是 404 / 服务端收尾之后就成了恒定 1.5s 一次的忙循环。
             var backoff = 0L
+            var failures = 0
             while (true) {
+                // 每次重连都重取一次连接：重新配对（换主机 / 换令牌）之后，这条协程手里的旧 token
+                // 会一直 401，而它自己永远不知道要换。
+                val current = connections.resolve(deviceId, timeoutMs = 3_000L)
+                if (current == null) {
+                    // 设备被删 / 令牌读不出来：退订，等重新配对或回前台时再建。
+                    watchJob = null
+                    return@launch
+                }
+                var failure: Throwable? = null
                 try {
-                    api.sessionStream(target, token, sessionId).collect { frame ->
+                    api.sessionStream(current.device, current.token, sessionId).collect { frame ->
+                        failures = 0
                         if (sending) return@collect
                         val snapshot = applyWatchFrame(frame.data) ?: return@collect
                         live = snapshot
                         if (snapshot.finished) {
                             snapshot.errorText?.takeIf { it.isNotBlank() }?.let {
-                                SessionActivity.markTurnResult(sessionId, failed = true)
+                                SessionActivity.markTurnResult(deviceId, sessionId, failed = true)
                             }
                             live = null
                             // 收尾帧比落盘早一点点，等一下再以磁盘为准对齐。
@@ -1578,15 +1626,18 @@ class ChatViewModel @Inject constructor(
                             refreshHistory()
                         }
                     }
-                    backoff = 0L
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
-                    // 断线：吞掉错误，下面退避重连。连不上时 keepAlive 会一直断，
-                    // 退避从 1.5s 起、翻倍到 15s 封顶，避免后台烧电。
+                    failure = e
                 }
-                delay(if (backoff == 0L) 1500L else backoff)
-                backoff = if (backoff == 0L) 3000L else (backoff * 2).coerceAtMost(15_000L)
+                failures += 1
+                if (failures == 3 && failure != null && error == null) {
+                    // 连不上时别一声不吭：连续 3 次失败才写一次，恢复后 failures 归零。
+                    error = "与宿主的实时连接断了，正在重连：${describeConnectionError(failure)}"
+                }
+                delay(if (backoff == 0L) 1_500L else backoff)
+                backoff = if (failures <= 1) 3_000L else (backoff * 2).coerceAtMost(15_000L)
             }
         }
     }
@@ -1610,7 +1661,7 @@ class ChatViewModel @Inject constructor(
     private fun markLastTurnResult() {
         val last = items.lastOrNull { it is TimelineItem.AssistantMessage } as? TimelineItem.AssistantMessage
             ?: return
-        SessionActivity.markTurnResult(sessionId, failed = !last.errorText.isNullOrBlank())
+        SessionActivity.markTurnResult(deviceId, sessionId, failed = !last.errorText.isNullOrBlank())
     }
 
     /**

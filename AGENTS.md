@@ -579,6 +579,31 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   另外读令牌（EncryptedSharedPreferences，Keystore 主密钥可能失效）**全部 runCatching** —— 以前
   `DeviceRepository.tokenOf` 抛一次就把进程带走；`RunWatchService.watchLoop` 整轮兜底（SupervisorJob 不防未捕获异常）。
 
+- **一次性提示走事件流，不要「状态 + 读后清空」（0.5.56）**：`ChatViewModel.events`（`MutableSharedFlow`，
+  `extraBufferCapacity = 8`）收 `error` / `prefError` / `actionNote` 的每次赋值；界面只有一条
+  `LaunchedEffect(Unit) { viewModel.events.collect { snackbar.showSnackbar(it) } }`。
+  旧写法 `LaunchedEffect(error) { showSnackbar(); dismissError() }` 在提示显示的那几秒里状态没变，
+  同一句失败再来一次就不会重启 effect —— 表现是「只报第一条」。要常驻的错误留在状态里由界面直接渲染。
+- **凡是跨设备的记录，键里必须带 deviceId（0.5.56）**：`SessionActivity` 的 `byDevice / previousRunningByDevice /
+  waitingByDevice / loadedByDevice`（`observe(deviceId, …)` / `statusOf(deviceId, sessionId)`），
+  `watch/RunWatchService.kt` 的 `titles["${device.id}|${sessionId}"]`。以前只按 sessionId 存，
+  两台设备出现同一个 id 时状态灯与通知标题会互相覆盖。界面渲染时读的是「当前那台设备」的视图
+  （`publish(deviceId)` 推到 `statuses` / `loadedSessionIds`），所以行组件不用改签名。
+- **设备清单只能走 `mutateDevices { }`（0.5.56）**：`data/DeviceRepository.kt` 的读-改-写必须在同一个
+  `context.deviceStore.edit { }` 里完成。以前 `readDevices()` → 改 → `writeDevices()` 两段，
+  与列表页每轮 `touch()` 交错时后写的覆盖先写的（刚加的设备 / 刚改的名消失）。
+  令牌三分语义：`null` 保留 / 空串清掉（对端已是无鉴权）/ 非空覆盖。
+- **无限重连循环在测试里会挂死（0.5.56）**：`SessionsViewModel.startStateStream()` 与
+  `ChatViewModel.startWatching()` 是「断了就退避重连」的 `while (true)`。`runTest` 收尾会把虚拟时间推到空闲，
+  于是空转不结束、整场测试挂到 JVM 被杀（踩过一次，看着像「Gradle daemon 崩了」）。
+  所以 `FakePideckApi.stateEvents` 返回的是一条**永不结束**的 `MutableSharedFlow`；
+  用 `advanceTimeBy(1_000)` + `runCurrent()` 代替 `advanceUntilIdle()`。
+- **看护（RunWatchService）的失败轮次不能算空闲（0.5.56）**：拉 `/api/sessions/runtimes` 失败时置 `pollFailed`，
+  `idlePolls` 不动（否则连续 3 轮就 `stopSelf()`，正在跑的那一轮收不到完成通知），
+  并且「回复完成」的 `failed` 取自 `lastStateByDevice` 里该会话的 `status == "error"`，别写死 false。
+- **`MarkdownCache` 的解析在锁外（0.5.56）**：锁里只做 get/put，容量 8。锁里解析会把同一帧里
+  其它消息的 Markdown 一起堵住（先串行再上屏）。
+
 验证：`cd native && ./gradlew --offline -q :app:testDebugUnitTest`，出包
 `./gradlew :app:assembleRelease`，产物在 `native/app/build/outputs/apk/release/app-release.apk`，
 拷成 `apk/PiDeck-native-<版本>-release.apk` 后更新 `apk/SHA256SUMS.txt` 与 `apk/index.html`

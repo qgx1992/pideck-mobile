@@ -81,11 +81,14 @@ class RunWatchService : Service() {
 
     private suspend fun watchLoop() {
         val wasRunning = mutableMapOf<String, Boolean>()
+        /** 会话标题，键 = `deviceId|sessionId`：两台设备上同名 / 同 id 的会话以前会串台。 */
         val titles = mutableMapOf<String, String>()
         /** 每台设备上一次 `/api/state` 的 ETag：没变化就是 304，不带 body。 */
         val etags = mutableMapOf<String, String?>()
         /** 每台设备上一次拿到的待回答提问（304 时沿用，不然会把「还在等」误判成「已经答了」）。 */
         val pendingByDevice = mutableMapOf<String, List<PendingUiRequest>>()
+        /** 每台设备最近一份 state：判「这一轮是不是失败」要用它。 */
+        val lastStateByDevice = mutableMapOf<String, PideckState>()
         /** 已经通知过的提问（`deviceId|sessionId|requestId`）：同一张卡别每 12s 弹一次。 */
         val notifiedAsks = mutableSetOf<String>()
         val startedAt = SystemClock.elapsedRealtime()
@@ -97,6 +100,8 @@ class RunWatchService : Service() {
             try {
                 val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
                 var active = 0
+                /** 本轮有没有拉取失败：失败不能算成「空闲」，否则连续 3 轮就 stopSelf()。 */
+                var pollFailed = false
 
                 for (device in devices) {
                     val token = runCatching { repository.tokenOf(device.id) }.getOrNull()
@@ -112,8 +117,11 @@ class RunWatchService : Service() {
                     if (stateFetch is StateFetch.Fresh) {
                         etags[device.id] = stateFetch.etag
                         pendingByDevice[device.id] = stateFetch.state.pendingUiRequests
+                        lastStateByDevice[device.id] = stateFetch.state
                         stateFetch.state.sessions.forEach { session ->
-                            session.title.takeIf { it.isNotBlank() }?.let { titles[session.id] = it }
+                            session.title.takeIf { it.isNotBlank() }?.let {
+                                titles["${device.id}|${session.id}"] = it
+                            }
                         }
                     }
                     val pending = pendingByDevice[device.id].orEmpty()
@@ -128,7 +136,7 @@ class RunWatchService : Service() {
                                     this,
                                     device.id,
                                     ask.sessionId,
-                                    titles[ask.sessionId].orEmpty(),
+                                    titles["${device.id}|${ask.sessionId}"].orEmpty(),
                                     ask.title,
                                 )
                             }
@@ -137,7 +145,12 @@ class RunWatchService : Service() {
 
                     val runtimes = runCatching {
                         withTimeout(8_000) { api.runtimes(device, token) }
-                    }.getOrNull() ?: continue
+                    }.getOrNull()
+                    if (runtimes == null) {
+                        // 拉取失败既不清点 `active`、也不动 `wasRunning`，更不能让它被当成「这一轮很安静」。
+                        pollFailed = true
+                        continue
+                    }
 
                     for (runtime in runtimes) {
                         val key = device.id + "|" + runtime.sessionId
@@ -146,18 +159,23 @@ class RunWatchService : Service() {
                         if (wasRunning[key] == true && !running) {
                             // 等着人回答的时候别报「回复完成」：那张提问通知已经把人叫过去了。
                             val waitingForAnswer = runtime.sessionId in pendingSessions
+                            // 这一轮到底成没成：宿主把失败写在会话的 status 上时别报「回复完成」。
+                            val turnFailed = lastStateByDevice[device.id]?.sessions
+                                ?.firstOrNull { it.id == runtime.sessionId }
+                                ?.status == "error"
                             // 只在看不见 App 的时候打扰人；前台时用户自己就看到了。
                             if (!waitingForAnswer && !RunWatcher.appVisible && Prefs.notifyDone) {
-                                val title = titles[runtime.sessionId]
+                                val titleKey = "${device.id}|${runtime.sessionId}"
+                                val title = titles[titleKey]
                                     ?: runCatching { titleOf(device, token, runtime.sessionId) }.getOrNull()
-                                if (!title.isNullOrBlank()) titles[runtime.sessionId] = title
+                                if (!title.isNullOrBlank()) titles[titleKey] = title
                                 runCatching {
                                     Notifications.finished(
                                         this,
                                         device.id,
                                         runtime.sessionId,
                                         title.orEmpty(),
-                                        failed = false,
+                                        failed = turnFailed,
                                     )
                                 }
                             }
@@ -181,7 +199,11 @@ class RunWatchService : Service() {
                         ?.notify(Notifications.ACTIVE_ID, Notifications.active(this, active.coerceAtLeast(1)))
                 }
 
-                idlePolls = if (active == 0) idlePolls + 1 else 0
+                idlePolls = when {
+                    pollFailed -> idlePolls
+                    active == 0 -> idlePolls + 1
+                    else -> 0
+                }
                 val alive = SystemClock.elapsedRealtime() - startedAt
                 if (idlePolls >= 3 && alive > 90_000) {
                     stopSelf()

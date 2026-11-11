@@ -119,7 +119,10 @@ data class PendingUiRequest(
     val requestId: String = "",
     val method: String = "",
     val title: String = "",
-    val options: List<String> = emptyList(),
+    // 选项既可能是字符串也可能是 `{label,value,description}` 对象（批量题那边已经是 JsonElement）。
+    // 写成 List<String> 时，只要宿主对单题也给对象数组，整份 `/api/state` 解码就抛错 ——
+    // 界面拿到的是「解析失败 / 空数据」，而不是少一张卡。
+    val options: List<JsonElement> = emptyList(),
     val runtimeGeneration: Long = 0,
     val placeholder: String? = null,
     val prefill: String? = null,

@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import dev.pideck.nativeapp.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -43,8 +44,11 @@ object UpdateCenter {
     /** 当前装的版本（`BuildConfig` 是编译期的，运行时变不了）。 */
     val currentVersion: String get() = BuildConfig.VERSION_NAME
 
-    @Volatile
-    private var inFlight = false
+    /**
+     * 同一时刻只放一条请求。`if (inFlight) return` + `inFlight = true` 是先读后写，
+     * 启动时的自动检查与设置页手点同时进来会打两条出去 —— 换成原子闸门。
+     */
+    private val gate = AtomicBoolean(false)
 
     /** 有新版时给的那条 Release（没查过 / 已最新 / 失败都是 null）。 */
     val available: RemoteRelease? get() = (state as? UpdateState.Available)?.release
@@ -52,27 +56,29 @@ object UpdateCenter {
     suspend fun check(force: Boolean = false): UpdateState {
         val current = state
         if (!force && (current is UpdateState.Available || current is UpdateState.UpToDate)) return current
-        if (inFlight) return state
-        inFlight = true
-        state = UpdateState.Checking
+        if (!gate.compareAndSet(false, true)) return state
+        // 状态只在主线程写：这是 Compose 快照状态，从 IO 线程赋值时主线程不一定会被唤醒重绘
+        // （表现：设置页一直停在「正在检查…」）。与 `GroupCollapse` 的修法同一条规矩。
+        withContext(Dispatchers.Main.immediate) { state = UpdateState.Checking }
         return try {
-            withContext(Dispatchers.IO) {
-                val raw = UpdateCheck.fetchLatestBlocking().getOrElse { error ->
-                    state = UpdateState.Failed(describe(error))
-                    return@withContext state
-                }
-                val release = UpdateCheck.parseLatestRelease(raw)
-                state = if (release == null) {
-                    UpdateState.Failed("GitHub 的回包里没有可用的版本号")
-                } else if (UpdateCheck.isNewer(release.versionName, currentVersion)) {
-                    UpdateState.Available(release)
-                } else {
-                    UpdateState.UpToDate(release.versionName)
-                }
-                state
+            val next = withContext(Dispatchers.IO) {
+                UpdateCheck.fetchLatestBlocking().fold(
+                    onSuccess = { raw ->
+                        val release = UpdateCheck.parseLatestRelease(raw)
+                        when {
+                            release == null -> UpdateState.Failed("GitHub 的回包里没有可用的版本号")
+                            UpdateCheck.isNewer(release.versionName, currentVersion) ->
+                                UpdateState.Available(release)
+                            else -> UpdateState.UpToDate(release.versionName)
+                        }
+                    },
+                    onFailure = { error -> UpdateState.Failed(describe(error)) },
+                )
             }
+            withContext(Dispatchers.Main.immediate) { state = next }
+            next
         } finally {
-            inFlight = false
+            gate.set(false)
         }
     }
 
@@ -87,7 +93,7 @@ object UpdateCenter {
 
     internal fun resetForTest() {
         state = UpdateState.Idle
-        inFlight = false
+        gate.set(false)
     }
 
     private fun describe(error: Throwable): String = when (error) {

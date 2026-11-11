@@ -153,21 +153,32 @@ class DeviceRepository(private val context: Context) : DeviceDirectory {
 
     /** 配对：同 baseUrl 视为同一台设备，重复添加只更新名字与令牌。 */
     suspend fun upsert(device: Device, token: String?) = withContext(Dispatchers.IO) {
-        val current = readDevices()
-        val existing = current.firstOrNull { it.baseUrl == device.baseUrl }
-        val record = (existing?.copy(name = device.name.ifBlank { existing.name }) ?: device)
-            .copy(
-                id = existing?.id ?: device.id.ifBlank { UUID.randomUUID().toString() },
-                createdAt = existing?.createdAt ?: System.currentTimeMillis(),
-            )
-        val next = current.filterNot { it.id == record.id }.filterNot { it.baseUrl == record.baseUrl } + record
-        writeDevices(next)
-        if (!token.isNullOrBlank()) writeToken(record.id, token)
-        record
+        var record: Device? = null
+        mutateDevices { current ->
+            val existing = current.firstOrNull { it.baseUrl == device.baseUrl }
+            val saved = (existing?.copy(name = device.name.ifBlank { existing.name }) ?: device)
+                .copy(
+                    id = existing?.id ?: device.id.ifBlank { UUID.randomUUID().toString() },
+                    createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+                )
+            record = saved
+            current.filterNot { it.id == saved.id }.filterNot { it.baseUrl == saved.baseUrl } + saved
+        }
+        val saved = record ?: device
+        // 令牌语义分三种：`null` = 没传（保留旧令牌）；空串 = 对端已经不开鉴权（把旧令牌清掉，
+        // 否则它会继续跟着每次请求发出去，表现为莫名其妙的 401）；非空 = 覆盖。
+        if (token == null) {
+            // 保留
+        } else if (token.isBlank()) {
+            removeToken(saved.id)
+        } else {
+            writeToken(saved.id, token)
+        }
+        saved
     }
 
     suspend fun remove(deviceId: String) = withContext(Dispatchers.IO) {
-        writeDevices(readDevices().filterNot { it.id == deviceId })
+        mutateDevices { current -> current.filterNot { it.id == deviceId } }
         removeToken(deviceId)
     }
 
@@ -175,31 +186,38 @@ class DeviceRepository(private val context: Context) : DeviceDirectory {
     suspend fun rename(deviceId: String, name: String) = withContext(Dispatchers.IO) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return@withContext
-        writeDevices(readDevices().map { if (it.id == deviceId) it.copy(name = trimmed) else it })
+        mutateDevices { current ->
+            current.map { if (it.id == deviceId) it.copy(name = trimmed) else it }
+        }
     }
 
     suspend fun touch(deviceId: String) = withContext(Dispatchers.IO) {
-        val next = readDevices().map {
-            if (it.id == deviceId) it.copy(lastUsedAt = System.currentTimeMillis()) else it
-        }
-        writeDevices(next)
-    }
-
-    private suspend fun readDevices(): List<Device> {
-        var result: List<Device> = emptyList()
-        context.deviceStore.edit { prefs ->
-            val raw = prefs[devicesKey]
-            if (raw != null) {
-                result = runCatching {
-                    PideckJson.decodeFromString(ListSerializer(Device.serializer()), raw)
-                }.getOrDefault(emptyList())
+        mutateDevices { current ->
+            current.map {
+                if (it.id == deviceId) it.copy(lastUsedAt = System.currentTimeMillis()) else it
             }
         }
-        return result
     }
 
-    private suspend fun writeDevices(list: List<Device>) {
-        val encoded = PideckJson.encodeToString(ListSerializer(Device.serializer()), list)
-        context.deviceStore.edit { it[devicesKey] = encoded }
+    /**
+     * 「读 → 改 → 写」必须在同一个 `edit { }` 里做完。
+     *
+     * 以前是 `readDevices()`（借一次写事务读）→ 改 → `writeDevices()`（再开一次），
+     * 与列表页每轮 `touch()`、用户此刻的改名/新增交错时，后写的一方拿旧快照覆盖 →
+     * 刚加的设备 / 刚改的名字凭空消失。
+     */
+    private suspend fun mutateDevices(block: (List<Device>) -> List<Device>) {
+        context.deviceStore.edit { prefs ->
+            val current = decodeDevices(prefs[devicesKey])
+            val encoded = PideckJson.encodeToString(ListSerializer(Device.serializer()), block(current))
+            prefs[devicesKey] = encoded
+        }
+    }
+
+    private fun decodeDevices(raw: String?): List<Device> {
+        if (raw == null) return emptyList()
+        return runCatching {
+            PideckJson.decodeFromString(ListSerializer(Device.serializer()), raw)
+        }.getOrDefault(emptyList())
     }
 }

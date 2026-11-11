@@ -24,6 +24,7 @@ import dev.pideck.nativeapp.watch.RunWatcher
 import dev.pideck.nativeapp.data.PideckJson
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -229,24 +230,39 @@ class SessionsViewModel @Inject constructor(
      * 换回 304，把刚推下来的状态又按「没变化」处理。
      */
     private fun startStateStream() {
-        val target = device ?: return
+        if (device == null) return
         if (streamJob?.isActive == true) return
         streamJob = viewModelScope.launch {
-            try {
-                api.stateEvents(target, token).collect { json ->
-                    val payload = runCatching {
-                        PideckJson.decodeFromString(PideckState.serializer(), json)
-                    }.getOrNull() ?: return@collect
-                    state = payload
-                    etag = null
-                    stateStore.put(deviceId, payload)
-                    if (loadState !is LoadState.Ready) loadState = LoadState.Ready
-                    if (payload.runtimes.any { it.isRunning }) platform.watchRuns()
+            // 以前这里断了只 catch 一句就结束（注释说的「轮询兜底」并不存在），
+            // SSE 被中间设备掐掉后列表就永久停在最后一份数据。现在自己重连，退避 1.5s → 15s 封顶。
+            var backoff = 0L
+            var failures = 0
+            while (true) {
+                val current = connections.resolve(deviceId, timeoutMs = 3_000L)
+                if (current == null) {
+                    streamJob = null
+                    return@launch
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                // 推流断了就靠轮询兜底，不打扰用户
+                try {
+                    api.stateEvents(current.device, current.token).collect { json ->
+                        failures = 0
+                        val payload = runCatching {
+                            PideckJson.decodeFromString(PideckState.serializer(), json)
+                        }.getOrNull() ?: return@collect
+                        state = payload
+                        etag = null
+                        stateStore.put(deviceId, payload)
+                        if (loadState !is LoadState.Ready) loadState = LoadState.Ready
+                        if (payload.runtimes.any { it.isRunning }) platform.watchRuns()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // 断线：吞掉，下面退避重连（界面照常显示上一份数据）
+                }
+                failures += 1
+                delay(if (backoff == 0L) 1_500L else backoff)
+                backoff = if (failures <= 1) 3_000L else (backoff * 2).coerceAtMost(15_000L)
             }
         }
     }
@@ -343,7 +359,7 @@ class SessionsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val runtimes = api.runtimes(target, token)
-                stateStore.putRuntimes(runtimes)
+                stateStore.putRuntimes(deviceId, runtimes)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {

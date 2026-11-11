@@ -349,15 +349,21 @@ fun inlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
  * （历史消息不会变）。
  */
 internal object MarkdownCache {
-    private const val CAPACITY = 32
+    /** 常驻内存的解析结果条数：每条都是整棵块树，长消息几十 KB，32 条太阔了。 */
+    private const val CAPACITY = 8
 
     private val entries = object : LinkedHashMap<String, List<MdBlock>>(CAPACITY, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MdBlock>>?): Boolean =
             size > CAPACITY
     }
 
-    fun parse(markdown: String): List<MdBlock> = synchronized(entries) {
-        entries[markdown] ?: parseMarkdown(markdown).also { entries[markdown] = it }
+    fun parse(markdown: String): List<MdBlock> {
+        // 命中在锁内完成，**解析放在锁外**：一条 30KB 的长回复首次解析要几十毫秒，
+        // 在全局锁里做会把同一帧里其它消息的 Markdown 一起堵住（先串行再上屏）。
+        synchronized(entries) { entries[markdown] }?.let { return it }
+        val parsed = parseMarkdown(markdown)
+        synchronized(entries) { entries[markdown] = parsed }
+        return parsed
     }
 }
 
