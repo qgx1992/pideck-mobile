@@ -19,7 +19,7 @@ class SessionActivityTest {
     @Test
     fun `running session turns blue, waiting turns orange`() {
         SessionActivity.reset()
-        SessionActivity.observe(state(listOf("s1"), waiting = listOf("s2")))
+        SessionActivity.observe("dev-1", state(listOf("s1"), waiting = listOf("s2")))
         assertEquals(SessionActivity.Status.Running, SessionActivity.statusOf("s1"))
         assertEquals(SessionActivity.Status.Waiting, SessionActivity.statusOf("s2"))
         assertEquals(SessionActivity.Status.Idle, SessionActivity.statusOf("s3"))
@@ -28,29 +28,40 @@ class SessionActivityTest {
     @Test
     fun `a session that stops running becomes done`() {
         SessionActivity.reset()
-        SessionActivity.observe(state(listOf("s1")))
-        SessionActivity.observe(state(emptyList()))
+        SessionActivity.observe("dev-1", state(listOf("s1")))
+        SessionActivity.observe("dev-1", state(emptyList()))
         assertEquals(SessionActivity.Status.Done, SessionActivity.statusOf("s1"))
     }
 
     @Test
     fun `real turn result overrides the optimistic done`() {
         SessionActivity.reset()
-        SessionActivity.observe(state(listOf("s1")))
-        SessionActivity.observe(state(emptyList()))
-        SessionActivity.markTurnResult("s1", failed = true)
+        SessionActivity.observe("dev-1", state(listOf("s1")))
+        SessionActivity.observe("dev-1", state(emptyList()))
+        SessionActivity.markTurnResult("dev-1", "s1", failed = true)
         assertEquals(SessionActivity.Status.Failed, SessionActivity.statusOf("s1"))
         // 再轮询一次也不能把它改回 Done
-        SessionActivity.observe(state(emptyList()))
+        SessionActivity.observe("dev-1", state(emptyList()))
         assertEquals(SessionActivity.Status.Failed, SessionActivity.statusOf("s1"))
     }
 
     @Test
     fun `forget clears the entry`() {
         SessionActivity.reset()
-        SessionActivity.markTurnResult("s9", failed = false)
+        SessionActivity.markTurnResult("dev-1", "s9", failed = false)
         assertEquals(SessionActivity.Status.Done, SessionActivity.statusOf("s9"))
-        SessionActivity.forget("s9")
+        SessionActivity.forget("dev-1", "s9")
         assertEquals(SessionActivity.Status.Idle, SessionActivity.statusOf("s9"))
+    }
+
+    @Test
+    fun `two devices with the same session id do not bleed into each other`() {
+        SessionActivity.reset()
+        SessionActivity.observe("dev-a", state(listOf("s1")))
+        SessionActivity.observe("dev-b", state(emptyList()))
+        // 渲染的是 B：A 的运行中不该出现在 B 的列表里
+        assertEquals(SessionActivity.Status.Idle, SessionActivity.statusOf("s1"))
+        assertEquals(SessionActivity.Status.Running, SessionActivity.statusOf("dev-a", "s1"))
+        assertEquals(SessionActivity.Status.Idle, SessionActivity.statusOf("dev-b", "s1"))
     }
 }

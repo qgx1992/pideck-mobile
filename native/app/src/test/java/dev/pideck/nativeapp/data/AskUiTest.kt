@@ -12,7 +12,10 @@ import org.junit.Test
 
 class AskUiTest {
 
-    private fun request(method: String, options: List<String> = emptyList()) = PendingUiRequest(
+    private fun request(
+        method: String,
+        options: List<kotlinx.serialization.json.JsonElement> = emptyList(),
+    ) = PendingUiRequest(
         sessionId = "s1",
         agentId = "a1",
         runtimeGeneration = 3,

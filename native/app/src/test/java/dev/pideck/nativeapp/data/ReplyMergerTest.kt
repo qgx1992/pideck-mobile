@@ -79,11 +79,15 @@ class ReplyMergerTest {
     }
 
     @Test
-    fun `tool output without seen input is ignored`() {
+    fun `tool output without seen input still shows the result`() {
+        // 0.5.56 改的：宿主重连时可能从 output 那一段重放，或中途丢一帧 input。
+        // 以前这里整帧丢掉，工具卡永远停在「正在执行」。
         val merger = merger()
         merger.applyFrame(frame("""{"type":"text-start"}"""))
         merger.applyFrame(frame("""{"type":"tool-output-available","toolCallId":"ghost","output":"x"}"""))
-        assertTrue(merger.snapshot()!!.tools.isEmpty())
+        val tool = merger.snapshot()!!.tools.single()
+        assertEquals("output-available", tool.state)
+        assertEquals("\"x\"", tool.output.toString())
     }
 
     @Test
@@ -121,5 +125,21 @@ class ReplyMergerTest {
         assertNull(merger.snapshot())
         merger.applyFrame(frame("""{"type":"text-delta","delta":"新一轮"}"""))
         assertEquals("新一轮", merger.snapshot()!!.text)
+    }
+
+    @Test
+    fun `output frame without a matching input still builds the tool card`() {
+        // 重连时宿主可能从 output 那一段开始重放；缺 input 不能把整帧丢掉，
+        // 否则工具卡永远停在「正在执行」。
+        val merger = merger()
+        merger.applyFrame(frame("""{"type":"start","messageId":"srv-1"}"""))
+        merger.applyFrame(
+            frame("""{"type":"tool-output-available","toolCallId":"t1","toolName":"bash","output":"ok"}"""),
+        )
+        val snapshot = merger.snapshot()!!
+        val tool = snapshot.parts.filterIsInstance<ReplyPart.Tool>().single()
+        assertEquals("t1", tool.toolCallId)
+        assertEquals("bash", tool.toolName)
+        assertEquals("output-available", tool.state)
     }
 }

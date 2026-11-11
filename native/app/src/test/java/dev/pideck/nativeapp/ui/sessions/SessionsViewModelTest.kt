@@ -19,7 +19,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -110,7 +111,10 @@ class SessionsViewModelTest {
     @Test
     fun `refresh fills groups and goes Ready`() = runTest(dispatcher) {
         val (vm, platform) = viewModel(apiReturning(sample))
-        advanceUntilIdle()
+        // 推流协程是「断了就退避重连」的无限循环，advanceUntilIdle() 会一直推进虚拟时间不结束
+        // （0.5.56 起）：推进一小段、跑完队列里的任务就够断言了。
+        advanceTimeBy(1_000)
+        runCurrent()
 
         assertEquals(LoadState.Ready, vm.loadState)
         assertEquals(false, vm.loading)
@@ -138,7 +142,10 @@ class SessionsViewModelTest {
             ),
         )
         val (_, platform) = viewModel(apiReturning(withRuntime))
-        advanceUntilIdle()
+        // 推流协程是「断了就退避重连」的无限循环，advanceUntilIdle() 会一直推进虚拟时间不结束
+        // （0.5.56 起）：推进一小段、跑完队列里的任务就够断言了。
+        advanceTimeBy(1_000)
+        runCurrent()
 
         assertEquals(1, platform.watchRunsCount)
     }
@@ -150,7 +157,10 @@ class SessionsViewModelTest {
                 throw PideckException(code = 500, message = "boom")
         }
         val (vm, _) = viewModel(api)
-        advanceUntilIdle()
+        // 推流协程是「断了就退避重连」的无限循环，advanceUntilIdle() 会一直推进虚拟时间不结束
+        // （0.5.56 起）：推进一小段、跑完队列里的任务就够断言了。
+        advanceTimeBy(1_000)
+        runCurrent()
 
         assertTrue("应为 Failed，实际 ${vm.loadState}", vm.loadState is LoadState.Failed)
         assertTrue("错误文案要能显示", !vm.error.isNullOrBlank())
@@ -159,7 +169,10 @@ class SessionsViewModelTest {
     @Test
     fun `missing device is a failure not a silent idle`() = runTest(dispatcher) {
         val (vm, _) = viewModel(apiReturning(sample), devices = flowOf(emptyList()))
-        advanceUntilIdle()
+        // 推流协程是「断了就退避重连」的无限循环，advanceUntilIdle() 会一直推进虚拟时间不结束
+        // （0.5.56 起）：推进一小段、跑完队列里的任务就够断言了。
+        advanceTimeBy(1_000)
+        runCurrent()
 
         val state = vm.loadState
         assertTrue("设备不在也要落失败态，实际是 $state", state is LoadState.Failed)
@@ -169,7 +182,10 @@ class SessionsViewModelTest {
     @Test
     fun `search filters sessions and hides empty projects`() = runTest(dispatcher) {
         val (vm, _) = viewModel(apiReturning(sample))
-        advanceUntilIdle()
+        // 推流协程是「断了就退避重连」的无限循环，advanceUntilIdle() 会一直推进虚拟时间不结束
+        // （0.5.56 起）：推进一小段、跑完队列里的任务就够断言了。
+        advanceTimeBy(1_000)
+        runCurrent()
 
         vm.search("历史")
         assertEquals(listOf("s2"), vm.visibleGroups.flatMap { it.sessions }.map { it.id })

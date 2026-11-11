@@ -42,7 +42,16 @@ open class FakePideckApi : PideckApi {
         throw NotImplementedError("FakePideckApi.renameSession 未打桩")
 
     /** 推流默认给一条空流：ViewModel 的 init 会挂它，抛异常会冒到测试线程上当失败。 */
-    override fun stateEvents(device: Device, token: String?): Flow<String> = emptyFlow()
+    /**
+     * 永远不结束、也永远不推帧的流。
+     *
+     * 不能给 `emptyFlow()`：`startStateStream()` 是「断了就退避重连」的无限循环，
+     * 空流会立刻返回 → 立刻重连，而 `runTest` 收尾时会把虚拟时间推到空闲 —— 于是空转不结束
+     * （踩过：整场测试挂到 JVM 被杀）。真实宿主也是一条长连接，这里对齐它。
+     */
+    private val idleStream = kotlinx.coroutines.flow.MutableSharedFlow<String>()
+
+    override fun stateEvents(device: Device, token: String?): Flow<String> = idleStream
 
     override suspend fun createProject(device: Device, token: String?, path: String): Project? =
         throw NotImplementedError("FakePideckApi.createProject 未打桩")
