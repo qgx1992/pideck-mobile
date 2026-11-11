@@ -549,6 +549,14 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   否则第 ② 次补拉前的 `delay(600)` 立刻抛 CancellationException，「停止后的回答不出现」永远修不好；
   ③ `refreshHistory()` 用 `historyRefreshSeq` 序号守卫（只有最新一次允许落地），别把守卫删成「最后返回的赢」
   —— 旧请求后到会覆盖新结果，严重时 LazyColumn 抛 `Key was already used`。
+- **收尾请求不能用 viewModelScope（0.5.55）**：`ViewModel.clear()` 先关 closeables（viewModelScope 在内）
+  再调 `onCleared()`，所以在 `onCleared()` / `NonCancellable` 收尾里 `viewModelScope.launch` 发的请求
+  一条都发不出去。`ChatViewModel` 为此有两个出口：`cleanupScope`（`SupervisorJob() + Dispatchers.IO`，
+  故意不 cancel，专发 `runtime/stop`）与 `refreshHistoryNow(seq)`（suspend 版，收尾直接调）。
+  匿名会话要在 `createAnonymousSession` 之后**立刻**登记目标（`RuntimeTarget(anon, "", 0L)`），
+  别等宿主回 `agentId` —— 不回就整段跳过，宿主上会留一个 noSession 运行时。
+- **翻页与重拉共用一个序号闸门**：`loadOlder()` 自己也要 `val seq = historyRefreshSeq` 并在落地前比对，
+  否则翻页结果会拼到已经重拉过的列表上，同一条消息两段 → LazyColumn `Key was already used` 闪退。
 - **工作区面板失败必须说出来**：`refreshWorkspace()` 里四个请求用局部 `attempt(label) { … }` 收集失败原因，
   汇总成 `workspaceError = "部分面板没读到（其余照常显示）：…"`。别再退回 `runCatching{}.getOrNull()`：
   断网/401 时界面会显示「没有待办 / 没有改动 / 空文件树」，用户只会以为数据没了。

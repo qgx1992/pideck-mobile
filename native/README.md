@@ -4,14 +4,14 @@
 为什么从 WebView 壳迁到全原生；0.4.x 的 Capacitor 壳（`app/`）与更早的 TypeScript 协议核心（`src/`、
 `tests/`）已在 0.5.41 从 master 删除，完整内容留在分支 `archive/webview-shell`。
 
-版本 0.5.41 / `versionCode 541`，包名 `top.caoayu.pideck`，Kotlin 2.0 + Jetpack Compose。
+版本 0.5.55 / `versionCode 555`，包名 `top.caoayu.pideck`，Kotlin 2.0 + Jetpack Compose。
 
 ## 工程结构
 
 - 自己一套 Gradle 工程，版本自己锁（Kotlin 2.0.21 / AGP 8.7.3 / Compose BOM 2024.12.01 / Hilt 2.52）；
 - 分层：`data/`（模型 + HTTP/SSE + 解析）、`ui/`（chat / home / sessions / devices / settings / pairing）、
   `watch/`（前台服务 + 通知）、`di/`（Hilt）；
-- 测试全在 `app/src/test/`，342 条纯 JVM 单测（解析、分帧、分组、行索引、统计口径），无 Compose 测试。
+- 测试全在 `app/src/test/`，360 条纯 JVM 单测（解析、分帧、分组、行索引、统计口径），无 Compose 测试。
 
 ## 构建
 

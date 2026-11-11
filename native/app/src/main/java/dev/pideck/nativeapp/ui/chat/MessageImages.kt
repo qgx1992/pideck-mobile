@@ -47,6 +47,9 @@ import kotlinx.coroutines.withContext
  */
 private const val THUMB_MAX_PIXELS = 512
 
+/** 全屏查看时的解码上限（长边像素）。 */
+private const val FULL_MAX_PIXELS = 1600
+
 private object ThumbCache {
     /** 键是 `长度:hashCode`，够区分不同图片，又不用拿整段 base64 当键。 */
     private val cache = object : LruCache<String, ImageBitmap>(24) {}
@@ -58,6 +61,27 @@ private object ThumbCache {
     }
 
     fun keyOf(image: MessageImage): String = "${image.data.length}:${image.data.hashCode()}"
+}
+
+/**
+ * 全屏大图单独一份缓存，**不能**和缩略图共用键。
+ *
+ * 共用时有两种坏结局（0.5.55 修的）：先滚列表再点开 → 拿到 512px 的缩略图放大显示，看大图永远是糊的；
+ * 先点全屏 → 1600px 位图写进按「条数 24」算容量的缩略图缓存（≈180MB）→ OOM。
+ * 这里按字节计容量 24MB，最多只留两张。
+ */
+private const val FULL_CACHE_BYTES = 24 * 1024 * 1024
+
+private object FullImageCache {
+    private val cache = object : LruCache<String, ImageBitmap>(FULL_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: ImageBitmap): Int = value.width * value.height * 4
+    }
+
+    fun get(key: String): ImageBitmap? = cache.get(key)
+
+    fun put(key: String, value: ImageBitmap) {
+        cache.put(key, value)
+    }
 }
 
 /** 解码成缩略图；解不出来返回 null（气泡里留一个占位块，不崩）。 */
@@ -164,10 +188,10 @@ private fun FullscreenImage(image: MessageImage, onDismiss: () -> Unit) {
             contentAlignment = Alignment.Center,
         ) {
             val key = ThumbCache.keyOf(image)
-            val bitmap by produceState(initialValue = ThumbCache.get(key), key) {
+            val bitmap by produceState(initialValue = FullImageCache.get(key), key) {
                 if (value == null) {
-                    value = withContext(Dispatchers.IO) { decodeThumb(image.data, 1600) }
-                        ?.also { ThumbCache.put(key, it) }
+                    value = withContext(Dispatchers.IO) { decodeThumb(image.data, FULL_MAX_PIXELS) }
+                        ?.also { FullImageCache.put(key, it) }
                 }
             }
             bitmap?.let { loaded ->

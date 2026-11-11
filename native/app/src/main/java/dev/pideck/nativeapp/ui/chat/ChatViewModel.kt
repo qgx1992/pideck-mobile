@@ -79,11 +79,14 @@ import dev.pideck.nativeapp.data.RuntimeTarget
 import dev.pideck.nativeapp.data.exportFileName
 import dev.pideck.nativeapp.data.htmlLooksValid
 import dev.pideck.nativeapp.watch.RunWatcher
+import dev.pideck.nativeapp.data.AuthNotice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -798,6 +801,9 @@ class ChatViewModel @Inject constructor(
         private set
 
     private var stateEtag: String? = null
+
+    /** `/api/state` 轮询连续失败次数：满 3 次才在界面上报，避免一次抖动就刷红字。 */
+    private var stateFailures = 0
     private var statePollJob: Job? = null
 
     fun dismissAskError() {
@@ -812,7 +818,19 @@ class ChatViewModel @Inject constructor(
                 val target = device
                 if (target != null) {
                     runCatching { api.state(target, token, stateEtag) }
+                        .onFailure { e ->
+                            // 以前这里没有 onFailure：401/403、超时、解析失败全静默 ——
+                            // 提问卡永不出现、授权失效也没提示，还每 5 秒打一次注定失败的请求。
+                            if (e is PideckException && (e.code == 401 || e.code == 403)) {
+                                AuthNotice.show()
+                            }
+                            stateFailures += 1
+                            if (stateFailures >= 3 && error == null) {
+                                error = "连不上宿主：${describeConnectionError(e)}"
+                            }
+                        }
                         .onSuccess { result ->
+                            stateFailures = 0
                             if (result is StateFetch.Fresh) {
                                 stateEtag = result.etag
                                 stateStore.put(deviceId, result.state)
@@ -1885,33 +1903,41 @@ class ChatViewModel @Inject constructor(
     }
 
     fun refreshHistory() {
-        val target = device ?: return
         // 这个函数有 6 个触发点（init / send 收尾 / 600ms 补拉 / SSE 收尾 / onForeground / compact 后），
         // 各自新开协程、彼此没有顺序。没有这个序号时，先发后到的旧响应会把新页盖回去
         // （表现：刚发出的消息闪一下又消失），与 loadOlder() 交错时同一条消息还可能进两段，
         // 撞上 LazyColumn 的 key 直接抛「Key was already used」。
         val seq = ++historyRefreshSeq
-        viewModelScope.launch {
-            if (items.isEmpty()) loading = true
-            if (seq == historyRefreshSeq && items.isEmpty()) error = null
-            try {
-                val page = api.messagesPage(target, token, sessionId, pageSize = 40)
-                if (seq != historyRefreshSeq) return@launch
-                unavailable = page.unavailable
-                items = page.messages.toTimelineItems()
-                markLastTurnResult()
-                settleTurnStats(page.messages)
-                lastMessageSeq = maxOf(lastMessageSeq, QueuedPrompts.baselineOf(page.messages))
-                reconcileQueue(page.messages)
-                before = page.nextBefore
-                hasOlder = page.nextBefore != null && page.messages.isNotEmpty()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                if (seq == historyRefreshSeq) error = describeConnectionError(e)
-            } finally {
-                if (seq == historyRefreshSeq) loading = false
-            }
+        viewModelScope.launch { refreshHistoryNow(seq) }
+    }
+
+    /**
+     * [refreshHistory] 的本体。
+     *
+     * `send()` 的 finally 要在 `NonCancellable` 里补拉，那时 `viewModelScope` 可能已经被取消 ——
+     * 再走 `viewModelScope.launch` 版本等于什么都没做（注释承诺的收尾从未执行）。
+     */
+    private suspend fun refreshHistoryNow(seq: Int) {
+        val target = device ?: return
+        if (items.isEmpty()) loading = true
+        if (seq == historyRefreshSeq && items.isEmpty()) error = null
+        try {
+            val page = api.messagesPage(target, token, sessionId, pageSize = 40)
+            if (seq != historyRefreshSeq) return
+            unavailable = page.unavailable
+            items = page.messages.toTimelineItems()
+            markLastTurnResult()
+            settleTurnStats(page.messages)
+            lastMessageSeq = maxOf(lastMessageSeq, QueuedPrompts.baselineOf(page.messages))
+            reconcileQueue(page.messages)
+            before = page.nextBefore
+            hasOlder = page.nextBefore != null && page.messages.isNotEmpty()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            if (seq == historyRefreshSeq) error = describeConnectionError(e)
+        } finally {
+            if (seq == historyRefreshSeq) loading = false
         }
     }
 
@@ -1920,10 +1946,14 @@ class ChatViewModel @Inject constructor(
         val target = device ?: return
         val cursor = before ?: return
         if (loadingOlder) return
+        // 与 refreshHistory() 共用同一把闸门：翻页期间若整体重拉过（序号变了），这一页接不上，
+        // 硬拼会把同一条消息放两遍 → LazyColumn 抛「Key was already used」。
+        val seq = historyRefreshSeq
         viewModelScope.launch {
             loadingOlder = true
             try {
                 val page = api.messagesPage(target, token, sessionId, pageSize = 40, before = cursor)
+                if (seq != historyRefreshSeq) return@launch
                 val older = page.messages.toTimelineItems()
                 items = older + items
                 lastMessageSeq = maxOf(lastMessageSeq, QueuedPrompts.baselineOf(page.messages))
@@ -1949,23 +1979,37 @@ class ChatViewModel @Inject constructor(
     var imageError by mutableStateOf<String?>(null)
         private set
 
+    /** 正在解码/压缩选中的图片（界面据此置灰发送键，别让人以为没反应）。 */
+    var imageBusy by mutableStateOf(false)
+        private set
+
     fun addImages(uris: List<Uri>) {
         if (uris.isEmpty()) return
         imageError = null
-        var added = images
-        for (uri in uris) {
-            if (added.size >= ImagePrep.MAX_COUNT) {
-                imageError = "一条消息最多带 ${ImagePrep.MAX_COUNT} 张图"
-                break
+        // 解码 + 逐档重压一张原图要几十到几百毫秒，选 4 张就在主线程待几百毫秒到数秒（低端机直接 ANR）。
+        // 整段挪到 IO，界面先给「正在处理…」，回来一次性写入。
+        imageBusy = true
+        viewModelScope.launch {
+            var added = emptyList<PendingImage>()
+            var failure: String? = null
+            withContext(Dispatchers.IO) {
+                for (uri in uris) {
+                    if (images.size + added.size >= ImagePrep.MAX_COUNT) {
+                        failure = "一条消息最多带 ${ImagePrep.MAX_COUNT} 张图"
+                        break
+                    }
+                    val prepared = platform.imageFromUri(uri)
+                    if (prepared == null) {
+                        failure = "这张图片读不出来（或者压完还是太大）"
+                        continue
+                    }
+                    added = added + prepared
+                }
             }
-            val prepared = platform.imageFromUri(uri)
-            if (prepared == null) {
-                imageError = "这张图片读不出来（或者压完还是太大）"
-                continue
-            }
-            added = added + prepared
+            images = images + added
+            imageError = failure
+            imageBusy = false
         }
-        images = added
     }
 
     fun pasteImage() {
@@ -2081,12 +2125,12 @@ class ChatViewModel @Inject constructor(
                 // 那时 refreshHistory() 之后那句 delay(600) 会立刻抛 CancellationException，
                 // 于是「补拉落盘消息」这条最需要跑的路永远跑不到（统计行停在 — 上）。
                 withContext(NonCancellable) {
-                    refreshHistory()
+                    refreshHistoryNow(++historyRefreshSeq)
                     // 落盘比收尾帧略晚：第一次重拉可能还没这条 assistant 消息，
                     // 补一次把统计行的 tokens 补上（已经结算过就什么都不做）。
                     if (turnStartedAt > 0L) {
                         delay(600)
-                        if (turnStartedAt > 0L) refreshHistory()
+                        if (turnStartedAt > 0L) refreshHistoryNow(++historyRefreshSeq)
                     }
                 }
             }
@@ -2337,14 +2381,17 @@ class ChatViewModel @Inject constructor(
             try {
                 val anon = api.createAnonymousSession(target, token, projectId)
                 parallelAsk = parallelAsk?.copy(sessionId = anon)
+                // 会话一建出来就先登记：后面 prompt 抛异常、或宿主不回 agentId / accepted=false 时，
+                // 关面板仍能把它卸掉（以前是 `askTarget ?: return`，于是宿主上留一个 noSession 运行时）。
+                askTarget = RuntimeTarget(anon, "", 0L)
                 val delivery = api.sendPrompt(
                     target,
                     token,
                     anon,
                     ChatPayloads.promptBody(newRequestId(), question),
                 )
-                askTarget = delivery.agentId?.let { agentId ->
-                    RuntimeTarget(anon, agentId, delivery.runtimeGeneration ?: 0L)
+                if (delivery.agentId != null) {
+                    askTarget = RuntimeTarget(anon, delivery.agentId, delivery.runtimeGeneration ?: 0L)
                 }
                 if (!delivery.accepted) {
                     parallelAsk = parallelAsk?.copy(busy = false, error = delivery.error ?: "宿主没有接受这条问题")
@@ -2397,12 +2444,25 @@ class ChatViewModel @Inject constructor(
         stopParallelRuntime()
     }
 
+    /**
+     * 收尾专用的后台 scope：**不能**用 viewModelScope。
+     *
+     * `ViewModel.clear()` 先关 closeables（viewModelScope 在内）再调 `onCleared()`，
+     * 所以 onCleared 里用 `viewModelScope.launch` 发的请求一条都发不出去（宿主上留一个 noSession 运行时）。
+     * 这个 scope 故意不 cancel：请求发完由 SupervisorJob 自然结束。
+     */
+    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private fun stopParallelRuntime() {
-        val target = device
         val runtime = askTarget ?: return
         askTarget = null
-        if (target == null) return
-        viewModelScope.launch {
+        enqueueRuntimeStop(runtime)
+    }
+
+    /** 把「卸载某个运行时」丢到 [cleanupScope]；`agentId` 为空时也照发（宿主只校验 sessionId）。 */
+    private fun enqueueRuntimeStop(runtime: RuntimeTarget) {
+        val target = device ?: return
+        cleanupScope.launch {
             runCatching {
                 api.stopRuntime(target, token, runtime.sessionId, runtime.agentId, runtime.runtimeGeneration)
             }
@@ -2432,14 +2492,15 @@ class ChatViewModel @Inject constructor(
         translateJob = viewModelScope.launch {
             try {
                 val anon = api.createAnonymousSession(target_device, token, projectId)
+                translateRuntime = RuntimeTarget(anon, "", 0L)
                 val delivery = api.sendPrompt(
                     target_device,
                     token,
                     anon,
                     ChatPayloads.promptBody(newRequestId(), translateInstruction(body, target)),
                 )
-                translateRuntime = delivery.agentId?.let { agentId ->
-                    RuntimeTarget(anon, agentId, delivery.runtimeGeneration ?: 0L)
+                if (delivery.agentId != null) {
+                    translateRuntime = RuntimeTarget(anon, delivery.agentId, delivery.runtimeGeneration ?: 0L)
                 }
                 if (!delivery.accepted) {
                     translation = TranslationState(
@@ -2498,17 +2559,15 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun stopTranslateRuntime() {
-        viewModelScope.launch { stopTranslateRuntimeNow() }
+        val runtime = translateRuntime ?: return
+        translateRuntime = null
+        enqueueRuntimeStop(runtime)
     }
 
     private suspend fun stopTranslateRuntimeNow() {
-        val target = device
         val runtime = translateRuntime ?: return
         translateRuntime = null
-        if (target == null) return
-        runCatching {
-            api.stopRuntime(target, token, runtime.sessionId, runtime.agentId, runtime.runtimeGeneration)
-        }
+        enqueueRuntimeStop(runtime)
     }
 
     /** 排队消息一旦出现在历史里就撤掉提示（宿主那边已经没有「待发」这回事）。 */
@@ -2519,7 +2578,9 @@ class ChatViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        // 两个匿名运行时都要卸：以前只清并行问询那个，翻译的从头到尾没有清理点。
         stopParallelRuntime()
+        stopTranslateRuntime()
         super.onCleared()
     }
 }
