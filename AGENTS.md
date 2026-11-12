@@ -604,6 +604,20 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
 - **`MarkdownCache` 的解析在锁外（0.5.56）**：锁里只做 get/put，容量 8。锁里解析会把同一帧里
   其它消息的 Markdown 一起堵住（先串行再上屏）。
 
+- **本地存清单不要做「转义后可逆」的折衷（0.5.57）**：`data/LocalPrompts.kt` / `data/QuickMessages.kt`
+  现在是 JSON（`buildJsonArray` 编码、`PideckJson` 解码）。以前用「`\u001e` 分记录 + 把换行折成字面 `\n`」，
+  提示词模板里常出现字面 `\n`（JSON / 正则 / C 转义示例），存一次读回来就变成真换行、用户也改不回去。
+  老格式的 `legacyDecode` 只用于升级读一次，别在写入路径上复用。
+- **通知权限只问一次（0.5.57）**：`MainActivity.onCreate` 走 `Prefs.shouldAskNotificationPermission()`
+  （已是 granted / 已问过都不再请求），问之前先 `markNotificationPermissionAsked`。
+  被系统关掉时设置页「通知」段显示红字 + 「去打开」（`ui/common/Links.kt` 的 `openNotificationSettings`）。
+- **只在可见时轮询（0.5.57）**：`ui/chat/DrawerActivePane.kt` 的 5 秒运行态轮询包在
+  `lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED)` 里；`LaunchedEffect(Unit)` + `while(true)` 在
+  App 退到后台、抽屉还开着时会一直打宿主。
+- **提问卡的状态一律 `rememberSaveable`（0.5.57）**：`ui/chat/AskCard.kt` 的 `answers`（`mapSaver`）与
+  `multi`（`listSaver`）已补上。同一张卡里 `tab` / `draft` / `expanded` 早就是 saveable，
+  只留两个 `remember` 的表现是「转屏后草稿还在、勾的选项没了」。
+
 验证：`cd native && ./gradlew --offline -q :app:testDebugUnitTest`，出包
 `./gradlew :app:assembleRelease`，产物在 `native/app/build/outputs/apk/release/app-release.apk`，
 拷成 `apk/PiDeck-native-<版本>-release.apk` 后更新 `apk/SHA256SUMS.txt` 与 `apk/index.html`
