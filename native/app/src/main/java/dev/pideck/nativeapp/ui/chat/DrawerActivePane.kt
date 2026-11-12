@@ -41,6 +41,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -357,10 +360,14 @@ internal fun DrawerActivePane(
 ) {
     // 运行态是「别处也在变」的东西：抽屉开着、别的机器/桌面端在跑的时候必须自己问。
     // 每 5 秒拉一次 `/api/sessions/runtimes`（约 3KB），离开这一段就自动停（LaunchedEffect 随组合注销）。
-    LaunchedEffect(Unit) {
-        while (true) {
-            onPollRuntimes()
-            delay(RUNTIMES_POLL_MS)
+    // 只在「看得见」时轮询：App 退到后台、抽屉还开着的时候继续每 5 秒打一次宿主是白耗电。
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                onPollRuntimes()
+                delay(RUNTIMES_POLL_MS)
+            }
         }
     }
     // 状态与排序都是 Compose 可观察的：SessionActivity 一变，这里跟着重组

@@ -68,4 +68,24 @@ class LocalPromptsTest {
         val prompt = LocalPrompts.add("长文", long).single()
         assertEquals(LocalPrompts.MAX_BODY_LENGTH, prompt.body.length)
     }
+
+    @Test
+    fun `正文里的字面反斜杠 n 存一次读回来不变`() {
+        // 0.5.57 前用「换行折成字面 \n」的编码：模板里写 C / JSON 转义示例，
+        // 存一次再读回来就断成两行，用户改不回去。
+        val body = "printf(\"a\\nb\");\n正则: ^\\d+$"
+        val raw = LocalPrompts.encode(listOf(LocalPrompts.Prompt(id = "p1", title = "转义", body = body)))
+        val back = LocalPrompts.decode(raw)
+        assertEquals(1, back.size)
+        assertEquals(body, back.single().body)
+    }
+
+    @Test
+    fun `升级前存的老格式还能读出来`() {
+        val legacy = "p1\u001f旧标题\u001f第一行\\n第二行"
+        val back = LocalPrompts.decode(legacy)
+        assertEquals(1, back.size)
+        assertEquals("旧标题", back.single().title)
+        assertEquals("第一行\n第二行", back.single().body)
+    }
 }

@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -56,6 +57,7 @@ import dev.pideck.nativeapp.data.HostCompat
 import dev.pideck.nativeapp.data.ThemeMode
 import dev.pideck.nativeapp.data.UpdateCheck
 import dev.pideck.nativeapp.data.UpdateState
+import dev.pideck.nativeapp.ui.common.openNotificationSettings
 import dev.pideck.nativeapp.ui.common.openUrl
 
 /**
@@ -119,6 +121,17 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val context = LocalContext.current
+    // 用户可能去系统设置里关掉了通知：每次回前台重查一次，别让提示停在过期状态。
+    var notificationsEnabled by remember {
+        mutableStateOf(
+            androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled(),
+        )
+    }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        notificationsEnabled =
+            androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -171,6 +184,22 @@ fun SettingsScreen(
                 }
                 Spacer(Modifier.width(12.dp))
                 Switch(checked = viewModel.notifyDone, onCheckedChange = { viewModel.toggleNotifyDone(it) })
+            }
+            if (!notificationsEnabled) {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "系统里这个 App 的通知是关掉的 —— 跑完和提问都不会提醒你。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = { openNotificationSettings(context) }) { Text("去打开") }
+                }
             }
 
             Spacer(Modifier.height(12.dp))

@@ -58,4 +58,17 @@ class QuickMessagesTest {
         val removed = QuickMessages.remove(items.first())
         assertFalse(items.first() in removed)
     }
+
+    @Test
+    fun `带反斜杠 n 的快捷消息原样存回来`() {
+        val items = listOf("printf(\"a\\nb\")", "换行:\n第二行")
+        val back = QuickMessages.decode(QuickMessages.encode(items))
+        assertEquals(items, back)
+    }
+
+    @Test
+    fun `升级前存的老格式还能读出来`() {
+        val back = QuickMessages.decode("继续\u001e第一行\\n第二行")
+        assertEquals(listOf("继续", "第一行\n第二行"), back)
+    }
 }

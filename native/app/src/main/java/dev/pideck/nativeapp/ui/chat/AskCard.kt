@@ -34,6 +34,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -58,6 +60,38 @@ import kotlinx.serialization.json.JsonObject
  * 上下文再回来答。点标题栏收起，收起后标题栏右侧仍留一行题干（`maxLines = 1`），
  * 不会变成「有一张卡但不知道在问什么」。
  */
+private fun encodeAnswer(answer: AskUi.Answer): String = when (answer) {
+    is AskUi.Answer.Text -> "t:" + answer.text
+    is AskUi.Answer.Flag -> if (answer.value) "f:1" else "f:0"
+    is AskUi.Answer.Many -> "m:" + answer.values.joinToString(ANSWER_SEP)
+}
+
+private fun decodeAnswer(raw: String): AskUi.Answer? = when {
+    raw.startsWith("t:") -> AskUi.Answer.Text(raw.removePrefix("t:"))
+    raw == "f:1" -> AskUi.Answer.Flag(true)
+    raw == "f:0" -> AskUi.Answer.Flag(false)
+    raw.startsWith("m:") -> AskUi.Answer.Many(
+        raw.removePrefix("m:").split(ANSWER_SEP).filter { it.isNotEmpty() },
+    )
+    else -> null
+}
+
+private const val ANSWER_SEP = "\u001f"
+
+private val ANSWERS_SAVER = mapSaver(
+    save = { map -> map.entries.associate { it.key to encodeAnswer(it.value) } },
+    restore = { saved ->
+        saved.entries.mapNotNull { (key, value) ->
+            decodeAnswer(value as? String ?: return@mapNotNull null)?.let { key to it }
+        }.toMap()
+    },
+)
+
+private val MULTI_SAVER = listSaver<Set<String>, String>(
+    save = { it.toList() },
+    restore = { it.toSet() },
+)
+
 @Composable
 fun AskCard(
     request: PendingUiRequest,
@@ -71,11 +105,15 @@ fun AskCard(
     val isBatch = questions.isNotEmpty()
 
     var tab by rememberSaveable(request.requestId) { mutableIntStateOf(0) }
-    var answers by remember(request.requestId) {
+    // 用户勾了三项多选、转屏（或进程被回收重建）后再回来，已填内容不能丢：
+    // 同一张卡里 `tab` / `draft` / `expanded` 早就是 rememberSaveable，只有这两个是 remember。
+    var answers by rememberSaveable(request.requestId, stateSaver = ANSWERS_SAVER) {
         mutableStateOf<Map<String, AskUi.Answer>>(emptyMap())
     }
     var draft by rememberSaveable(request.requestId) { mutableStateOf(request.prefill.orEmpty()) }
-    var multi by remember(request.requestId) { mutableStateOf<Set<String>>(emptySet()) }
+    var multi by rememberSaveable(request.requestId, stateSaver = MULTI_SAVER) {
+        mutableStateOf<Set<String>>(emptySet())
+    }
     // 默认展开；按 requestId 记住，换一道新题重新展开。
     var expanded by rememberSaveable(request.requestId) { mutableStateOf(true) }
 

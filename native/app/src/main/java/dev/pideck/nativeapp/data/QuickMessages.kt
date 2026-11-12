@@ -1,6 +1,11 @@
 package dev.pideck.nativeapp.data
 
 import android.content.Context
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * 快捷消息（「底栏那颗闪电按钮」的对应物）。
@@ -60,12 +65,29 @@ object QuickMessages {
         runCatching { prefs.edit().putString(KEY, encode(items)).apply() }
     }
 
-    /** 一行一条，正文里的换行折成 `\n` 两个字符 —— 快捷消息本来就该是一句话。 */
-    private fun encode(items: List<String>): String =
-        items.joinToString("\u001e") { it.replace("\u001e", " ").replace("\n", "\\n") }
+    /**
+     * JSON 数组存。
+     *
+     * 以前「`\u001e` 分隔 + 把换行折成字面 `\n`」是编码不可逆的：快捷消息里写 `printf("a\nb")`
+     * 这种内容，存一次再读就变成真换行。
+     */
+    internal fun encode(items: List<String>): String = buildJsonArray {
+        items.forEach { add(it) }
+    }.toString()
 
-    private fun decode(raw: String): List<String> = raw.split('\u001e').mapNotNull { line ->
-        line.replace("\\n", "\n").trim().takeIf { it.isNotEmpty() }
+    internal fun decode(raw: String): List<String> {
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("[")) {
+            val parsed = runCatching { PideckJson.parseToJsonElement(trimmed) as JsonArray }.getOrNull()
+            if (parsed != null) {
+                return parsed.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim() }
+                    .filter { it.isNotEmpty() }
+            }
+        }
+        // 老格式只读一次。
+        return raw.split('\u001e').mapNotNull { line ->
+            line.replace("\\n", "\n").trim().takeIf { it.isNotEmpty() }
+        }
     }
 
     private fun read(): List<String> {

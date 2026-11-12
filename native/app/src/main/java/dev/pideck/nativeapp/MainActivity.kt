@@ -12,6 +12,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.SideEffect
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -32,7 +34,10 @@ class MainActivity : ComponentActivity() {
         // API 35 起系统强制 edge-to-edge；这里显式开，交给 Compose 的 insets 处理。
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // 只问一次：拒了之后不再每次冷启动都走一遍（怎么开回来写在设置页「通知」里）。
+        lifecycleScope.launch {
+            if (!Prefs.shouldAskNotificationPermission(this@MainActivity)) return@launch
+            Prefs.markNotificationPermissionAsked(this@MainActivity)
             notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         takeNotificationTarget(intent)

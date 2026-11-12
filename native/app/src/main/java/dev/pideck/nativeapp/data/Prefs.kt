@@ -34,6 +34,9 @@ object Prefs {
     private val KEY_EXPAND_INTERIM = booleanPreferencesKey("expand_interim_stream")
     private val KEY_AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
 
+    /** 通知权限只在「还没问过」时请求一次（Android 13+）。 */
+    private val KEY_NOTIFY_ASKED = booleanPreferencesKey("notify_permission_asked")
+
 
     /** 主题变化用 StateFlow 播出去，MainActivity 直接 collect。 */
     val themeFlow = MutableStateFlow(ThemeMode.SYSTEM)
@@ -200,6 +203,28 @@ object Prefs {
     suspend fun setAutoCheckUpdate(context: Context, enabled: Boolean) {
         autoCheckUpdate = enabled
         context.prefsStore.edit { it[KEY_AUTO_CHECK_UPDATE] = enabled }
+    }
+
+    /**
+     * 这次冷启动该不该请求通知权限。
+     *
+     * 以前 `MainActivity.onCreate` 无条件 `launch(POST_NOTIFICATIONS)`：用户点过「不允许」之后，
+     * 每次冷启动仍会走一遍请求逻辑（Android 13+ 不再弹窗，但一样留系统日志），而且拒了之后
+     * 没有任何引导 —— 这 App 的用途就是「跑完提醒我」，通知坏了用户只会以为功能坏了。
+     */
+    suspend fun shouldAskNotificationPermission(context: Context): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return false
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.POST_NOTIFICATIONS,
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) return false
+        val asked = runCatching { context.prefsStore.data.first()[KEY_NOTIFY_ASKED] }.getOrNull() ?: false
+        return !asked
+    }
+
+    suspend fun markNotificationPermissionAsked(context: Context) {
+        runCatching { context.prefsStore.edit { it[KEY_NOTIFY_ASKED] = true } }
     }
 
     suspend fun setExpandInterimStream(context: Context, enabled: Boolean) {

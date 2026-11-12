@@ -1,6 +1,12 @@
 package dev.pideck.nativeapp.data
 
 import android.content.Context
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonArray
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * 本机提示词模板。
@@ -61,16 +67,47 @@ object LocalPrompts {
         runCatching { prefs.edit().putString(KEY, encode(items)).apply() }
     }
 
-    /** 记录之间 `\u001e`，字段之间 `\u001f`，正文里的换行折成字面 `\n` —— 一行一条最省事。 */
-    private fun encode(items: List<Prompt>): String = items.joinToString(RECORD.toString()) { prompt ->
-        listOf(
-            prompt.id.replace(RECORD, ' ').replace(FIELD, ' '),
-            prompt.title.replace(RECORD, ' ').replace(FIELD, ' '),
-            prompt.body.replace(RECORD, ' ').replace(FIELD, ' ').replace("\n", "\\n"),
-        ).joinToString(FIELD.toString())
+    /**
+     * JSON 数组存（`[[id,title,body], ...]`）。
+     *
+     * 以前用「`\u001e` 分记录、`\u001f` 分字段、正文里的换行折成字面 `\n`」：编码不可逆 ——
+     * 模板里本来就常出现字面 `\n`（JSON / 正则 / C 转义示例），存一次读回来就断成两行。
+     */
+    internal fun encode(items: List<Prompt>): String = buildJsonArray {
+        items.forEach { prompt ->
+            addJsonArray {
+                add(prompt.id)
+                add(prompt.title)
+                add(prompt.body)
+            }
+        }
+    }.toString()
+
+    internal fun decode(raw: String): List<Prompt> {
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("[")) {
+            val parsed = runCatching { PideckJson.parseToJsonElement(trimmed) as JsonArray }.getOrNull()
+            if (parsed != null) {
+                return parsed.mapNotNull { element ->
+                    val parts = (element as? JsonArray)?.map {
+                        (it as? JsonPrimitive)?.contentOrNull
+                    } ?: return@mapNotNull null
+                    if (parts.size < 3) return@mapNotNull null
+                    val body = parts[2]?.trim().orEmpty()
+                    if (body.isEmpty()) return@mapNotNull null
+                    Prompt(
+                        id = parts[0].orEmpty().trim(),
+                        title = parts[1].orEmpty().trim(),
+                        body = body,
+                    )
+                }
+            }
+        }
+        // 老格式（升级前存的）只读一次，下次 persist 就换成 JSON。
+        return legacyDecode(raw)
     }
 
-    private fun decode(raw: String): List<Prompt> = raw.split(RECORD).mapNotNull { record ->
+    private fun legacyDecode(raw: String): List<Prompt> = raw.split(RECORD).mapNotNull { record ->
         val parts = record.split(FIELD)
         if (parts.size < 3) return@mapNotNull null
         val body = parts[2].replace("\\n", "\n").trim()
