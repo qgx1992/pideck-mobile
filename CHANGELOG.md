@@ -1,3 +1,20 @@
+## 0.5.59 — 2026-11-12
+
+**工程收尾：取消语义、重连外壳、匿名运行时台账、草稿键。**
+
+- `data/Cancellation.kt` 的 `attempt { }` 取代 `runCatching { }`（36 个文件、120 处）：
+  协程被 cancel 时不再被吞成「静默失败」，`catch (e: Exception/Throwable)` 的 44 处也先放行
+  `CancellationException`。之前的表现是「点了停止还在跑」「退出页面后又弹一条错误」。
+- `data/Reconnect.kt`：聊天页看护流与会话列表 `/api/events` 两份一模一样的重连循环合成一份
+  （`reconnectDelay` / `nextBackoff` 有单测）；服务端正常收尾也算一轮失败，不会退化成 1.5 秒一次的忙循环。
+- `data/EphemeralRuntimes.kt`：并行问询与浮窗翻译的匿名运行时（`noSession`，不落盘）收成一本台账，
+  卸运行时统一走 `stopScope` 而不是 `viewModelScope`（`onCleared` 里用 viewModelScope 发的请求一条都发不出去）。
+- `data/SessionKey.kt` + 草稿箱：草稿的键从 `sessionId` 变成「设备 + 会话」，换一台电脑配对后不会串台。
+- CI 的 `actions/*` 从 v4 升到 v5（runner 已经在 Node 24 上跑 v4 了，只是告警）。
+- Robolectric / Compose UI 测试**没做**：本机 Gradle 缓存里没有 `org.robolectric`（离线构建拉不到），
+  要先联网 `./gradlew :app:dependencies` 下一次依赖才谈得上，写在 README 的「还没做」里。
+- 单测 383 条（新增 16：取消语义 4、重连 8、草稿键 4）。
+
 ## 0.5.58 — 2026-11-12
 
 **工作区「子任务」页补上耗时。**

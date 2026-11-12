@@ -208,7 +208,7 @@ class ReplyMerger(
 
     private fun JsonObject.str(key: String): String? {
         val value: JsonElement = this[key] ?: return null
-        val primitive = runCatching { value.jsonPrimitive }.getOrNull() ?: return null
+        val primitive = attempt { value.jsonPrimitive }.getOrNull() ?: return null
         if (primitive is JsonPrimitive && !primitive.isString) return primitive.contentOrNull
         return primitive.contentOrNull
     }

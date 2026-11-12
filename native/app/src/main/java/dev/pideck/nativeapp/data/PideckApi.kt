@@ -335,7 +335,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             val text = rawGet(device, token, "/api/sessions/runtimes")
             val root = PideckJson.parseToJsonElement(text) as? JsonObject ?: return@withContext emptyList()
             (root["runtimes"] as? JsonArray)?.mapNotNull { element ->
-                runCatching {
+                attempt {
                     PideckJson.decodeFromJsonElement(RuntimeInfo.serializer(), element)
                 }.getOrNull()
             } ?: emptyList()
@@ -388,9 +388,9 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             append("&path=").append(java.net.URLEncoder.encode(path, "UTF-8"))
         }
         val text = rawGet(device, token, query)
-        return runCatching {
+        return attempt {
             val root = PideckJson.parseToJsonElement(text) as kotlinx.serialization.json.JsonObject
-            val diff = root["diff"] ?: return@runCatching null
+            val diff = root["diff"] ?: return@attempt null
             LineDiff.parsePayload(diff)
         }.getOrNull()
     }
@@ -412,7 +412,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             if (e.code == null) throw e
             rawGet(device, token, "$base&confirm=1")
         }
-        return runCatching {
+        return attempt {
             val obj = PideckJson.parseToJsonElement(text) as kotlinx.serialization.json.JsonObject
             val content = (obj["content"] as? kotlinx.serialization.json.JsonPrimitive)?.content
             if (content != null) content else text
@@ -441,7 +441,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         withContext(Dispatchers.IO) {
             val body = ChatPayloads.createSessionBody(projectId, backend, acpToolId, model, thinkingLevel)
             val text = postJson(device, token, "/api/sessions", body)
-            val parsed = runCatching {
+            val parsed = attempt {
                 PideckJson.parseToJsonElement(text).jsonObject["session"]?.jsonObject?.get("id")?.jsonPrimitive?.content
             }.getOrNull()
             parsed?.takeIf { it.isNotBlank() } ?: throw PideckException("新建会话没有返回 id")
@@ -469,7 +469,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
     ): String = withContext(Dispatchers.IO) {
         val body = buildJsonObject { put("projectId", projectId) }
         val text = postJson(device, token, "/api/sessions/anonymous", body)
-        val parsed = runCatching {
+        val parsed = attempt {
             PideckJson.parseToJsonElement(text).jsonObject["session"]?.jsonObject?.get("id")?.jsonPrimitive?.content
         }.getOrNull()
         parsed?.takeIf { it.isNotBlank() } ?: throw PideckException("匿名会话没有返回 id")
@@ -495,7 +495,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         token: String?,
         sessionId: String,
     ): String? = withContext(Dispatchers.IO) {
-        val raw = runCatching {
+        val raw = attempt {
             postJson(
                 device,
                 token,
@@ -503,7 +503,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
                 buildJsonObject { },
             )
         }.getOrNull() ?: return@withContext null
-        runCatching {
+        attempt {
             PideckJson.parseToJsonElement(raw).jsonObject["result"]?.jsonObject
                 ?.get("targetSessionId")?.jsonPrimitive?.content
         }.getOrNull()
@@ -532,7 +532,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         val text = postJson(device, token, "/api/projects", buildJsonObject { put("path", path) })
         val root = PideckJson.parseToJsonElement(text) as? JsonObject ?: return@withContext null
         root["project"]?.let { element ->
-            runCatching { PideckJson.decodeFromJsonElement(Project.serializer(), element) }.getOrNull()
+            attempt { PideckJson.decodeFromJsonElement(Project.serializer(), element) }.getOrNull()
         }
     }
 
@@ -592,7 +592,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             "/api/sessions/${encode(target.sessionId)}/runtime/state",
             runtimeTargetBody(target),
         )
-        parseRuntimeSnapshot(unwrapRuntimeState(runCatching {
+        parseRuntimeSnapshot(unwrapRuntimeState(attempt {
             PideckJson.parseToJsonElement(text)
         }.getOrNull()))
     }
@@ -648,7 +648,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
             put("levelId", levelId?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull)
         }
         val text = postJson(device, token, "/api/sessions/${encode(sessionId)}/security-level", body)
-        val root = runCatching { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
+        val root = attempt { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
         parseSecurityState(root?.get("security"))
             ?: throw PideckException("security-level: 返回体里没有 security")
     }
@@ -667,7 +667,7 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
         val root = PideckJson.parseToJsonElement(text) as? JsonObject ?: return@withContext emptyList()
         val array = root["subagents"] as? JsonArray ?: return@withContext emptyList()
         array.mapNotNull { element ->
-            runCatching {
+            attempt {
                 PideckJson.decodeFromJsonElement(SubagentEntry.serializer(), element)
             }.getOrNull()
         }
@@ -833,7 +833,7 @@ internal suspend fun Call.await(): Response = suspendCancellableCoroutine { cont
             cont.resume(response)
         }
     })
-    cont.invokeOnCancellation { runCatching { cancel() } }
+    cont.invokeOnCancellation { attempt { cancel() } }
 }
 
 /** 普通 JSON 请求的读超时。SSE / 带心跳的长请求不走它（见 `OkHttpPideckApi.jsonClient`）。 */
@@ -850,7 +850,7 @@ fun defaultOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
 
 /** 回执解析：`{"result":{"accepted":true,...}}`；拒绝时只有 `accepted:false` + `error`。 */
 internal fun parsePromptDelivery(text: String): PromptDelivery {
-    val root = runCatching { PideckJson.parseToJsonElement(text).jsonObject }.getOrNull()
+    val root = attempt { PideckJson.parseToJsonElement(text).jsonObject }.getOrNull()
     val result = root?.get("result") as? JsonObject
         ?: root?.get("state") as? JsonObject
         ?: root

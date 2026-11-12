@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui
 
+import dev.pideck.nativeapp.data.attempt
 import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,9 +51,9 @@ class StartViewModel @Inject constructor(
         viewModelScope.launch {
             // 同 ConnectionResolver 的理由：读盘异常 / 迟迟不吐时不能把启动页卡死在这里
             val devices = withTimeoutOrNull(3_000) {
-                runCatching { repository.devices.first() }.getOrDefault(emptyList())
+                attempt { repository.devices.first() }.getOrDefault(emptyList())
             } ?: emptyList()
-            val remembered = runCatching { Prefs.lastSession(context) }.getOrNull()?.first
+            val remembered = attempt { Prefs.lastSession(context) }.getOrNull()?.first
             val device = devices.firstOrNull { it.id == remembered } ?: devices.firstOrNull()
             if (device == null) {
                 startRoute = Routes.DEVICES
@@ -82,9 +83,9 @@ class StartViewModel @Inject constructor(
 
     /** 一次 `/api/state`：只关心「授权还对不对」。3 秒拿不到就按连不上处理，不拖慢启动。 */
     private suspend fun probe(device: dev.pideck.nativeapp.data.Device): Probe {
-        val token = runCatching { repository.tokenOf(device.id) }.getOrNull()
+        val token = attempt { repository.tokenOf(device.id) }.getOrNull()
         val result = withTimeoutOrNull(3_000) {
-            runCatching { api.state(device, token) }
+            attempt { api.state(device, token) }
         } ?: return Probe.Unreachable
         val error = result.exceptionOrNull()
         if (error is PideckException && (error.code == 401 || error.code == 403)) return Probe.Unauthorized

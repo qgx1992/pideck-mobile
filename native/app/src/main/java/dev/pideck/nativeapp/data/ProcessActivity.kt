@@ -118,7 +118,7 @@ object ProcessActivity {
     fun detailFromArgs(input: String?): String? {
         val raw = input?.trim().orEmpty()
         if (raw.isEmpty()) return null
-        val element = runCatching { Json.parseToJsonElement(raw) }.getOrNull()
+        val element = attempt { Json.parseToJsonElement(raw) }.getOrNull()
         val picked = pickDetail(element)
             ?: (element as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
         val lines = picked?.lineSequence()

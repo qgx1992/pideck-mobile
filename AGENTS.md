@@ -272,6 +272,20 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   时会一次消掉好几条。宿主没有序号时退回按出现次数对账，别直接清空。
   另外：**手机做不到「撤回排队」** —— 桌面端那个排队面板是客户端自己攒的账（Electron IPC），
   手机发出去就进了 pi 自己的队列，HTTP 侧没有撤回接口。别照着桌面文案做撤回按钮。
+- **取消语义只有一条规则**（0.5.59 起）：可能被取消的调用用 `data/Cancellation.kt` 的 `attempt { }`，
+  不用 `runCatching { }`（它连 `CancellationException` 一起吞，表现是「点了停止还在跑」）。
+  手写 `catch (e: Exception)` / `catch (e: Throwable)` 时第一行必须是 `if (e is CancellationException) throw e`。
+  纯同步解析继续用哪个都行，但统一成 `attempt` 更省心。
+- **「断了就重连」只有一份实现**（`data/Reconnect.kt` 的 `reconnectingStream`）：聊天页看护流与会话列表
+  `/api/events` 都走它，退避 1.5s → 3s → 翻倍 → 15s 封顶。**每收到一帧要调 `onFrame()`** 把失败计数归零，
+  否则一次抖动就直接跳到 15 秒。正常关流算一轮失败（以前归零 → 404 会变成 1.5 秒一次的忙循环）。
+- **匿名会话的运行时都要记进 `data/EphemeralRuntimes.kt`**：这类 runtime 不出现在项目列表里，没人替你收。
+  卸载必须走它自己的 `stopScope`，**不能**用 `viewModelScope` —— `ViewModel.clear()` 先关 closeables
+  再调 `onCleared()`，在那里用 viewModelScope 发的请求一条都发不出去（宿主上留孤儿运行时）。
+- **跨设备的键要带 deviceId**：`data/SessionKey.kt` 的 `SessionKey(deviceId, sessionId)` 就是为此。
+  会话 id 只在它自己的宿主里有意义，只按 `sessionId` 存（草稿箱以前就是这样）会在第二台设备上串台。
+- **`catch (e: Exception)` 不是「不会崩就行」**：错误消息要落到界面（`error` / `loadState`），
+  静默吞掉的结果是用户看到空白页、日志里什么都没有。
 - **ViewModel 里的 `device` 是异步来的，界面上的 `LaunchedEffect(Unit)` 比它早**
   （`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt` 的 `deviceReady`）：
   `init` 要先去 `DeviceRepository` 把设备/令牌读出来才知道往哪发请求，而 Composable 的

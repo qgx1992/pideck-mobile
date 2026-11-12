@@ -48,12 +48,12 @@ class ConnectionResolver @javax.inject.Inject constructor(
         // 两个 null 都要当成「没有这台设备」：超时（withTimeoutOrNull）与
         // `first { }` 在流结束仍没匹配时抛的 NoSuchElementException（runCatching 兜住）。
         val found = withTimeoutOrNull(timeoutMs) {
-            runCatching {
+            attempt {
                 directory.devices.first { list -> list.any { it.id == deviceId } }
                     .firstOrNull { it.id == deviceId }
             }.getOrNull()
         } ?: return null
-        val token = runCatching { directory.tokenOf(found.id) }.getOrNull()
+        val token = attempt { directory.tokenOf(found.id) }.getOrNull()
         return Connection(found, token)
     }
 }

@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui.chat
 
+import dev.pideck.nativeapp.data.attempt
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
@@ -280,7 +281,7 @@ internal fun DrawerSectionBar(modifier: Modifier = Modifier) {
                         scope.launch { offset.snapTo((offset.value + dragAmount).coerceIn(0f, maxOffset)) }
                     },
                     onDragEnd = {
-                        val velocityPx = runCatching { tracker.calculateVelocity().x }.getOrDefault(0f)
+                        val velocityPx = attempt { tracker.calculateVelocity().x }.getOrDefault(0f)
                         settle(
                             dragTargetSection(
                                 offsetFraction = offset.value / segmentPx,

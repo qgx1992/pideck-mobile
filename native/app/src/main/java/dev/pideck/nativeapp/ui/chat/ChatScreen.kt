@@ -185,14 +185,14 @@ fun ChatScreen(
     BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
     // 草稿按会话各自保存：换会话再回来，写了一半的内容还在
     var draft by remember(viewModel.sessionId) {
-        mutableStateOf(ChatDrafts.get(viewModel.sessionId))
+        mutableStateOf(ChatDrafts.get(deviceId, viewModel.sessionId))
     }
 
     // 并行问询面板点「插入输入框」：答案塞进草稿，面板随即收掉
     LaunchedEffect(viewModel.parallelInsert) {
         val text = viewModel.consumeParallelInsert() ?: return@LaunchedEffect
         draft = if (draft.isBlank()) text else draft.trimEnd() + System.lineSeparator() + text
-        ChatDrafts.put(viewModel.sessionId, draft)
+        ChatDrafts.put(deviceId, viewModel.sessionId, draft)
     }
 
     // 两个过程相关开关（设置 → 通用）。关掉「过程组显示」就是桌面端那个开关关掉的样子：全部平铺。
@@ -337,7 +337,7 @@ fun ChatScreen(
     val insertIntoDraft: (String) -> Unit = { text ->
         val merged = if (draft.isBlank()) text else draft.trimEnd() + System.lineSeparator() + System.lineSeparator() + text
         draft = merged
-        ChatDrafts.put(viewModel.sessionId, merged)
+        ChatDrafts.put(deviceId, viewModel.sessionId, merged)
     }
 
     // 长按消息 → 复制全文 / 复制代码块 / 自由复制
@@ -651,7 +651,7 @@ fun ChatScreen(
                 value = draft,
                 onValueChange = { text ->
                     draft = text
-                    ChatDrafts.put(viewModel.sessionId, text)
+                    ChatDrafts.put(deviceId, viewModel.sessionId, text)
                 },
                 sending = viewModel.streaming,
                 images = viewModel.images,
@@ -665,7 +665,7 @@ fun ChatScreen(
                 onSend = { mode ->
                     val text = draft
                     draft = ""
-                    ChatDrafts.clear(viewModel.sessionId)
+                    ChatDrafts.clear(deviceId, viewModel.sessionId)
                     atBottom = true
                     submitText(text, mode)
                 },
@@ -689,13 +689,13 @@ fun ChatScreen(
                         // 客户端接管：新会话直接回首页，压缩把命令写回输入框（可以再补一句提示词）
                         "new" -> {
                             draft = ""
-                            ChatDrafts.clear(viewModel.sessionId)
+                            ChatDrafts.clear(deviceId, viewModel.sessionId)
                             onOpenHome()
                         }
 
                         else -> {
                             draft = "/${entry.insert} "
-                            ChatDrafts.put(viewModel.sessionId, draft)
+                            ChatDrafts.put(deviceId, viewModel.sessionId, draft)
                         }
                     }
                 },
@@ -817,7 +817,7 @@ fun ChatScreen(
         onInsertMention = { path ->
             val needsSpace = draft.isNotEmpty() && !draft.endsWith(" ")
             draft = draft + (if (needsSpace) " " else "") + "@" + path + " "
-            ChatDrafts.put(viewModel.sessionId, draft)
+            ChatDrafts.put(deviceId, viewModel.sessionId, draft)
             showWorkspace = false
             atBottom = true
         },

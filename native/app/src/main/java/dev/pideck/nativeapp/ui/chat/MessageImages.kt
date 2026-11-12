@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui.chat
 
+import dev.pideck.nativeapp.data.attempt
 import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.LruCache
@@ -85,7 +86,7 @@ private object FullImageCache {
 }
 
 /** 解码成缩略图；解不出来返回 null（气泡里留一个占位块，不崩）。 */
-private fun decodeThumb(base64: String, maxPixels: Int): ImageBitmap? = runCatching {
+private fun decodeThumb(base64: String, maxPixels: Int): ImageBitmap? = attempt {
     // 宿主给的是裸 base64；万一某个版本带上了 `data:…;base64,` 前缀也别整张图丢掉
     val payload = if (base64.contains(",base64,")) base64.substringAfter(",base64,") else base64
     val bytes = Base64.decode(payload, Base64.DEFAULT)

@@ -1,5 +1,7 @@
 package dev.pideck.nativeapp.ui.sessions
 
+import dev.pideck.nativeapp.data.reconnectingStream
+import dev.pideck.nativeapp.data.attempt
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -234,19 +236,18 @@ class SessionsViewModel @Inject constructor(
         if (streamJob?.isActive == true) return
         streamJob = viewModelScope.launch {
             // 以前这里断了只 catch 一句就结束（注释说的「轮询兜底」并不存在），
-            // SSE 被中间设备掐掉后列表就永久停在最后一份数据。现在自己重连，退避 1.5s → 15s 封顶。
-            var backoff = 0L
-            var failures = 0
-            while (true) {
-                val current = connections.resolve(deviceId, timeoutMs = 3_000L)
-                if (current == null) {
-                    streamJob = null
-                    return@launch
-                }
-                try {
+            // SSE 被中间设备掐掉后列表就永久停在最后一份数据。
+            // 重连外壳与聊天页看护流共用一份，见 data/Reconnect.kt。
+            reconnectingStream(
+                connect = {
+                    connections.resolve(deviceId, timeoutMs = 3_000L).also {
+                        if (it == null) streamJob = null
+                    }
+                },
+                stream = { current, onFrame ->
                     api.stateEvents(current.device, current.token).collect { json ->
-                        failures = 0
-                        val payload = runCatching {
+                        onFrame()
+                        val payload = attempt {
                             PideckJson.decodeFromString(PideckState.serializer(), json)
                         }.getOrNull() ?: return@collect
                         state = payload
@@ -255,15 +256,10 @@ class SessionsViewModel @Inject constructor(
                         if (loadState !is LoadState.Ready) loadState = LoadState.Ready
                         if (payload.runtimes.any { it.isRunning }) platform.watchRuns()
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    // 断线：吞掉，下面退避重连（界面照常显示上一份数据）
-                }
-                failures += 1
-                delay(if (backoff == 0L) 1_500L else backoff)
-                backoff = if (failures <= 1) 3_000L else (backoff * 2).coerceAtMost(15_000L)
-            }
+                },
+                // 断线静默：界面照常显示上一份数据，靠 /api/state 与抽屉里的 runtimes 轮询兜底
+                onFailure = { _, _ -> },
+            )
         }
     }
 
@@ -287,6 +283,8 @@ class SessionsViewModel @Inject constructor(
                 etag = null
                 refresh()
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 actionError = describeConnectionError(e)
             }
         }
@@ -301,6 +299,8 @@ class SessionsViewModel @Inject constructor(
                 etag = null
                 refresh()
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 actionError = describeConnectionError(e)
             }
         }
@@ -319,6 +319,8 @@ class SessionsViewModel @Inject constructor(
                 refresh()
                 onDone(newId)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 actionError = describeConnectionError(e)
                 onDone(null)
             }
@@ -334,6 +336,8 @@ class SessionsViewModel @Inject constructor(
                 etag = null
                 refresh()
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 actionError = describeConnectionError(e)
             }
         }
@@ -362,7 +366,9 @@ class SessionsViewModel @Inject constructor(
                 stateStore.putRuntimes(deviceId, runtimes)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 // 轻量轮询失败就静默：下一次（5 秒后）还会再试，不必为一个状态灯弹错
             } finally {
                 runtimesBusy = false
@@ -394,6 +400,8 @@ class SessionsViewModel @Inject constructor(
                 platform.touchDevice(target.id)
                 loadState = LoadState.Ready
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 loadState = failureOf(e)
             }
         }

@@ -31,7 +31,7 @@ object CrashLog {
         val app = context.applicationContext
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-            runCatching { write(app, thread, error) }
+            attempt { write(app, thread, error) }
             if (previous != null) {
                 previous.uncaughtException(thread, error)
             } else {
@@ -41,12 +41,12 @@ object CrashLog {
     }
 
     /** 读上一次的崩溃记录；没有就是 null。 */
-    fun read(context: Context): String? = runCatching {
+    fun read(context: Context): String? = attempt {
         file(context).takeIf { it.exists() }?.readText()?.takeIf { it.isNotBlank() }
     }.getOrNull()
 
     fun clear(context: Context) {
-        runCatching { file(context).delete() }
+        attempt { file(context).delete() }
     }
 
     private fun write(context: Context, thread: Thread, error: Throwable) {
@@ -59,7 +59,7 @@ object CrashLog {
                 .append(" / API ").append(android.os.Build.VERSION.SDK_INT).append('\n')
             append("机型 ").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL).append("\n\n")
         }
-        runCatching { file(context).writeText(head + stack) }
+        attempt { file(context).writeText(head + stack) }
         Log.e(TAG, "uncaught: ${error::class.java.name}: ${error.message}")
     }
 }

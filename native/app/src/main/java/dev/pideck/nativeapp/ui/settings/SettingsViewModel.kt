@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui.settings
 
+import dev.pideck.nativeapp.data.attempt
 import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -85,14 +86,14 @@ class SettingsViewModel @Inject constructor(
             autoCheckUpdate = Prefs.autoCheckUpdate
         }
         viewModelScope.launch {
-            val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
+            val devices = attempt { repository.devices.first() }.getOrDefault(emptyList())
             deviceCount = devices.size
             device = devices.firstOrNull { it.id == deviceId } ?: devices.firstOrNull()
             val cached = device?.let { StateCache.get(it.id) }
             hostVersion = cached?.version
             sessionCount = cached?.sessions?.size ?: 0
         }
-        crashLog = runCatching { CrashLog.read(context) }.getOrNull()
+        crashLog = attempt { CrashLog.read(context) }.getOrNull()
     }
 
     fun clearCrashLog() {

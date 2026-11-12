@@ -32,7 +32,7 @@ data class CacheStat(
 
 /** 单条 assistant 消息的命中率（0..100）。字段缺失、或分母为 0（没有输入也没有缓存读写）时返回 null。 */
 fun cacheHitOf(meta: JsonObject?): Double? {
-    val usage = runCatching { meta?.get("usage")?.jsonObject }.getOrNull() ?: return null
+    val usage = attempt { meta?.get("usage")?.jsonObject }.getOrNull() ?: return null
 
     fun tokens(key: String): Double =
         (usage[key] as? JsonPrimitive)?.doubleOrNull?.takeIf { it > 0.0 } ?: 0.0

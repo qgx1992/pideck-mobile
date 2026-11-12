@@ -89,15 +89,15 @@ fun turnUsageOf(messages: List<ChatMessage>): TurnUsage? {
     var lastEnd = 0L
     for (message in messages.drop(start)) {
         if (message.role != "assistant") continue
-        val usage = runCatching { message.meta?.get("usage")?.jsonObject }.getOrNull() ?: continue
-        val out = runCatching { (usage["outputTokens"] as? JsonPrimitive)?.intOrNull }.getOrNull() ?: continue
+        val usage = attempt { message.meta?.get("usage")?.jsonObject }.getOrNull() ?: continue
+        val out = attempt { (usage["outputTokens"] as? JsonPrimitive)?.intOrNull }.getOrNull() ?: continue
         tokens += out
         steps += 1
         // 整轮的起止：翻历史时没有秒表，拿不到宿主 perf，也要有一个**整轮**的时长，
         // 不能拿最后一步的 durationMs 去当整轮（那会让全程速度凭空翻好几倍）。
-        val startAt = runCatching { (message.meta?.get("startedAt") as? JsonPrimitive)?.doubleOrNull }
+        val startAt = attempt { (message.meta?.get("startedAt") as? JsonPrimitive)?.doubleOrNull }
             .getOrNull()?.toLong() ?: 0L
-        val endAt = runCatching { (message.meta?.get("endedAt") as? JsonPrimitive)?.doubleOrNull }
+        val endAt = attempt { (message.meta?.get("endedAt") as? JsonPrimitive)?.doubleOrNull }
             .getOrNull()?.toLong() ?: 0L
         if (startAt > 0L && (firstStart == 0L || startAt < firstStart)) firstStart = startAt
         if (endAt > lastEnd) lastEnd = endAt
@@ -183,13 +183,13 @@ fun turnStatsFromMeta(
     turnSpanMs: Long? = null,
     cacheHit: Double? = null,
 ): TurnStats {
-    val usage = runCatching { meta?.get("usage")?.jsonObject }.getOrNull()
+    val usage = attempt { meta?.get("usage")?.jsonObject }.getOrNull()
     val tokens = tokens
-        ?: runCatching { (usage?.get("outputTokens") as? JsonPrimitive)?.intOrNull }.getOrNull()
-    val duration = runCatching {
+        ?: attempt { (usage?.get("outputTokens") as? JsonPrimitive)?.intOrNull }.getOrNull()
+    val duration = attempt {
         (meta?.get("durationMs") as? JsonPrimitive)?.doubleOrNull?.roundToLong()
     }.getOrNull()
-    val span = runCatching {
+    val span = attempt {
         val start = (meta?.get("startedAt") as? JsonPrimitive)?.doubleOrNull
         val end = (meta?.get("endedAt") as? JsonPrimitive)?.doubleOrNull
         if (start != null && end != null && end > start) (end - start).roundToLong() else null

@@ -10,7 +10,7 @@
 
 **本项目全程由 AI 开发**（从第一行 Compose 代码到最后那个 APK），感兴趣可以点个 ⭐。
 
-当前版本 **0.5.58**（`versionCode 558`），包名 `top.caoayu.pideck`，
+当前版本 **0.5.59**（`versionCode 559`），包名 `top.caoayu.pideck`，
 Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
 > **适配的桌面端版本：0.11.0**（0.11.0–0.11.3 与 0.10.0 的路由、字段、流帧一致；0.5.55 重新对过一遍）。
@@ -19,7 +19,7 @@ Kotlin 2.0 + Jetpack Compose 全原生，不经 WebView。
 
 ```bash
 cd native
-./gradlew :app:testDebugUnitTest    # 372 条 JVM 单测
+./gradlew :app:testDebugUnitTest    # 383 条 JVM 单测
 ./gradlew :app:assembleRelease      # app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -29,7 +29,7 @@ cd native
 
 ---
 
-## 它现在能做什么（0.5.58）
+## 它现在能做什么（0.5.59）
 
 | 能力 | 说明 |
 |---|---|
@@ -62,7 +62,7 @@ native/                       唯一在发的产物
 │  ├─ ui/home · sessions · devices · settings · pairing · splash
 │  ├─ watch/                 RunWatchService（前台服务）+ 通知
 │  └─ di/                    Hilt
-└─ app/src/test/             372 条 JVM 单测（纯逻辑；含真桌面端联调的 Live* 用例，无设置时自动跳过）
+└─ app/src/test/             383 条 JVM 单测（纯逻辑；含真桌面端联调的 Live* 用例，无设置时自动跳过）
 ```
 
 设计上的三条约定：
@@ -110,6 +110,8 @@ curl -s -H "Authorization: Bearer <令牌>" http://192.168.1.20:8765/api/state |
 - 归档会话、项目改名在 HTTP 上还没开放，菜单里对应项是灰的（标注了原因）。
 - 换模型 / 思考档位对**已经跑起来**的那一轮不生效，下一轮才生效（桌面端同样如此）。
 - `/api/*` 是内部接口，没有版本承诺；升级桌面端后先跑一遍单测，并在设置页确认版本提示。
+- 没有 Robolectric / Compose UI 测试：单测只覆盖纯逻辑（解析、分帧、分组、退避算法这些）。
+  想补之前得先联网让 Gradle 把 `org.robolectric` 拉到缓存里 —— 本机一直是 `--offline` 构建，缓存里没有。
 
 ## 许可证
 

@@ -70,5 +70,5 @@ fun ModelPreference?.toSessionModel(): SessionModel? {
 
 /** `/api/models` → 列表；解码失败的单项跳过，不让一个坏条目毁掉整张表。 */
 fun List<JsonElement>.toAvailableModels(): List<AvailableModel> = mapNotNull { element ->
-    runCatching { PideckJson.decodeFromJsonElement(AvailableModel.serializer(), element) }.getOrNull()
+    attempt { PideckJson.decodeFromJsonElement(AvailableModel.serializer(), element) }.getOrNull()
 }

@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui.sessions
 
+import dev.pideck.nativeapp.data.attempt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -84,7 +85,7 @@ fun SessionsScreen(
     var showSearch by rememberSaveable { mutableStateOf(false) }
     val searchFocus = remember { FocusRequester() }
     if (showSearch) {
-        LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
+        LaunchedEffect(Unit) { attempt { searchFocus.requestFocus() } }
     }
 
     Scaffold(

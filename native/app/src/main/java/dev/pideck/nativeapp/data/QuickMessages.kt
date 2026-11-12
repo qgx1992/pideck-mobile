@@ -62,7 +62,7 @@ object QuickMessages {
     private fun persist(items: List<String>) {
         cached = items
         val prefs = context?.getSharedPreferences(PREFS, Context.MODE_PRIVATE) ?: return
-        runCatching { prefs.edit().putString(KEY, encode(items)).apply() }
+        attempt { prefs.edit().putString(KEY, encode(items)).apply() }
     }
 
     /**
@@ -78,7 +78,7 @@ object QuickMessages {
     internal fun decode(raw: String): List<String> {
         val trimmed = raw.trim()
         if (trimmed.startsWith("[")) {
-            val parsed = runCatching { PideckJson.parseToJsonElement(trimmed) as JsonArray }.getOrNull()
+            val parsed = attempt { PideckJson.parseToJsonElement(trimmed) as JsonArray }.getOrNull()
             if (parsed != null) {
                 return parsed.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim() }
                     .filter { it.isNotEmpty() }
@@ -92,7 +92,7 @@ object QuickMessages {
 
     private fun read(): List<String> {
         val prefs = context?.getSharedPreferences(PREFS, Context.MODE_PRIVATE) ?: return SEED
-        val raw = runCatching { prefs.getString(KEY, null) }.getOrNull()
+        val raw = attempt { prefs.getString(KEY, null) }.getOrNull()
             ?: return SEED
         val items = decode(raw).take(MAX_COUNT)
         return items.ifEmpty { SEED }

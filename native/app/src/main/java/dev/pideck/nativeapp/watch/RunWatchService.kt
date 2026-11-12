@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.watch
 
+import dev.pideck.nativeapp.data.attempt
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
@@ -98,20 +99,20 @@ class RunWatchService : Service() {
             // 整轮兜一层：这里的异常没人接就是进程级崩溃（SupervisorJob 只防兄弟协程被取消）。
             // 从前 `tokenOf` 读 Keystore 失败一次就能把整个 App 带走 —— 表现是「冷启动闪退」。
             try {
-                val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
+                val devices = attempt { repository.devices.first() }.getOrDefault(emptyList())
                 var active = 0
                 /** 本轮有没有拉取失败：失败不能算成「空闲」，否则连续 3 轮就 stopSelf()。 */
                 var pollFailed = false
 
                 for (device in devices) {
-                    val token = runCatching { repository.tokenOf(device.id) }.getOrNull()
+                    val token = attempt { repository.tokenOf(device.id) }.getOrNull()
 
                     // 待回答的提问（问答卡）。先问 `/api/state`，因为 `/api/sessions/runtimes`
                     // 里没有 pending 这一项 —— 以前后台**永远不会**因为「它问你一句」而提醒你，
                     // 只有「回复完成」会弹（而提问卡出现时 agent 可能正好从 running 转 idle，
                     // 于是弹出来的还是那句错的「回复完成」）。
                     // 带 If-None-Match：没变化时宿主直接回 304、不带 body，可以每轮问。
-                    val stateFetch = runCatching {
+                    val stateFetch = attempt {
                         withTimeout(8_000) { api.state(device, token, etags[device.id]) }
                     }.getOrNull()
                     if (stateFetch is StateFetch.Fresh) {
@@ -131,7 +132,7 @@ class RunWatchService : Service() {
                         for (ask in pending) {
                             val askKey = "${device.id}|${ask.sessionId}|${ask.requestId}"
                             if (!notifiedAsks.add(askKey)) continue
-                            runCatching {
+                            attempt {
                                 Notifications.question(
                                     this,
                                     device.id,
@@ -143,7 +144,7 @@ class RunWatchService : Service() {
                         }
                     }
 
-                    val runtimes = runCatching {
+                    val runtimes = attempt {
                         withTimeout(8_000) { api.runtimes(device, token) }
                     }.getOrNull()
                     if (runtimes == null) {
@@ -167,9 +168,9 @@ class RunWatchService : Service() {
                             if (!waitingForAnswer && !RunWatcher.appVisible && Prefs.notifyDone) {
                                 val titleKey = "${device.id}|${runtime.sessionId}"
                                 val title = titles[titleKey]
-                                    ?: runCatching { titleOf(device, token, runtime.sessionId) }.getOrNull()
+                                    ?: attempt { titleOf(device, token, runtime.sessionId) }.getOrNull()
                                 if (!title.isNullOrBlank()) titles[titleKey] = title
-                                runCatching {
+                                attempt {
                                     Notifications.finished(
                                         this,
                                         device.id,
@@ -194,7 +195,7 @@ class RunWatchService : Service() {
                 }
                 notifiedAsks.retainAll(liveAskKeys)
 
-                runCatching {
+                attempt {
                     getSystemService(NotificationManager::class.java)
                         ?.notify(Notifications.ACTIVE_ID, Notifications.active(this, active.coerceAtLeast(1)))
                 }
@@ -212,6 +213,7 @@ class RunWatchService : Service() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 Log.w("PiDeckWatch", "看护轮询失败：${e::class.java.simpleName}: ${e.message}")
             }
             delay(POLL_INTERVAL_MS)

@@ -41,7 +41,7 @@ object ImagePrep {
     private const val JPEG_QUALITY = 85
 
     /** 从相册/相机返回的 Uri 读一张，压好，编码成 data URL。 */
-    fun fromUri(context: Context, uri: Uri): PendingImage? = runCatching {
+    fun fromUri(context: Context, uri: Uri): PendingImage? = attempt {
         val resolver = context.contentResolver
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
@@ -57,7 +57,7 @@ object ImagePrep {
     }.getOrNull()
 
     /** 剪贴板里的图片（截图后粘过来最常见）。 */
-    fun fromClipboard(context: Context): PendingImage? = runCatching {
+    fun fromClipboard(context: Context): PendingImage? = attempt {
         val manager = context.getSystemService(ClipboardManager::class.java) ?: return null
         val clip = manager.primaryClip ?: return null
         if (clip.itemCount == 0) return null

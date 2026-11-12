@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui.devices
 
+import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -67,6 +68,8 @@ class DevicesViewModel @Inject constructor(
                 val saved = repository.upsert(draft, effectiveToken)
                 onAdded(saved)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 error = describeConnectionError(e)
             } finally {
                 busy = false

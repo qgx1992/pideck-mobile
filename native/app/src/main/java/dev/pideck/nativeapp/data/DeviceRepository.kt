@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.data
 
+import kotlinx.coroutines.CancellationException
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -85,8 +86,8 @@ class DeviceRepository(private val context: Context) : DeviceDirectory {
     /** 主密钥与密文一起清掉再建一份空的：旧密文已经解不开了，留着只会挡住写入。 */
     private fun resetStore() {
         tokensRef = null
-        runCatching { context.deleteSharedPreferences(TOKEN_STORE) }
-        runCatching {
+        attempt { context.deleteSharedPreferences(TOKEN_STORE) }
+        attempt {
             val keystore = java.security.KeyStore.getInstance("AndroidKeyStore")
             keystore.load(null)
             keystore.deleteEntry(MASTER_KEY_ALIAS)
@@ -105,6 +106,7 @@ class DeviceRepository(private val context: Context) : DeviceDirectory {
             try {
                 return openTokens().getString(deviceId, null)
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 if (attempt == 0) resetStore() else logTokenFailure(e)
             }
         }
@@ -121,6 +123,7 @@ class DeviceRepository(private val context: Context) : DeviceDirectory {
                     return
                 }
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 if (attempt == 0) resetStore() else logTokenFailure(e)
                 return@repeat
             }
@@ -133,6 +136,7 @@ class DeviceRepository(private val context: Context) : DeviceDirectory {
             try {
                 if (openTokens().edit().remove(deviceId).commit()) return
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 if (attempt == 0) resetStore() else logTokenFailure(e)
                 return@repeat
             }
@@ -146,7 +150,7 @@ class DeviceRepository(private val context: Context) : DeviceDirectory {
 
     override val devices: Flow<List<Device>> = context.deviceStore.data.map { prefs ->
         val raw = prefs[devicesKey] ?: return@map emptyList()
-        runCatching {
+        attempt {
             PideckJson.decodeFromString(ListSerializer(Device.serializer()), raw)
         }.getOrDefault(emptyList())
     }
@@ -216,7 +220,7 @@ class DeviceRepository(private val context: Context) : DeviceDirectory {
 
     private fun decodeDevices(raw: String?): List<Device> {
         if (raw == null) return emptyList()
-        return runCatching {
+        return attempt {
             PideckJson.decodeFromString(ListSerializer(Device.serializer()), raw)
         }.getOrDefault(emptyList())
     }

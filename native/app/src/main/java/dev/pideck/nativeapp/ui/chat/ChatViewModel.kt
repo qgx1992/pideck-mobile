@@ -1,5 +1,8 @@
 package dev.pideck.nativeapp.ui.chat
 
+import dev.pideck.nativeapp.data.EphemeralRuntimes
+import dev.pideck.nativeapp.data.reconnectingStream
+import dev.pideck.nativeapp.data.attempt
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -204,6 +207,12 @@ class ChatViewModel @Inject constructor(
     private var liveStatsJob: Job? = null
 
     private companion object {
+        /** 并行问询面板那一格的键（EphemeralRuntimes 的槽位名）。 */
+        const val SLOT_PARALLEL = "parallel"
+
+        /** 浮窗翻译那一格的键。 */
+        const val SLOT_TRANSLATE = "translate"
+
         /** 直播节拍：2s 一次（用户 0.5.33 要求）。 */
         /** 统计行问宿主要的节拍：只用来「看有没有新值」，不按这个间隔重排。 */
         const val HOST_STATS_POLL_MS = 1_000L
@@ -302,7 +311,8 @@ class ChatViewModel @Inject constructor(
         private set
 
     private var askJob: Job? = null
-    private var askTarget: RuntimeTarget? = null
+    /** 匿名会话（并行问询 / 浮窗翻译）的运行时台账，见 data/EphemeralRuntimes.kt。 */
+    private val ephemeral = EphemeralRuntimes()
     private var askMerger = ReplyMerger()
 
     /** 浮窗里那段译文（思考卡点「翻译」时才有）。 */
@@ -312,7 +322,6 @@ class ChatViewModel @Inject constructor(
     /** 译文对应的原文与运行时：重翻 / 改译方向都靠它，关浮窗要把匿名会话卸掉。 */
     private var translateSource = ""
     private var translateJob: Job? = null
-    private var translateRuntime: RuntimeTarget? = null
 
     init {
         restoreBusySendMode()
@@ -327,7 +336,7 @@ class ChatViewModel @Inject constructor(
             // 找不到设备也要放行：否则等信号的请求会永远挂着
             deviceReady.complete(Unit)
             // 记下这一落脚点：下次冷启动直接回到这里，不用再从设备列表点进来
-            runCatching { platform.rememberSession(deviceId, sessionId) }
+            attempt { platform.rememberSession(deviceId, sessionId) }
             val cached = stateStore.session(deviceId, sessionId)
             title = cached?.title?.ifBlank { null } ?: "会话"
             sessionModel = cached?.model.toSessionModel()
@@ -339,7 +348,7 @@ class ChatViewModel @Inject constructor(
             // 拉一次 /api/state 把记录补上（只在缺记录时才发这一趟）。
             val resolved = device
             if (cached == null && resolved != null) {
-                runCatching { api.state(resolved, token, null) }
+                attempt { api.state(resolved, token, null) }
                     .onSuccess { result ->
                         if (result is StateFetch.Fresh) {
                             stateStore.put(deviceId, result.state)
@@ -414,7 +423,7 @@ class ChatViewModel @Inject constructor(
         stalePermissionCleared = true
         permissionPreset = null
         viewModelScope.launch {
-            runCatching {
+            attempt {
                 api.updateSession(
                     target,
                     token,
@@ -510,7 +519,7 @@ class ChatViewModel @Inject constructor(
     fun refreshSecurity() {
         val target = device ?: return
         viewModelScope.launch {
-            runCatching { api.state(target, token, null) }
+            attempt { api.state(target, token, null) }
                 .onSuccess { result ->
                     if (result is StateFetch.Fresh) {
                         stateStore.put(deviceId, result.state)
@@ -542,6 +551,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             } finally {
                 securityBusy = false
@@ -584,7 +594,7 @@ class ChatViewModel @Inject constructor(
         if (key == livePrefsKey) return
         livePrefsKey = key
         viewModelScope.launch {
-            runCatching {
+            attempt {
                 api.runtimeState(
                     host,
                     token,
@@ -614,7 +624,7 @@ class ChatViewModel @Inject constructor(
                 // 否则这一屏永远显示「读取不到」。
                 var runtime = runtimeTarget()
                 if (runtime == null) {
-                    runCatching { api.state(target, token, null) }
+                    attempt { api.state(target, token, null) }
                         .getOrNull()
                         ?.let { fresh ->
                             if (fresh is StateFetch.Fresh) {
@@ -641,6 +651,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 // 用量只是辅助信息，不打断阅读；但要说清楚为什么是空的
                 contextUsage = null
                 actionNote = "读取上下文用量失败：${describeConnectionError(e)}"
@@ -676,6 +687,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 // 命中率只是辅助信息：拉不到就当没有，别用一条报错挡住上下文用量
                 cacheStat = null
             } finally {
@@ -697,11 +709,11 @@ class ChatViewModel @Inject constructor(
             presetBusy = true
             try {
                 val runtime = runtimeTarget()
-                val viaRuntime = if (runtime == null) false else runCatching {
+                val viaRuntime = if (runtime == null) false else attempt {
                     api.runtimeCommand(target, token, runtime, "permission", buildJsonObject { put("preset", preset) })
                 }.isSuccess
                 // 落一条记录上的偏好：下次激活时宿主按它 apply（pi 后端只走这条路）
-                runCatching {
+                attempt {
                     api.updateSession(target, token, sessionId, buildJsonObject { put("permissionPreset", preset) })
                 }
                 permissionPreset = preset
@@ -713,6 +725,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             } finally {
                 presetBusy = false
@@ -744,6 +757,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             } finally {
                 compactBusy = false
@@ -764,6 +778,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             } finally {
                 exportBusy = false
@@ -852,7 +867,7 @@ class ChatViewModel @Inject constructor(
             while (true) {
                 val target = device
                 if (target != null) {
-                    runCatching { api.state(target, token, stateEtag) }
+                    attempt { api.state(target, token, stateEtag) }
                         .onFailure { e ->
                             // 以前这里没有 onFailure：401/403、超时、解析失败全静默 ——
                             // 提问卡永不出现、授权失效也没提示，还每 5 秒打一次注定失败的请求。
@@ -899,6 +914,8 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 askError = dev.pideck.nativeapp.data.describeConnectionError(e)
             } finally {
                 askBusy = false
@@ -956,6 +973,8 @@ class ChatViewModel @Inject constructor(
             try {
                 availableModels = api.models(target, token, force)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 prefError = describeConnectionError(e)
             } finally {
                 modelsBusy = false
@@ -977,7 +996,7 @@ class ChatViewModel @Inject constructor(
             deviceReady.await()
             val runtime = runtimeTarget()
             val applied = runtime?.let { target0 ->
-                runCatching {
+                attempt {
                     api.runtimeCommand(
                         target,
                         token,
@@ -1025,7 +1044,7 @@ class ChatViewModel @Inject constructor(
             deviceReady.await()
             val runtime = runtimeTarget()
             val applied = runtime?.let { target0 ->
-                runCatching {
+                attempt {
                     api.runtimeCommand(
                         target,
                         token,
@@ -1052,7 +1071,7 @@ class ChatViewModel @Inject constructor(
      * 不然「选了但被降档」的情况界面上看不出来。
      */
     private fun adoptRuntimePrefs(body: String) {
-        val result = runCatching {
+        val result = attempt {
             PideckJson.parseToJsonElement(body).jsonObject["result"]?.jsonObject
         }.getOrNull() ?: return
 
@@ -1072,7 +1091,7 @@ class ChatViewModel @Inject constructor(
 
     /** 改完偏好把 `/api/state` 重拉一遍塞缓存：列表页与侧栏读的是同一份，不能只改聊天页内存。 */
     private suspend fun refreshStateQuietly(target: Device) {
-        val fresh = runCatching { api.state(target, token, null) }.getOrNull()
+        val fresh = attempt { api.state(target, token, null) }.getOrNull()
         if (fresh is StateFetch.Fresh) {
             stateStore.put(deviceId, fresh.state)
             adoptState(fresh.state)
@@ -1086,9 +1105,11 @@ class ChatViewModel @Inject constructor(
             try {
                 api.updateSession(target, token, sessionId, patch)
                 onApplied()
-                val fresh = runCatching { api.state(target, token, null) }.getOrNull()
+                val fresh = attempt { api.state(target, token, null) }.getOrNull()
                 if (fresh is StateFetch.Fresh) stateStore.put(deviceId, fresh.state)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 prefError = describeConnectionError(e)
             }
         }
@@ -1230,6 +1251,8 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 promptsError = dev.pideck.nativeapp.data.describeConnectionError(e)
             } finally {
                 promptsBusy = false
@@ -1333,8 +1356,8 @@ class ChatViewModel @Inject constructor(
     }
 
     /** 取正文（列表只有摘要）。取不到返回 null，调用方给一句提示、不要把输入框清空。 */
-    suspend fun promptBody(prompt: PromptSummary): String? = runCatching {
-        val device = device ?: return@runCatching null
+    suspend fun promptBody(prompt: PromptSummary): String? = attempt {
+        val device = device ?: return@attempt null
         api.promptContent(device, token, prompt.slug, prompt.category)
     }.getOrNull()
 
@@ -1357,7 +1380,7 @@ class ChatViewModel @Inject constructor(
             try {
                 val session = stateStore.session(deviceId, sessionId)
                 // 五个面板各自独立失败：**要记下来**。
-                // 以前全是 `runCatching{}.getOrNull()`，断网/超时/401 全被吞成 null，
+                // 以前全是 `attempt {}.getOrNull()`，断网/超时/401 全被吞成 null，
                 // 界面显示「没有待办 / 没有改动 / 空文件树」—— 用户只会以为数据丢了。
                 val failures = linkedSetOf<String>()
                 suspend fun <T> attempt(label: String, block: suspend () -> T): T? =
@@ -1366,6 +1389,7 @@ class ChatViewModel @Inject constructor(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
+                        if (e is CancellationException) throw e
                         failures += "$label：${describeConnectionError(e)}"
                         null
                     }
@@ -1380,7 +1404,7 @@ class ChatViewModel @Inject constructor(
                     ?: emptyList()
                 // 提交历史是锦上添花：拿不到（不是仓库 / 没装 git）就空着，不打断上面三页
                 val commits = if (changes?.repo == true) {
-                    runCatching { api.gitLog(device, token, projectId, limit = 15) }
+                    attempt { api.gitLog(device, token, projectId, limit = 15) }
                         .getOrDefault(emptyList())
                 } else {
                     emptyList()
@@ -1398,6 +1422,8 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 workspaceError = dev.pideck.nativeapp.data.describeConnectionError(e)
             } finally {
                 workspaceBusy = false
@@ -1445,7 +1471,7 @@ class ChatViewModel @Inject constructor(
                 while (queue.isNotEmpty() && dirs < FileIndex.MAX_DIRS && nodes.size < FileIndex.MAX_NODES) {
                     val dir = queue.removeFirst()
                     dirs++
-                    val batch = runCatching { api.files(target, token, projectId, dir) }
+                    val batch = attempt { api.files(target, token, projectId, dir) }
                         .getOrDefault(emptyList())
                     for (node in batch) {
                         if (seen.add(node.path)) nodes.add(node)
@@ -1472,7 +1498,7 @@ class ChatViewModel @Inject constructor(
         val runtime = runtimeTarget() ?: return
         commandsRequested = true
         viewModelScope.launch {
-            runCatching {
+            attempt {
                 parseHostCommands(PideckJson.parseToJsonElement(
                     api.runtimeCommand(target, token, runtime, "commands"),
                 ))
@@ -1512,6 +1538,8 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 previewText = dev.pideck.nativeapp.data.describeConnectionError(e)
             } finally {
                 previewBusy = false
@@ -1556,6 +1584,8 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 diffText = dev.pideck.nativeapp.data.describeConnectionError(e)
             } finally {
                 diffBusy = false
@@ -1595,56 +1625,48 @@ class ChatViewModel @Inject constructor(
         if (device == null) return
         if (watchJob != null) return
         watchJob = viewModelScope.launch {
-            // 退避从 1.5s 起、翻倍到 15s 封顶。**正常关流也算一次失败**：以前 collect 正常返回时
-            // 把 backoff 归零，于是 404 / 服务端收尾之后就成了恒定 1.5s 一次的忙循环。
-            var backoff = 0L
-            var failures = 0
-            while (true) {
-                // 每次重连都重取一次连接：重新配对（换主机 / 换令牌）之后，这条协程手里的旧 token
-                // 会一直 401，而它自己永远不知道要换。
-                val current = connections.resolve(deviceId, timeoutMs = 3_000L)
-                if (current == null) {
-                    // 设备被删 / 令牌读不出来：退订，等重新配对或回前台时再建。
-                    watchJob = null
-                    return@launch
-                }
-                var failure: Throwable? = null
-                try {
-                    api.sessionStream(current.device, current.token, sessionId).collect { frame ->
-                        failures = 0
-                        if (sending) return@collect
-                        val snapshot = applyWatchFrame(frame.data) ?: return@collect
-                        live = snapshot
-                        if (snapshot.finished) {
-                            snapshot.errorText?.takeIf { it.isNotBlank() }?.let {
-                                SessionActivity.markTurnResult(deviceId, sessionId, failed = true)
-                            }
-                            live = null
-                            // 收尾帧比落盘早一点点，等一下再以磁盘为准对齐。
-                            delay(400)
-                            refreshHistory()
+            // 退避从 1.5s 起、翻倍到 15s 封顶（data/Reconnect.kt）。**正常关流也算一次失败**：
+            // 以前 collect 正常返回时把 backoff 归零，于是 404 / 服务端收尾之后就成了恒定 1.5s 一次的忙循环。
+            // 一次循环 = 一次「连上 → 收流 → 断了 → 退避」。每次重连都重取一次连接：重新配对
+            // （换主机 / 换令牌）之后，这条协程手里的旧 token 会一直 401，而它自己永远不知道要换。
+            reconnectingStream(
+                    connect = {
+                        connections.resolve(deviceId, timeoutMs = 3_000L).also {
+                            // 设备被删 / 令牌读不出来：退订，等重新配对或回前台时再建。
+                            if (it == null) watchJob = null
                         }
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    failure = e
-                }
-                failures += 1
-                if (failures == 3 && failure != null && error == null) {
-                    // 连不上时别一声不吭：连续 3 次失败才写一次，恢复后 failures 归零。
-                    error = "与宿主的实时连接断了，正在重连：${describeConnectionError(failure)}"
-                }
-                delay(if (backoff == 0L) 1_500L else backoff)
-                backoff = if (failures <= 1) 3_000L else (backoff * 2).coerceAtMost(15_000L)
-            }
+                    },
+                    stream = { conn, onFrame ->
+                        api.sessionStream(conn.device, conn.token, sessionId).collect { frame ->
+                            onFrame()
+                            if (sending) return@collect
+                            val snapshot = applyWatchFrame(frame.data) ?: return@collect
+                            live = snapshot
+                            if (snapshot.finished) {
+                                snapshot.errorText?.takeIf { it.isNotBlank() }?.let {
+                                    SessionActivity.markTurnResult(deviceId, sessionId, failed = true)
+                                }
+                                live = null
+                                // 收尾帧比落盘早一点点，等一下再以磁盘为准对齐。
+                                delay(400)
+                                refreshHistory()
+                            }
+                        }
+                    },
+                    onFailure = { count, cause ->
+                        // 连不上时别一声不吭：连续 3 次失败才写一次，恢复后 failures 归零。
+                        if (count == 3 && error == null) {
+                            error = "与宿主的实时连接断了，正在重连：${describeConnectionError(cause)}"
+                        }
+                    },
+                )
         }
     }
 
     /** 订阅帧 → 快照。`start` 表示新一轮（服务端会重放帧），合并器从零重建。 */
     private fun applyWatchFrame(data: String): ReplySnapshot? {
         if (data.trim() == "[DONE]") return watchMerger.finish()
-        val parsed = runCatching {
+        val parsed = attempt {
             PideckJson.parseToJsonElement(data) as? JsonObject
         }.getOrNull() ?: return null
         val type = parsed["type"]?.toString()?.trim('"')
@@ -1722,7 +1744,7 @@ class ChatViewModel @Inject constructor(
     private suspend fun hostSnapshot(): RuntimeSnapshot? {
         val target = device ?: return null
         val runtime = runtimeTarget() ?: return null
-        return runCatching { api.runtimeState(target, token, runtime) }.getOrNull()
+        return attempt { api.runtimeState(target, token, runtime) }.getOrNull()
     }
 
     /**
@@ -1752,7 +1774,7 @@ class ChatViewModel @Inject constructor(
     /** 这一轮最后一条 assistant 消息的 `meta.endedAt`（宿主落盘时刻，epoch 毫秒）。 */
     private fun hostEndedAtOf(messages: List<ChatMessage>): Long {
         val last = messages.lastOrNull { it.role == "assistant" } ?: return 0L
-        return runCatching {
+        return attempt {
             (last.meta?.get("endedAt") as? JsonPrimitive)?.doubleOrNull?.toLong() ?: 0L
         }.getOrNull() ?: 0L
     }
@@ -1905,7 +1927,7 @@ class ChatViewModel @Inject constructor(
                 var runtime = runtimeTarget()
                 if (runtime == null) {
                     // 冷会话：先让宿主把运行时拉起来（host 只校验 target.sessionId 对得上）
-                    runCatching {
+                    attempt {
                         api.runtimeCommand(
                             target,
                             token,
@@ -1945,6 +1967,8 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 editError = describeConnectionError(e)
             } finally {
                 editBusy = false
@@ -1985,6 +2009,7 @@ class ChatViewModel @Inject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
+            if (e is CancellationException) throw e
             if (seq == historyRefreshSeq) error = describeConnectionError(e)
         } finally {
             if (seq == historyRefreshSeq) loading = false
@@ -2012,6 +2037,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             } finally {
                 loadingOlder = false
@@ -2134,7 +2160,7 @@ class ChatViewModel @Inject constructor(
                             val snapshot = when {
                                 frame.data.trim() == "[DONE]" -> merger.finish()
                                 else -> {
-                                    val parsed = runCatching {
+                                    val parsed = attempt {
                                         PideckJson.parseToJsonElement(frame.data) as? JsonObject
                                     }.getOrNull()
                                     if (parsed != null) merger.applyFrame(parsed) else merger.snapshot()
@@ -2165,6 +2191,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             } finally {
                 sending = false
@@ -2210,6 +2237,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             } finally {
                 sendJob?.cancel()
@@ -2246,6 +2274,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             } finally {
                 restarting = false
@@ -2289,7 +2318,7 @@ class ChatViewModel @Inject constructor(
     fun rememberBusySendMode(mode: BusySendMode) {
         if (busySendMode == mode) return
         busySendMode = mode
-        viewModelScope.launch { runCatching { platform.setBusySendMode(mode) } }
+        viewModelScope.launch { attempt { platform.setBusySendMode(mode) } }
     }
 
     fun sendWhileBusy(text: String, mode: BusySendMode) {
@@ -2327,7 +2356,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             val runtime = stateStore.runtime(deviceId, sessionId)
             if (runtime != null) {
-                runCatching {
+                attempt {
                     api.stopRuntime(target, token, sessionId, runtime.agentId, runtime.runtimeGeneration.toLong())
                 }
             }
@@ -2378,6 +2407,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             }
         }
@@ -2403,6 +2433,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             }
         }
@@ -2432,8 +2463,8 @@ class ChatViewModel @Inject constructor(
                 val anon = api.createAnonymousSession(target, token, projectId)
                 parallelAsk = parallelAsk?.copy(sessionId = anon)
                 // 会话一建出来就先登记：后面 prompt 抛异常、或宿主不回 agentId / accepted=false 时，
-                // 关面板仍能把它卸掉（以前是 `askTarget ?: return`，于是宿主上留一个 noSession 运行时）。
-                askTarget = RuntimeTarget(anon, "", 0L)
+                // 先记账：agentId 要等 prompt 的响应才知道，记在前面的意义是「中途取消也有人收尾」。
+                ephemeral.put(SLOT_PARALLEL, RuntimeTarget(anon, "", 0L))
                 val delivery = api.sendPrompt(
                     target,
                     token,
@@ -2441,7 +2472,7 @@ class ChatViewModel @Inject constructor(
                     ChatPayloads.promptBody(newRequestId(), question),
                 )
                 if (delivery.agentId != null) {
-                    askTarget = RuntimeTarget(anon, delivery.agentId, delivery.runtimeGeneration ?: 0L)
+                    ephemeral.put(SLOT_PARALLEL, RuntimeTarget(anon, delivery.agentId, delivery.runtimeGeneration ?: 0L))
                 }
                 if (!delivery.accepted) {
                     parallelAsk = parallelAsk?.copy(busy = false, error = delivery.error ?: "宿主没有接受这条问题")
@@ -2453,7 +2484,7 @@ class ChatViewModel @Inject constructor(
                         val snapshot = when {
                             frame.data.trim() == "[DONE]" -> askMerger.finish()
                             else -> {
-                                val parsed = runCatching {
+                                val parsed = attempt {
                                     PideckJson.parseToJsonElement(frame.data) as? JsonObject
                                 }.getOrNull()
                                 if (parsed != null) askMerger.applyFrame(parsed) else askMerger.snapshot()
@@ -2473,6 +2504,7 @@ class ChatViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 parallelAsk = parallelAsk?.copy(busy = false, error = describeConnectionError(e))
             }
         }
@@ -2501,22 +2533,8 @@ class ChatViewModel @Inject constructor(
      * 所以 onCleared 里用 `viewModelScope.launch` 发的请求一条都发不出去（宿主上留一个 noSession 运行时）。
      * 这个 scope 故意不 cancel：请求发完由 SupervisorJob 自然结束。
      */
-    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
     private fun stopParallelRuntime() {
-        val runtime = askTarget ?: return
-        askTarget = null
-        enqueueRuntimeStop(runtime)
-    }
-
-    /** 把「卸载某个运行时」丢到 [cleanupScope]；`agentId` 为空时也照发（宿主只校验 sessionId）。 */
-    private fun enqueueRuntimeStop(runtime: RuntimeTarget) {
-        val target = device ?: return
-        cleanupScope.launch {
-            runCatching {
-                api.stopRuntime(target, token, runtime.sessionId, runtime.agentId, runtime.runtimeGeneration)
-            }
-        }
+        ephemeral.stop(SLOT_PARALLEL, device, token, api)
     }
 
     /**
@@ -2542,7 +2560,7 @@ class ChatViewModel @Inject constructor(
         translateJob = viewModelScope.launch {
             try {
                 val anon = api.createAnonymousSession(target_device, token, projectId)
-                translateRuntime = RuntimeTarget(anon, "", 0L)
+                ephemeral.put(SLOT_TRANSLATE, RuntimeTarget(anon, "", 0L))
                 val delivery = api.sendPrompt(
                     target_device,
                     token,
@@ -2550,7 +2568,7 @@ class ChatViewModel @Inject constructor(
                     ChatPayloads.promptBody(newRequestId(), translateInstruction(body, target)),
                 )
                 if (delivery.agentId != null) {
-                    translateRuntime = RuntimeTarget(anon, delivery.agentId, delivery.runtimeGeneration ?: 0L)
+                    ephemeral.put(SLOT_TRANSLATE, RuntimeTarget(anon, delivery.agentId, delivery.runtimeGeneration ?: 0L))
                 }
                 if (!delivery.accepted) {
                     translation = TranslationState(
@@ -2563,7 +2581,7 @@ class ChatViewModel @Inject constructor(
                     val snapshot = when {
                         frame.data.trim() == "[DONE]" -> merger.finish()
                         else -> {
-                            val parsed = runCatching {
+                            val parsed = attempt {
                                 PideckJson.parseToJsonElement(frame.data) as? JsonObject
                             }.getOrNull()
                             if (parsed != null) merger.applyFrame(parsed) else merger.snapshot()
@@ -2583,6 +2601,7 @@ class ChatViewModel @Inject constructor(
                 // 正常收尾：译文已在上面写进状态
                 translation = translation?.copy(busy = false)
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 translation = TranslationState(target = target, error = describeConnectionError(e))
             } finally {
                 withContext(NonCancellable) { stopTranslateRuntimeNow() }
@@ -2609,15 +2628,16 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun stopTranslateRuntime() {
-        val runtime = translateRuntime ?: return
-        translateRuntime = null
-        enqueueRuntimeStop(runtime)
+        ephemeral.stop(SLOT_TRANSLATE, device, token, api)
     }
 
+    /** 收尾用：这里已经在协程里，直接等请求发完再走（`attempt` 不会把取消抛成失败）。 */
     private suspend fun stopTranslateRuntimeNow() {
-        val runtime = translateRuntime ?: return
-        translateRuntime = null
-        enqueueRuntimeStop(runtime)
+        val runtime = ephemeral.take(SLOT_TRANSLATE) ?: return
+        val target = device ?: return
+        attempt {
+            api.stopRuntime(target, token, runtime.sessionId, runtime.agentId, runtime.runtimeGeneration)
+        }
     }
 
     /** 排队消息一旦出现在历史里就撤掉提示（宿主那边已经没有「待发」这回事）。 */

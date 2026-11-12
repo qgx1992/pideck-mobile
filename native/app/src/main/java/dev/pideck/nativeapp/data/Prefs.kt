@@ -219,12 +219,12 @@ object Prefs {
             android.Manifest.permission.POST_NOTIFICATIONS,
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (granted) return false
-        val asked = runCatching { context.prefsStore.data.first()[KEY_NOTIFY_ASKED] }.getOrNull() ?: false
+        val asked = attempt { context.prefsStore.data.first()[KEY_NOTIFY_ASKED] }.getOrNull() ?: false
         return !asked
     }
 
     suspend fun markNotificationPermissionAsked(context: Context) {
-        runCatching { context.prefsStore.edit { it[KEY_NOTIFY_ASKED] = true } }
+        attempt { context.prefsStore.edit { it[KEY_NOTIFY_ASKED] = true } }
     }
 
     suspend fun setExpandInterimStream(context: Context, enabled: Boolean) {

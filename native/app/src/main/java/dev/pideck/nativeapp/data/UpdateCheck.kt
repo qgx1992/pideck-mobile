@@ -92,14 +92,14 @@ object UpdateCheck {
      * 用户想直接下就下，不想下就去页面看说明）。
      */
     fun parseLatestRelease(json: String): RemoteRelease? {
-        val root = runCatching { Json.parseToJsonElement(json).jsonObject }.getOrNull() ?: return null
+        val root = attempt { Json.parseToJsonElement(json).jsonObject }.getOrNull() ?: return null
         if (root["message"]?.jsonPrimitive?.contentOrNull != null) return null // 404 / 限流
         if (root["draft"]?.jsonPrimitive?.contentOrNull == "true") return null
         val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: return null
         val name = normalizeVersion(tag)
         val code = versionCodeOf(name) ?: return null
         val pageUrl = root["html_url"]?.jsonPrimitive?.contentOrNull ?: "$RELEASES_URL/tag/v$name"
-        val asset = runCatching {
+        val asset = attempt {
             root["assets"]?.jsonArray
                 ?.mapNotNull { it.jsonObject }
                 ?.firstOrNull {
@@ -118,7 +118,7 @@ object UpdateCheck {
     }
 
     /** 同步拉一次（调用方负责放到 IO 线程）。失败给带人话的提示。 */
-    fun fetchLatestBlocking(): Result<String> = runCatching {
+    fun fetchLatestBlocking(): Result<String> = attempt {
         val request = Request.Builder()
             .url(LATEST_URL)
             .header("Accept", "application/vnd.github+json")

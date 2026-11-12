@@ -29,7 +29,7 @@ object PairingLink {
 
         // 深链形态
         if (text.startsWith("pideck://", ignoreCase = true)) {
-            val uri = runCatching { URI(text) }.getOrNull() ?: return null
+            val uri = attempt { URI(text) }.getOrNull() ?: return null
             val params = queryParams(uri.rawQuery)
             val host = params["host"] ?: return null
             val port = params["port"]?.toIntOrNull() ?: DEFAULT_PORT
@@ -38,7 +38,7 @@ object PairingLink {
 
         // 带 scheme 的 URL
         if (text.contains("://")) {
-            val uri = runCatching { URI(text) }.getOrNull() ?: return null
+            val uri = attempt { URI(text) }.getOrNull() ?: return null
             val host = uri.host ?: return null
             val port = if (uri.port > 0) uri.port else DEFAULT_PORT
             val scheme = uri.scheme?.lowercase() ?: "http"
@@ -108,5 +108,5 @@ object PairingLink {
     }
 
     private fun decode(value: String): String =
-        runCatching { java.net.URLDecoder.decode(value, "UTF-8") }.getOrDefault(value)
+        attempt { java.net.URLDecoder.decode(value, "UTF-8") }.getOrDefault(value)
 }

@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.watch
 
+import dev.pideck.nativeapp.data.attempt
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
@@ -21,10 +22,10 @@ object RunWatcher {
     /** 启动看护。前台时调用才稳（Android 12+ 限制后台启动前台服务）。 */
     fun start(context: Context) {
         val intent = Intent(context, RunWatchService::class.java)
-        runCatching { ContextCompat.startForegroundService(context, intent) }
+        attempt { ContextCompat.startForegroundService(context, intent) }
     }
 
     fun stop(context: Context) {
-        runCatching { context.stopService(Intent(context, RunWatchService::class.java)) }
+        attempt { context.stopService(Intent(context, RunWatchService::class.java)) }
     }
 }

@@ -26,7 +26,7 @@ object TurnStatsStore {
     fun attach(context: Context) {
         this.context = context.applicationContext
         if (memory.isNotEmpty()) return
-        val raw = runCatching {
+        val raw = attempt {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getStringSet(KEY, emptySet()).orEmpty()
         }.getOrNull().orEmpty()
         for (line in raw) {
@@ -60,7 +60,7 @@ object TurnStatsStore {
     private fun persist() {
         val ctx = context ?: return
         val lines = memory.entries.mapNotNull { (key, stats) -> encode(key, stats) }.toSet()
-        runCatching {
+        attempt {
             ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putStringSet(KEY, lines).apply()
         }
     }

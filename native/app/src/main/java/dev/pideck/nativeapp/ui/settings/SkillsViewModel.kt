@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui.settings
 
+import dev.pideck.nativeapp.data.attempt
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -62,9 +63,9 @@ class SkillsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val devices = runCatching { repository.devices.first() }.getOrDefault(emptyList())
+            val devices = attempt { repository.devices.first() }.getOrDefault(emptyList())
             device = devices.firstOrNull { it.id == deviceId } ?: devices.firstOrNull()
-            token = device?.let { runCatching { repository.tokenOf(it.id) }.getOrNull() }
+            token = device?.let { attempt { repository.tokenOf(it.id) }.getOrNull() }
             refresh()
         }
     }
@@ -77,8 +78,8 @@ class SkillsViewModel @Inject constructor(
             try {
                 // 两个接口互不依赖，并发拉；其中一个挂了不该把另一个也清空
                 coroutineScope {
-                    val skillsJob = async { runCatching { api.skills(device, token) } }
-                    val extensionsJob = async { runCatching { api.extensions(device, token) } }
+                    val skillsJob = async { attempt { api.skills(device, token) } }
+                    val extensionsJob = async { attempt { api.extensions(device, token) } }
                     val skillsResult = skillsJob.await()
                     val extensionsResult = extensionsJob.await()
                     skillsResult.getOrNull()?.let {
@@ -96,6 +97,8 @@ class SkillsViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 error = describeConnectionError(e)
             } finally {
                 loading = false
@@ -115,6 +118,8 @@ class SkillsViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 error = describeConnectionError(e)
             } finally {
                 busyIds = busyIds - skill.id
@@ -133,6 +138,8 @@ class SkillsViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 error = describeConnectionError(e)
             } finally {
                 busyIds = busyIds - extension.id

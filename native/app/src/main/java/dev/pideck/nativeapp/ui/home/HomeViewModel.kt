@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui.home
 
+import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -172,6 +173,8 @@ class HomeViewModel @Inject constructor(
                 val target = device ?: return@launch
                 models = api.models(target, token, force)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 // 清单拿不到不影响新建会话：不带模型就是「跟随电脑端默认」
             } finally {
                 modelsBusy = false
@@ -231,6 +234,8 @@ class HomeViewModel @Inject constructor(
                 }
                 if (loadState !is LoadState.Ready) loadState = LoadState.Ready
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 loadState = failureOf(e)
             }
         }
@@ -291,6 +296,8 @@ class HomeViewModel @Inject constructor(
                     workspaceError = "桌面端没有回报这个工作区，刷新一下看看"
                 }
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 workspaceError = describeConnectionError(e)
             } finally {
                 workspaceBusy = false
@@ -324,6 +331,8 @@ class HomeViewModel @Inject constructor(
                 )
                 onCreated(id)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+
                 actionError = describeConnectionError(e)
             } finally {
                 creating = false

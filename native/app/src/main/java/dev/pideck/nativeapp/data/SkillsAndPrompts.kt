@@ -58,7 +58,7 @@ data class ExtensionsPayload(
 object SkillsParse {
 
     fun skills(text: String): SkillsPayload {
-        val root = runCatching { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
+        val root = attempt { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
             ?: return SkillsPayload(emptyList(), emptyList())
         val locations = (root["locations"] as? JsonArray).orEmpty().mapNotNull { element ->
             val obj = element as? JsonObject ?: return@mapNotNull null
@@ -86,7 +86,7 @@ object SkillsParse {
     }
 
     fun extensions(text: String): ExtensionsPayload {
-        val root = runCatching { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
+        val root = attempt { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
             ?: return ExtensionsPayload(emptyList(), emptyList())
         val extensions = (root["extensions"] as? JsonArray).orEmpty().mapNotNull { element ->
             val obj = element as? JsonObject ?: return@mapNotNull null
@@ -159,7 +159,7 @@ data class PromptsPage(
 object PromptsParse {
 
     fun page(text: String): PromptsPage {
-        val root = runCatching { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
+        val root = attempt { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
             ?: return PromptsPage(emptyList(), emptyList(), 1, 20)
         val categories = (root["categories"] as? JsonArray).orEmpty().mapNotNull { element ->
             (element as? JsonPrimitive)?.contentOrNull
@@ -188,7 +188,7 @@ object PromptsParse {
 
     /** `{"detail":{"title","description","promptContent"}}` → 正文；取不到给 null。 */
     fun content(text: String): String? {
-        val root = runCatching { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
+        val root = attempt { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
             ?: return null
         val detail = root["detail"] as? JsonObject ?: return null
         return (detail["promptContent"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }

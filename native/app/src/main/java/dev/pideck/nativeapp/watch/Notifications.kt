@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.watch
 
+import dev.pideck.nativeapp.data.attempt
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -111,7 +112,7 @@ object Notifications {
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openSession(context, deviceId, sessionId))
-        runCatching { manager.notify(NotificationNav.notificationId(deviceId, sessionId), builder.build()) }
+        attempt { manager.notify(NotificationNav.notificationId(deviceId, sessionId), builder.build()) }
     }
 
     /** 回复完成通知。同一会话复用同一个 id，避免堆一屏。 */
@@ -125,6 +126,6 @@ object Notifications {
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setContentIntent(openSession(context, deviceId, sessionId))
-        runCatching { manager.notify(NotificationNav.notificationId(deviceId, sessionId), builder.build()) }
+        attempt { manager.notify(NotificationNav.notificationId(deviceId, sessionId), builder.build()) }
     }
 }

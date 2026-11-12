@@ -26,7 +26,7 @@ object ForkEdit {
 
     /** 解析 `runtime/get-fork-messages` 的回包；认不出就是空列表。 */
     fun points(raw: String): List<ForkPoint> {
-        val root = runCatching { PideckJson.parseToJsonElement(raw) }.getOrNull()
+        val root = attempt { PideckJson.parseToJsonElement(raw) }.getOrNull()
             ?: return emptyList()
         return arrayOfPoints(root, 0)
     }
@@ -66,7 +66,7 @@ object ForkEdit {
 
     /** 宿主回包里若带 `error`（`{result:{ok:false,error:"…"}}` 之类），原样交给界面。 */
     fun failureText(raw: String): String? {
-        val root = runCatching { PideckJson.parseToJsonElement(raw) }.getOrNull()
+        val root = attempt { PideckJson.parseToJsonElement(raw) }.getOrNull()
             ?: return null
         return errorOf(root, 0)
     }

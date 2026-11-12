@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui.sessions
 
+import dev.pideck.nativeapp.data.attempt
 import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,7 +41,7 @@ object GroupCollapse {
         this.context = context.applicationContext
         this.scope = scope
         scope.launch {
-            runCatching { Prefs.awaitLoaded() }
+            attempt { Prefs.awaitLoaded() }
             val restored = if (Prefs.collapseRestore) Prefs.collapsedGroups else emptySet()
             // 传进来的 scope 是 Dispatchers.IO（`PiDeckApp.onCreate` 的 prefsScope）：
             // 读盘留在 IO，**写 Compose 状态必须回主线程**。快照状态本身线程安全，
@@ -88,6 +89,6 @@ object GroupCollapse {
         val ctx = context ?: return
         val s = scope ?: return
         val snapshot = collapsed
-        s.launch { runCatching { Prefs.setCollapsedGroups(ctx, snapshot) } }
+        s.launch { attempt { Prefs.setCollapsedGroups(ctx, snapshot) } }
     }
 }

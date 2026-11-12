@@ -64,7 +64,7 @@ object LocalPrompts {
     private fun persist(items: List<Prompt>) {
         cached = items
         val prefs = context?.getSharedPreferences(PREFS, Context.MODE_PRIVATE) ?: return
-        runCatching { prefs.edit().putString(KEY, encode(items)).apply() }
+        attempt { prefs.edit().putString(KEY, encode(items)).apply() }
     }
 
     /**
@@ -86,7 +86,7 @@ object LocalPrompts {
     internal fun decode(raw: String): List<Prompt> {
         val trimmed = raw.trim()
         if (trimmed.startsWith("[")) {
-            val parsed = runCatching { PideckJson.parseToJsonElement(trimmed) as JsonArray }.getOrNull()
+            val parsed = attempt { PideckJson.parseToJsonElement(trimmed) as JsonArray }.getOrNull()
             if (parsed != null) {
                 return parsed.mapNotNull { element ->
                     val parts = (element as? JsonArray)?.map {
@@ -117,7 +117,7 @@ object LocalPrompts {
 
     private fun read(): List<Prompt> {
         val prefs = context?.getSharedPreferences(PREFS, Context.MODE_PRIVATE) ?: return emptyList()
-        val raw = runCatching { prefs.getString(KEY, null) }.getOrNull() ?: return emptyList()
+        val raw = attempt { prefs.getString(KEY, null) }.getOrNull() ?: return emptyList()
         return decode(raw).take(MAX_COUNT)
     }
 

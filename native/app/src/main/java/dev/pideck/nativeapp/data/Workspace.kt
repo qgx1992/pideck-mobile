@@ -126,7 +126,7 @@ data class GitCommit(
 
 object GitLogParser {
     fun commits(text: String): List<GitCommit> {
-        val root = runCatching { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
+        val root = attempt { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
             ?: return emptyList()
         val array = root["commits"] as? JsonArray ?: return emptyList()
         return array.mapNotNull { element ->

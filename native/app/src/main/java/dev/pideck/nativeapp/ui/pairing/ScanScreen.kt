@@ -1,5 +1,6 @@
 package dev.pideck.nativeapp.ui.pairing
 
+import dev.pideck.nativeapp.data.attempt
 import android.Manifest
 import android.content.pm.PackageManager
 import android.util.Size
@@ -108,7 +109,7 @@ fun ScanScreen(
                                 image.close()
                                 return@setAnalyzer
                             }
-                            val text = runCatching { decodeQr(reader, image) }.getOrNull()
+                            val text = attempt { decodeQr(reader, image) }.getOrNull()
                             image.close()
                             if (!text.isNullOrBlank()) {
                                 handled = true
@@ -204,5 +205,5 @@ private fun decodeQr(reader: MultiFormatReader, image: androidx.camera.core.Imag
     }
     val source = PlanarYUVLuminanceSource(data, width, height, 0, 0, width, height, false)
     val bitmap = BinaryBitmap(HybridBinarizer(source))
-    return runCatching { reader.decodeWithState(bitmap).text }.getOrNull()
+    return attempt { reader.decodeWithState(bitmap).text }.getOrNull()
 }
