@@ -67,6 +67,7 @@ import dev.pideck.nativeapp.ui.common.relativeTime
 import dev.pideck.nativeapp.data.WorkspaceChanges
 import dev.pideck.nativeapp.data.WorkspaceTodo
 import dev.pideck.nativeapp.ui.theme.AppIconButton
+import kotlin.math.max
 
 /**
  * 工作区抽屉：待办 / 改动 / 文件。
@@ -153,6 +154,27 @@ fun WorkspacePanel(
     }
 }
 
+/**
+ * 子代理的耗时文案：跑着显示「已跑 N」，完成显示「耗时 N」，缺时间戳就返回 null。
+ *
+ * 宿主这两项都是可选的（`acp_delegate` 推导出来的条目常常只有 `startedAt`），
+ * 缺就不写 —— 不要拿 0 秒占位。
+ */
+internal fun subagentDurationText(entry: SubagentEntry, now: Long = System.currentTimeMillis()): String? {
+    val started = entry.startedAt
+    val ended = entry.completedAt
+    return when {
+        started != null && ended != null && ended >= started -> "耗时 " + formatSpan(ended - started)
+        started != null && entry.isRunning -> "已跑 " + formatSpan(max(0L, now - started))
+        else -> null
+    }
+}
+
+private fun formatSpan(millis: Long): String {
+    val seconds = max(0L, millis / 1000)
+    return if (seconds >= 60) "${seconds / 60} 分 ${seconds % 60} 秒" else "$seconds 秒"
+}
+
 @Composable
 private fun SubagentTab(agents: List<SubagentEntry>) {
     if (agents.isEmpty()) {
@@ -223,6 +245,7 @@ private fun SubagentTab(agents: List<SubagentEntry>) {
                             if (uses > 0) add("$uses 次工具")
                             val tokens = agent.tokens ?: 0
                             if (tokens > 0) add("$tokens tok")
+                            subagentDurationText(agent)?.let { add(it) }
                         }
                         if (meta.isNotEmpty()) {
                             Text(

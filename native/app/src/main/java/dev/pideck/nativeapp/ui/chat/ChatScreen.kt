@@ -460,24 +460,6 @@ fun ChatScreen(
                             DropdownMenuItem(
                                 text = {
                                     Column {
-                                        Text("子代理")
-                                        Text(
-                                            when {
-                                                viewModel.subagents.isEmpty() -> "这个会话还没派过"
-                                                else -> "${viewModel.subagents.size} 个，点开看"
-                                            },
-                                            style = MaterialTheme.typography.labelSmall,
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    showMore = false
-                                    viewModel.openSubagents()
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
                                         Text("重启会话")
                                         Text(
                                             when {
@@ -1043,15 +1025,6 @@ fun ChatScreen(
                 clipboard.setText(AnnotatedString(text))
                 scope.launch { snackbar.showSnackbar("已复制译文 ${text.length} 字") }
             },
-        )
-    }
-    if (viewModel.subagentsOpen) {
-        SubagentsSheet(
-            entries = viewModel.subagents,
-            busy = viewModel.subagentsBusy,
-            error = viewModel.subagentsError,
-            onRefresh = { viewModel.refreshSubagents() },
-            onDismiss = { viewModel.closeSubagents() },
         )
     }
     if (showHistory) {
