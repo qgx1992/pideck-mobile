@@ -909,6 +909,13 @@ class ChatViewModel @Inject constructor(
     // ---- 子代理（工作区「子任务」页） ----
 
     var subagents by mutableStateOf<List<SubagentEntry>>(emptyList())
+
+    /** 子代理面板的开关与状态（列表数据由 [refreshSubagents] 现拉，不跟工作区那五个面板绑在一起）。 */
+    var subagentsOpen by mutableStateOf(false)
+        private set
+    var subagentsBusy by mutableStateOf(false)
+        private set
+    var subagentsError by mutableStateOf<String?>(null)
         private set
 
     /** 当前模型支持的思考档位（模型清单还没拉到就是空 —— 选择器据此只列能用的）。 */
@@ -1338,6 +1345,42 @@ class ChatViewModel @Inject constructor(
         val device = device ?: return@runCatching null
         api.promptContent(device, token, prompt.slug, prompt.category)
     }.getOrNull()
+
+    fun openSubagents() {
+        subagentsOpen = true
+        refreshSubagents()
+    }
+
+    fun closeSubagents() {
+        subagentsOpen = false
+    }
+
+    /**
+     * 拉一次子代理列表。
+     *
+     * 宿主那个接口是**现扫会话文件**（`subagents:record` + 锚点 + acp_delegate 工具调用推导），
+     * 运行中的子代理只有锚点、完成时才落 record —— 所以打开面板时重新读一次，别复用工作区那份快照。
+     */
+    fun refreshSubagents() {
+        val id = sessionId
+        subagentsBusy = true
+        subagentsError = null
+        viewModelScope.launch {
+            try {
+                val conn = connections.resolve(deviceId, DEVICE_READY_TIMEOUT_MS) ?: run {
+                    subagentsError = "设备已不存在，回设备页重新添加"
+                    return@launch
+                }
+                subagents = api.subagents(conn.device, conn.token, id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                subagentsError = describeConnectionError(e)
+            } finally {
+                subagentsBusy = false
+            }
+        }
+    }
 
     /** 抽屉打开时调用；同一会话只自动拉一次，之后靠下拉/切页手动刷。 */
     fun loadWorkspace(force: Boolean = false) {

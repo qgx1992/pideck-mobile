@@ -522,6 +522,12 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   手机与桌面端仍有差异，**别自己去补**：桌面端同一消息的多条工具合成一张 `ToolGroupCard`
   （手机一条一张）、桌面端还有扩展输出 / 重试 / 中间回复的独立节点（手机没有这些数据）。
 
+- **子代理面板读的是「现扫会话文件」**（`ui/chat/SubagentsSheet.kt` + `ChatViewModel.refreshSubagents()`，
+  0.5.58）：`GET /api/sessions/:id/subagents` 每次请求都现扫 `subagents:record` 与 `pi-deck-subagent-start`
+  锚点、再合并 `acp_delegate` / `subagent` 工具调用推导，**运行中的子代理只有锚点、完成时才落记录** ——
+  所以打开面板时重新拉一次，别复用工作区那份快照（原来只在 `refreshWorkspace()` 里拉，界面上根本没有入口）。
+  宿主这几项都可选（`toolUses` / `tokens` / `result` / `error` 经常缺），缺就整段不写，**不要显示 `0 tok`**
+  —— 那会被读成「真的一次工具都没调」（`subagentMetaText` 有单测守着）。
 - **AI 提问卡可折叠**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/AskCard.kt`）：
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
   不做「有一张卡但不知道在问什么」。展开内容走 `AnimatedVisibility`，选项列仍是 `heightIn(max = 320.dp)` 内部滚动。
