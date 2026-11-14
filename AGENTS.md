@@ -101,6 +101,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-download-ser
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-download-server-task.ps1 -Uninstall
 ```
 
+- **进程被带走要能自己回来**（2026-11-14 起）：注册脚本除了「登录后延迟 20 秒」，还挂了一条
+  `-Once -RepetitionInterval 10 分钟 -RepetitionDuration 3650 天` 的看门狗触发器，
+  `MultipleInstances=IgnoreNew` 保证服务在跑时它只是空转。踩过：11-12 那天常驻实例被整棵进程树带走，
+  计划任务只在登录时触发一次，于是 8080 静默消失两天（`LastTaskResult=1`，没人发现）。
+  验证办法：`Stop-Process` 掉监听 8080 的 pythonw，20 秒~10 分钟内应自己回来
+  （实测 96 秒；`RestartCount 3 × 1 分钟` 也会兜一次），回来后在日志里能看到新的
+  `serving ... (pid N)` 行。
 - 任务名 `PiDeck Download Server`，实际命令：`pythonw.exe "…\scripts\serve-apk.py" --port 8080`（0.5.41 起脚本从 `app/scripts/` 搬到仓库根的 `scripts/`，任务已用新脚本重新注册过）
 - 服务本体是 `scripts/serve-apk.py`，**不是** `python -m http.server`：后者是单线程，
   手机拉 14MB 包时整站被堵住；且 `pythonw` 下 `sys.stdout/stderr` 是 `None`，

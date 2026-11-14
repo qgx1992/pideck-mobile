@@ -59,6 +59,13 @@ $action = New-ScheduledTaskAction -Execute $pythonw `
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME)
 $trigger.Delay = "PT20S"
 
+# 每 10 分钟看一次：进程被谁带走（工具超时杀进程组、手滑 Stop-Process）之后，
+# 下一个整点由这条触发器把服务拉回来。MultipleInstances=IgnoreNew 意味着
+# 「已经在跑」时这条只是空转，不会起第二份。
+$watchdog = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) `
+    -RepetitionInterval (New-TimeSpan -Minutes 10) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)
+
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -69,9 +76,11 @@ $settings = New-ScheduledTaskSettingsSet `
 
 $principal = New-ScheduledTaskPrincipal -UserId ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME) -LogonType Interactive -RunLevel Limited
 
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($trigger, $watchdog) `
     -Settings $settings -Principal $principal `
     -Description "PiDeck 手机版局域网下载页（apk/ 快照，端口 $Port），无窗口常驻" -Force | Out-Null
+
+"  自愈：每 10 分钟检查一次（已在跑时不会起第二份），失败重试 3 次 × 1 分钟"
 
 "已注册计划任务：$TaskName"
 "  命令：$pythonw `"$script`" --port $Port"
