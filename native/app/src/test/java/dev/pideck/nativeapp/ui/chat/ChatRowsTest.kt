@@ -171,4 +171,21 @@ class ChatRowsTest {
         val item = (rows.single() as ChatRow.Single).item as TimelineItem.AssistantMessage
         assertEquals("想了想", item.thinking)
     }
+
+    @Test
+    fun `一轮里只有最后一段正文留在组外`() {
+        val rows = buildChatRows(
+            items = listOf(
+                step("a1", text = "先说一句", timestamp = 1L),
+                step("a2", tools = listOf(tool("bash")), timestamp = 2L),
+                step("a3", text = "最终回答", timestamp = 3L),
+            ),
+            live = null,
+        )
+        assertEquals(2, rows.size)
+        val group = rows[0] as ChatRow.Process
+        assertEquals(1, group.interimCount)
+        val single = rows[1] as ChatRow.Single
+        assertEquals("最终回答", (single.item as TimelineItem.AssistantMessage).text)
+    }
 }

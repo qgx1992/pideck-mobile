@@ -83,8 +83,27 @@ fun buildChatRows(
         pending = ArrayList()
     }
 
+    // 一轮里只有**最后一段**正文才算最终回答；前面那些 assistant 的正文是「中间回复」，
+    // 和思考、工具一样属于过程（Web 端组头的 💬N 就是它）。
+    // 以前每段正文都单独成行 → 每条都 flush 一次，于是同一轮冒出四五个「执行过程」组，
+    // 正文也被切得七零八落。
+    val lastAnswerKey = all
+        .filterIsInstance<TimelineItem.AssistantMessage>()
+        .lastOrNull { it.text.isNotBlank() }
+        ?.key
+
     for (raw in all) {
         var item = raw
+        val earlyAnswer = (item as? TimelineItem.AssistantMessage)
+            ?.takeIf { it.text.isNotBlank() && item.key != lastAnswerKey }
+        if (groupProcess && earlyAnswer != null) {
+            pending += earlyAnswer.copy(
+                text = "",
+                interim = earlyAnswer.interim + earlyAnswer.text,
+                streaming = false,
+            )
+            continue
+        }
         // 收尾的那条（有正文）如果还带着思考，把这段思考并进紧挨着的过程组：
         // 桌面端同一个回合的思考全算在组里（组头「思考 ×4」），手机上最后一段会掉到组外，
         // 变成组下面一张孤零零的「思考过程」卡。
