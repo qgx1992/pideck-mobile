@@ -91,11 +91,14 @@ fun buildChatRows(
         .filterIsInstance<TimelineItem.AssistantMessage>()
         .lastOrNull { it.text.isNotBlank() }
         ?.key
+    // 还在流式时，只有 live 那条算正文；其它带正文的步骤先按中间回复处理。
+    // 否则正文一变（宿主又来一段），上一段会从「正文」跳进组里，屏幕上抖一下。
+    val liveKey = live?.key
 
     for (raw in all) {
         var item = raw
         val earlyAnswer = (item as? TimelineItem.AssistantMessage)
-            ?.takeIf { it.text.isNotBlank() && item.key != lastAnswerKey }
+            ?.takeIf { it.text.isNotBlank() && item.key != lastAnswerKey && item.key != liveKey }
         if (groupProcess && earlyAnswer != null) {
             pending += earlyAnswer.copy(
                 text = "",

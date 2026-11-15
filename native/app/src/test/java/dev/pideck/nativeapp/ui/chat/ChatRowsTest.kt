@@ -188,4 +188,15 @@ class ChatRowsTest {
         val single = rows[1] as ChatRow.Single
         assertEquals("最终回答", (single.item as TimelineItem.AssistantMessage).text)
     }
+
+    @Test
+    fun `流式时只有 live 那条算正文`() {
+        val rows = buildChatRows(
+            items = listOf(step("a1", text = "中间一句", timestamp = 1L)),
+            live = step("a2", text = "正在写", timestamp = 2L, streaming = true),
+        )
+        assertEquals(2, rows.size)
+        assertEquals(1, (rows[0] as ChatRow.Process).interimCount)
+        assertEquals("正在写", ((rows[1] as ChatRow.Single).item as TimelineItem.AssistantMessage).text)
+    }
 }
