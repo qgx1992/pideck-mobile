@@ -174,11 +174,11 @@ class TimelineTest {
     }
 
     @Test
-    fun `think-replay wrapper becomes thinking`() {
+    fun `think-replay wrapper is dropped, not shown as thinking`() {
         val raw = "<think-replay>上一轮的思考</think-replay>\n\n正文在这里"
         val (body, thinking) = splitThinking(raw)
         assertEquals("正文在这里", body)
-        assertEquals("上一轮的思考", thinking)
+        assertNull(thinking)
     }
 
     @Test
@@ -197,10 +197,10 @@ class TimelineTest {
     }
 
     @Test
-    fun `unclosed think-replay keeps content as thinking`() {
+    fun `unclosed think-replay is dropped too`() {
         val (body, thinking) = splitThinking("先说一句<THINK-REPLAY>还没写完的思考")
         assertEquals("先说一句", body)
-        assertEquals("还没写完的思考", thinking)
+        assertNull(thinking)
     }
 
     @Test
@@ -243,4 +243,55 @@ class TimelineTest {
         val page = PideckJson.decodeFromString(SessionMessagePage.serializer(), json)
         assertEquals(1, page.messages.toTimelineItems().size)
     }
+    @Test
+    fun `guard-note and think-frag pairs never reach the screen`() {
+        val raw = "前文<guard-note>内部说明</guard-note>中段<think-frag>约束：别写短句</think-frag>后文"
+        val (body, thinking) = splitThinking(raw)
+        assertEquals("前文中段后文", body)
+        assertNull(thinking)
+    }
+
+    @Test
+    fun `thinking field loses its tag shell`() {
+        val messages = listOf(
+            ChatMessage(id = "a9", role = "assistant", text = "", thinking = "<thinking>已登录 GitHub</thinking>"),
+        )
+        val item = messages.toTimelineItems().single() as TimelineItem.AssistantMessage
+        assertEquals("已登录 GitHub", item.thinking)
+    }
+
+    @Test
+    fun `display false on an unknown projection type is dropped`() {
+        val json = """{"messages":[
+            {"id":"x1","role":"system","text":"内部注入",
+             "meta":{"type":"someFutureType","display":false}},
+            {"id":"a1","role":"assistant","text":"正常回复"}],"total":2}"""
+        val page = PideckJson.decodeFromString(SessionMessagePage.serializer(), json)
+        assertEquals(listOf("msg-a1"), page.messages.toTimelineItems().map { it.key })
+    }
+    @Test
+    fun `any tag with an internal root is dropped`() {
+        val raw = "甲<guard-xyz>内部乙</guard-xyz>丙<think-whatever>内部丁</think-whatever>戊"
+        val (body, thinking) = splitThinking(raw)
+        assertEquals("甲丙戊", body)
+        assertNull(thinking)
+    }
+
+    @Test
+    fun `ordinary html tag stays untouched`() {
+        val raw = "看这段 <div>内容</div> 就够了"
+        val (body, thinking) = splitThinking(raw)
+        assertEquals(raw, body)
+        assertNull(thinking)
+    }
+
+    @Test
+    fun `visible thinking tags still go to the thinking block`() {
+        val raw = "<thinking>想一下</thinking>正文"
+        val (body, thinking) = splitThinking(raw)
+        assertEquals("正文", body)
+        assertEquals("想一下", thinking)
+    }
 }
+
+

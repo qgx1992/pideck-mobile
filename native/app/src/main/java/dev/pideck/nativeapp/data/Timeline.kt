@@ -72,6 +72,10 @@ internal val INTERNAL_CUSTOM_TYPE_PREFIXES = listOf("subagents:", "pi-deck-", "c
  */
 internal fun ChatMessage.isInternalOnlyMessage(): Boolean {
     val meta = meta ?: return false
+    // display 是宿主给的唯一权威开关：false 就是「只喂给模型，不给人看」。
+    // 先按字段判一次、再看 type —— 宿主以后再加一种投影类型也不会又漏一次
+    //（第一次漏的就是 guard-replay）。
+    if (meta.bool("display") == false) return true
     return when (meta.string("type")) {
         "customMessage" -> meta.bool("display") != true
         "customEntry" -> {
@@ -128,7 +132,7 @@ fun List<ChatMessage>.toTimelineItems(): List<TimelineItem> = mapNotNull { messa
             // 不拆就会在思考块下面再看到一整段带标签的重复内容。
             val (text, inlineThinking) = splitThinking(message.text)
             val thinking = listOfNotNull(
-                message.thinking?.trim()?.takeIf { it.isNotBlank() },
+                message.thinking?.let(::stripThinkTagMarkers)?.trim()?.takeIf { it.isNotBlank() },
                 inlineThinking,
             ).distinct().joinToString("\n\n").ifBlank { null }
             if (text.isBlank() && thinking == null) null
@@ -175,16 +179,32 @@ fun ReplySnapshot.toTimelineItem(streaming: Boolean): TimelineItem.AssistantMess
  *   连同正文一起回灌，标签是英文的，和后端内部的 replay 逻辑同名）
  * - `<think>…</think>`：DSH 一类后端
  *
- * 只认成对出现的那几种；标签名大小写不敏感。
+ * 认词根不认全名：见 INTERNAL_TAG_ROOTS。普通 HTML 标签原样保留。
  */
-private val THINK_TAGS = listOf(
-    "thinking" to "thinking",
-    "think-replay" to "think-replay",
-    "think" to "think",
-)
+/**
+ * 内部标签按「词根」分类，不按全名列举。
+ *
+ * 宿主的注入标签一直在换名字：`<thinking>` → `<think-replay>` → `<think-frag>` → `<guard-note>`。
+ * 每换一个名字就往表里加一行是追不上的 —— 前两次露字都是「表里没有这个名字」。
+ * 所以这里只认词根：名字里带这些词根的标签，一律按「给模型看」处理。
+ */
+private val INTERNAL_TAG_ROOTS = listOf("think", "guard", "internal", "pi-deck")
 
-private val THINK_TAG_PATTERN = Regex(
-    "<\\s*(/)?\\s*(" + THINK_TAGS.joinToString("|") { Regex.escape(it.first) } + ")\\s*>",
+/** 用户本来就该看的思考标签：内容进折叠的思考块，不丢。 */
+private val VISIBLE_THINK_TAGS = setOf("thinking", "think")
+
+private enum class TagKind { Thinking, Drop, Plain }
+
+private fun tagKindOf(name: String): TagKind {
+    val n = name.lowercase()
+    if (n in VISIBLE_THINK_TAGS) return TagKind.Thinking
+    if (INTERNAL_TAG_ROOTS.any { n.contains(it) }) return TagKind.Drop
+    return TagKind.Plain
+}
+
+/** 任何形如 `<name>` 的标签：内部标签认得出来，普通 HTML 标签原样留着。 */
+private val ANY_TAG_PATTERN = Regex(
+    "<\\s*(/)?\\s*([A-Za-z][A-Za-z0-9:_-]*)\\s*>",
     RegexOption.IGNORE_CASE,
 )
 
@@ -200,26 +220,30 @@ private val THINK_TAG_PATTERN = Regex(
  */
 internal fun splitThinking(raw: String): Pair<String, String?> {
     if (!raw.contains('<')) return raw to null
-    val matches = THINK_TAG_PATTERN.findAll(raw).toList()
+    val matches = ANY_TAG_PATTERN.findAll(raw).toList()
     if (matches.isEmpty()) return raw to null
 
     val body = StringBuilder()
     val segments = mutableListOf<String>()
     var cursor = 0
     var open: MatchResult? = null
+    var openDrop = false
 
     for (match in matches) {
         val closing = match.groupValues[1] == "/"
+        val kind = tagKindOf(match.groupValues[2])
+        if (kind == TagKind.Plain) continue // 不是内部标签：留在正文，一个字不动
         if (!closing) {
-            // 上一次还没闭合就来了新的开标签：把已开的那段当思考收掉
+            // 上一次还没闭合就来了新的开标签：把已开的那段按它自己的用途收掉
             if (open != null) {
                 body.append(raw.substring(cursor, open.range.first))
-                segments += raw.substring(open.range.last + 1, match.range.first)
+                if (!openDrop) segments += raw.substring(open.range.last + 1, match.range.first)
             } else {
                 body.append(raw.substring(cursor, match.range.first))
                 cursor = match.range.first
             }
             open = match
+            openDrop = kind == TagKind.Drop
             continue
         }
         if (open == null) {
@@ -228,14 +252,15 @@ internal fun splitThinking(raw: String): Pair<String, String?> {
             cursor = match.range.last + 1
             continue
         }
-        segments += raw.substring(open.range.last + 1, match.range.first)
+        if (!openDrop) segments += raw.substring(open.range.last + 1, match.range.first)
         open = null
+        openDrop = false
         cursor = match.range.last + 1
     }
 
     if (open != null) {
         body.append(raw.substring(cursor, open.range.first))
-        segments += raw.substring(open.range.last + 1)
+        if (!openDrop) segments += raw.substring(open.range.last + 1)
     } else {
         body.append(raw.substring(cursor))
     }
@@ -246,6 +271,19 @@ internal fun splitThinking(raw: String): Pair<String, String?> {
         .filter { it.isNotEmpty() }
         .joinToString("\n\n")
     return cleanBody to cleanThinking.ifBlank { null }
+}
+
+/**
+ * 去掉思考字段里的标签外壳。
+ *
+ * 接口把 thinking 拍平时会连 `<thinking>` 标签一起塞进字段，不剥就会在卡正文里
+ * 看到这行标签原文（手机上见过）。只删标签，不动内容。
+ */
+internal fun stripThinkTagMarkers(raw: String): String {
+    if (!raw.contains('<')) return raw
+    return ANY_TAG_PATTERN.replace(raw) { m ->
+        if (tagKindOf(m.groupValues[2]) == TagKind.Plain) m.value else ""
+    }
 }
 
 /** 入参/结果压成一行可读文本：对象走紧凑 JSON，字符串去掉外层引号。 */
