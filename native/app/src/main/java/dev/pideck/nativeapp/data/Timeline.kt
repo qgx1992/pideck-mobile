@@ -287,13 +287,11 @@ internal fun splitThinking(raw: String): Pair<String, String?> {
         if (kind == TagKind.Plain) continue // 不是内部标签：留在正文，一个字不动
         if (!closing) {
             if (open != null) {
-                // 上一个还没闭合就来了新的开标签：配对没成立，那段内容按桌面端的口径留在正文里
-                //（桌面端只删 `<thinking>…</thinking>` 成对的整块，落单的那些交给 markdown 把标签吃掉、内容照显示）
-                if (openDrop) {
-                    // 内部指令类落单也丢
-                } else {
-                    body.append(raw.substring(cursor, match.range.first))
-                }
+                // 上一个还没闭合就来了新的开标签：这仍然是一段思考，只是排版上没闭合
+                // （真机会话里常见「12 个 <thinking> 只配了 4 个 </thinking>」）。
+                // 早先按桌面端口径把落单的留在正文，结果整段推理「泄露」到回答里 —— 用户看到的
+                // 就是思考内容跑到正文中间。现在一律并进思考块。
+                if (!openDrop) segments += raw.substring(cursor, match.range.first)
             } else {
                 body.append(raw.substring(cursor, match.range.first))
             }
@@ -315,8 +313,8 @@ internal fun splitThinking(raw: String): Pair<String, String?> {
     }
 
     if (open != null) {
-        // 收尾时还开着的标签：同上，没闭合就按正文显示，别把内容藏进思考块
-        if (!openDrop) body.append(raw.substring(cursor))
+        // 收尾时还开着的标签：剩下的全都算思考（同一段推理被截断而已）
+        if (!openDrop) segments += raw.substring(cursor)
     } else {
         body.append(raw.substring(cursor))
     }

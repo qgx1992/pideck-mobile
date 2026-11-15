@@ -90,7 +90,21 @@ fun buildChatRows(
         // 变成组下面一张孤零零的「思考过程」卡。
         val trailingThink = (item as? TimelineItem.AssistantMessage)
             ?.takeIf { it.text.isNotBlank() && it.thinking?.isNotBlank() == true }
-        if (groupProcess && trailingThink != null && pending.isNotEmpty()) {
+        val lastGroup = rows.lastOrNull() as? ChatRow.Process
+        if (groupProcess && trailingThink != null && pending.isEmpty() && lastGroup != null) {
+            // 组已经 flush 出去了（比如中间隔了一条正文），把这段思考并回最后那个组，
+            // 别让它在组下面变成一张孤零零的「思考过程」卡。
+            rows[rows.lastIndex] = lastGroup.copy(
+                steps = lastGroup.steps + trailingThink.copy(
+                    key = trailingThink.key + "-think",
+                    text = "",
+                    tools = emptyList(),
+                    errorText = null,
+                    streaming = false,
+                ),
+            )
+            item = trailingThink.copy(thinking = null)
+        } else if (groupProcess && trailingThink != null && pending.isNotEmpty()) {
             pending += trailingThink.copy(
                 key = trailingThink.key + "-think",
                 text = "",

@@ -322,8 +322,9 @@ class TimelineTest {
     fun `unbalanced thinking tags never leak the tag into the body`() {
         val raw = "<thinking>甲<thinking>乙</thinking>正文<thinking>丙"
         val (body, thinking) = splitThinking(raw)
-        assertEquals("甲正文丙", body)
-        assertEquals("乙", thinking)
+        // 未闭合的开标签之间那段仍然是思考（以前留在正文里，看着像推理泄露到回答中间）
+        assertEquals("正文", body)
+        assertEquals("甲\n\n乙\n\n丙", thinking)
         assertEquals(false, body.contains("<thinking>"))
     }
 

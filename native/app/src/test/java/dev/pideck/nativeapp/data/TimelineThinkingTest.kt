@@ -8,18 +8,19 @@ import org.junit.Test
 class TimelineThinkingTest {
 
     @Test
-    fun `拆出闭合的 thinking 块`() {
-        val (body, thinking) = splitThinking("<thinking>先想一下</thinking>\n\n答案是 42")
-        assertEquals("答案是 42", body)
+    fun `成对的 thinking 收进思考块`() {
+        val (body, thinking) = splitThinking("<thinking>先想一下</thinking>\n\n最终 42")
+        assertEquals("最终 42", body)
         assertEquals("先想一下", thinking)
     }
 
     @Test
-    fun `未闭合的 thinking 按桌面端口径留在正文`() {
-        // 桌面端只删 `<thinking>…</thinking>` 成对的整块；落单的开标签由 markdown 吃掉标签、内容照显示
+    fun `未闭合的 thinking 也收进思考块`() {
+        // 真机会话里常见「12 个 <thinking> 只配了 4 个 </thinking>」：落单的那些如果留在正文，
+        // 用户看到的就是整段推理泄露到回答中间。
         val (body, thinking) = splitThinking("<thinking>还在想")
-        assertEquals("还在想", body)
-        assertNull(thinking)
+        assertEquals("", body)
+        assertEquals("还在想", thinking)
     }
 
     @Test
@@ -31,13 +32,12 @@ class TimelineThinkingTest {
     }
 
     @Test
-    fun `多段 thinking 拼在一起`() {
+    fun `多段 thinking 拼到一起`() {
         val (body, thinking) = splitThinking("<thinking>第一段</thinking>中间<thinking>第二段</thinking>尾巴")
         assertEquals("中间尾巴", body)
         assertEquals("第一段\n\n第二段", thinking)
     }
 
-    /** 真机形状：正文里带标签，同时 meta.thinking 也有同一份内容 —— 不能重复显示两遍。 */
     @Test
     fun `历史消息里 thinking 字段与正文标签去重`() {
         val message = ChatMessage(
