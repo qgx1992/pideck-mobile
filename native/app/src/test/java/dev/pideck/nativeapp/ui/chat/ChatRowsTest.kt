@@ -199,4 +199,24 @@ class ChatRowsTest {
         assertEquals(1, (rows[0] as ChatRow.Process).interimCount)
         assertEquals("正在写", ((rows[1] as ChatRow.Single).item as TimelineItem.AssistantMessage).text)
     }
+
+    @Test
+    fun `上一轮的回答不会被这一轮的组吃掉`() {
+        val rows = buildChatRows(
+            items = listOf(
+                user("u1", "第一个问题"),
+                step("a1", tools = listOf(tool("bash")), timestamp = 1L),
+                step("a2", text = "第一个回答", timestamp = 2L),
+                user("u2", "再问一个"),
+                step("a3", tools = listOf(tool("edit")), timestamp = 3L),
+                step("a4", text = "第二个回答", timestamp = 4L),
+            ),
+            live = null,
+        )
+        assertEquals(6, rows.size)
+        assertTrue(rows[1] is ChatRow.Process)
+        assertEquals("第一个回答", ((rows[2] as ChatRow.Single).item as TimelineItem.AssistantMessage).text)
+        assertTrue(rows[4] is ChatRow.Process)
+        assertEquals("第二个回答", ((rows[5] as ChatRow.Single).item as TimelineItem.AssistantMessage).text)
+    }
 }

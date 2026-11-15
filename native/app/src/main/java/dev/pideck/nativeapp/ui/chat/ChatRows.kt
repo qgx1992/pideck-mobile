@@ -94,18 +94,23 @@ fun buildChatRows(
     // 还在流式时，只有 live 那条算正文；其它带正文的步骤先按中间回复处理。
     // 否则正文一变（宿主又来一段），上一段会从「正文」跳进组里，屏幕上抖一下。
     val liveKey = live?.key
+    // 「最后一段正文」只在**本轮**里成立。整个会话都塞进这个函数时，上一轮的最终回答也会被
+    // 这一轮的答案盖掉、被折叠成中间回复（用户看到的就是「再问一次，上一条回答缩进组里了」）。
+    val lastUserIndex = all.indexOfLast { it is TimelineItem.UserMessage }
 
-    for (raw in all) {
+    all.forEachIndexed { index, raw ->
         var item = raw
         val earlyAnswer = (item as? TimelineItem.AssistantMessage)
-            ?.takeIf { it.text.isNotBlank() && item.key != lastAnswerKey && item.key != liveKey }
+            ?.takeIf {
+                index > lastUserIndex && it.text.isNotBlank() && it.key != lastAnswerKey && it.key != liveKey
+            }
         if (groupProcess && earlyAnswer != null) {
             pending += earlyAnswer.copy(
                 text = "",
                 interim = earlyAnswer.interim + earlyAnswer.text,
                 streaming = false,
             )
-            continue
+            return@forEachIndexed
         }
         // 收尾的那条（有正文）如果还带着思考，把这段思考并进紧挨着的过程组：
         // 桌面端同一个回合的思考全算在组里（组头「思考 ×4」），手机上最后一段会掉到组外，
@@ -140,7 +145,7 @@ fun buildChatRows(
             // 思考与工具调用都算「过程」，一起折进组里；组内思考是展开显示的（见 ProcessGroupBlock），
             // 所以并进组不等于把内容藏起来。
             pending += item
-            continue
+            return@forEachIndexed
         }
         flush()
         rows += ChatRow.Single(item)
