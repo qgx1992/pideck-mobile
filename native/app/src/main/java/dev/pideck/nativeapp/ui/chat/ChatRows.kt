@@ -29,12 +29,16 @@ sealed interface ChatRow {
 
         val thinkingCount: Int get() = steps.count { it.thinking?.isNotBlank() == true }
 
+        /** 中间回复条数（Web 端组头上的 💬N）。 */
+        val interimCount: Int get() = steps.sumOf { it.interim.size }
+
         /** 组头摘要文案（运行中给「正在读取…」）。 */
         val summary: String
             get() = ProcessActivity.summary(
                 toolNames = toolNames,
                 thinkingCount = thinkingCount,
                 running = streaming,
+                interimCount = interimCount,
             )
 
         /** 组跨度（毫秒）：只用于「· 1.2s」这类提示，时间戳缺失就是 0。 */

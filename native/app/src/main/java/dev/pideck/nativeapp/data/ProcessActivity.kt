@@ -147,6 +147,7 @@ object ProcessActivity {
         thinkingCount: Int,
         running: Boolean,
         maxKinds: Int = 3,
+        interimCount: Int = 0,
     ): String {
         if (running) {
             val lastTool = toolNames.lastOrNull { it.isNotBlank() }
@@ -157,6 +158,7 @@ object ProcessActivity {
         val parts = mutableListOf<String>()
         counts(toolNames).take(maxKinds).forEach { (kind, count) -> parts += "${kind.label} ×$count" }
         if (thinkingCount > 0) parts += "思考 ×$thinkingCount"
+        if (interimCount > 0) parts += "中间回复 ×$interimCount"
         return if (parts.isEmpty()) "过程" else parts.joinToString(" · ")
     }
 }

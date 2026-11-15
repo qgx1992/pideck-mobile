@@ -522,6 +522,7 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   - 设置页那句「技能 / 扩展 / 用量回桌面端看」的注释已作废：技能扩展现在是全局 HTTP 接口；
     用量额度（`/api/usage/:provider`）默认关闭，仍未做。
 
+- **中间回复按成对 `<thinking>` 边界切**（`data/Timeline.kt` 的 `splitBodySegments`）：Web 端一轮里会有好几段正文（组头 💬N），手机以前当成一大段。最后一段才是最终回答，前面几段进 `AssistantMessage.interim`、由 `ProcessGroupBlock` 渲染成 💬 行。**别用 `Regex.split` 配捕获组来切** —— Kotlin 走 Java 的 `Pattern.split`，捕获组不会出现在结果里，会整段错位（曾把「只有思考」的条目直接吞掉）；用 `findAll` + 自己按 `range` 切片。
 - **过程组有三个不能改的约定**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatScreen.kt` 的
   `ProcessGroupBlock`，0.5.45 对齐桌面端）：
   1. **手动展开优先**：用 `manualSet` / `manualOpen` 两个布尔，`open = if (manualSet) manualOpen else autoOpen`。

@@ -326,4 +326,17 @@ class TimelineTest {
         assertEquals("乙", thinking)
         assertEquals(false, body.contains("<thinking>"))
     }
+
+    @Test
+    fun `一段正文被思考块分开时前面的段算中间回复`() {
+        val message = ChatMessage(
+            id = "a-interim",
+            role = "assistant",
+            text = "<thinking>先想</thinking>甲段<thinking>再想</thinking>乙段",
+        )
+        val item = listOf(message).toTimelineItems().single() as TimelineItem.AssistantMessage
+        assertEquals("乙段", item.text)
+        assertEquals(listOf("甲段"), item.interim)
+        assertEquals(true, item.thinking.orEmpty().contains("先想"))
+    }
 }

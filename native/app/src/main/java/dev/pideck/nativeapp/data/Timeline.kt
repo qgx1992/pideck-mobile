@@ -45,6 +45,8 @@ sealed interface TimelineItem {
         /** 还在流式输出（末尾转圈）。 */
         val streaming: Boolean = false,
         val errorText: String? = null,
+        /** 一轮里的「中间回复」：过程里说过、又被后面的正文顶掉的段落（Web 端组头上的 💬N）。 */
+        val interim: List<String> = emptyList(),
     ) : TimelineItem
 }
 
@@ -130,7 +132,9 @@ fun List<ChatMessage>.toTimelineItems(): List<TimelineItem> = mapNotNull { messa
         else -> {
             // 有的后端把思考直接拼在正文里（`<thinking>…</thinking>`），usage.thinking 同时也有值，
             // 不拆就会在思考块下面再看到一整段带标签的重复内容。
-            val (text, inlineThinking) = splitThinking(message.text)
+            val (segments, inlineThinking) = splitBodySegments(message.text)
+            val text = segments.lastOrNull().orEmpty()
+            val interim = segments.dropLast(1).filter { it.isNotBlank() }
             val thinking = listOfNotNull(
                 message.thinking?.let(::thinkingFieldText)?.trim()?.takeIf { it.isNotBlank() },
                 inlineThinking,
@@ -141,10 +145,54 @@ fun List<ChatMessage>.toTimelineItems(): List<TimelineItem> = mapNotNull { messa
                 text = text,
                 thinking = thinking,
                 timestamp = message.timestamp,
+                interim = interim,
             )
         }
     }
 }
+
+/** 成对的 `<thinking>…</thinking>`：Web 端也只删这一种整块，所以中间回复就按它切开。 */
+private val PAIRED_THINKING = Regex(
+    "<\\s*thinking\\s*>([\\s\\S]*?)<\\s*/\\s*thinking\\s*>",
+    RegexOption.IGNORE_CASE,
+)
+
+/**
+ * 正文切成「中间回复们 + 最终回答」，思考单独拿出来。
+ *
+ * Web 端一轮里会分好几段正文（中间回复，过程组头上 💬N）；手机以前当成一大段，最终回答和碎片混在一起。
+ * 没有成对标签时原样返回一段 —— 老的「只有思考」「thinking 字段带标签」那几类不走这里。
+ */
+internal fun splitBodySegments(raw: String): Pair<List<String>, String?> {
+    if (!raw.contains('<')) return listOf(raw).filter { it.isNotBlank() } to null
+    // 注意：`Regex.split` 走 Java 的 Pattern.split，**不会**把捕获组塞回结果里
+    // （早先按「偶数下标=正文、奇数下标=思考」写，成对的标签整段被当成正文/思考错位，
+    // 表现是「只有思考」的条目直接消失）。这里自己按 match 位置切片。
+    val matches = PAIRED_THINKING.findAll(raw).toList()
+    if (matches.isEmpty()) {
+        val (body, inline) = splitThinking(raw)
+        return listOf(body).filter { it.isNotBlank() } to inline
+    }
+    val texts = mutableListOf<String>()
+    val thinkings = mutableListOf<String>()
+    var cursor = 0
+    for (match in matches) {
+        if (match.range.first > cursor) {
+            val (body, inline) = splitThinking(raw.substring(cursor, match.range.first))
+            inline?.takeIf { it.isNotBlank() }?.let { thinkings += it }
+            body.trim().takeIf { it.isNotBlank() }?.let { texts += it }
+        }
+        match.groupValues[1].trim().takeIf { it.isNotBlank() }?.let { thinkings += it }
+        cursor = match.range.last + 1
+    }
+    if (cursor < raw.length) {
+        val (body, inline) = splitThinking(raw.substring(cursor))
+        inline?.takeIf { it.isNotBlank() }?.let { thinkings += it }
+        body.trim().takeIf { it.isNotBlank() }?.let { texts += it }
+    }
+    return texts to thinkings.joinToString("\n\n").ifBlank { null }
+}
+
 
 /** 流式快照 → 时间线条目（放在列表末尾）。 */
 fun ReplySnapshot.toTimelineItem(streaming: Boolean): TimelineItem.AssistantMessage {

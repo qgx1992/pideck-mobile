@@ -1301,6 +1301,45 @@ private sealed interface ProcessMember {
     data class Tool(val tool: ToolView) : ProcessMember
 
     data class Thinking(val piece: ThinkingPiece, val index: Int, val total: Int) : ProcessMember
+
+    /** Web 端的「中间回复」：一轮里说过又被后面正文顶掉的那几段。 */
+    data class Interim(val text: String, val index: Int, val total: Int) : ProcessMember
+}
+
+/** 中间回复：一行预览，点开看全文（同思考卡的处理方式）。 */
+@Composable
+private fun InterimLine(text: String, title: String, onOpen: () -> Unit) {
+    val preview = text.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "💬",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.size(8.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+        )
+        Spacer(Modifier.size(8.dp))
+        Text(
+            text = preview,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
 }
 
 @Composable
@@ -1318,8 +1357,10 @@ private fun ProcessGroupBlock(
 
     val tools = row.steps.flatMap { it.tools }
     val thinkingTotal = row.steps.count { it.thinking?.isNotBlank() == true }
+    val interimTotal = row.steps.sumOf { it.interim.size }
     val members: List<ProcessMember> = buildList {
         var thinkingIndex = 0
+        var interimIndex = 0
         for (step in row.steps) {
             val text = step.thinking?.takeIf { it.isNotBlank() }
             if (text != null) {
@@ -1333,6 +1374,10 @@ private fun ProcessGroupBlock(
                 )
             }
             step.tools.forEach { add(ProcessMember.Tool(it)) }
+            step.interim.forEach { piece ->
+                interimIndex += 1
+                add(ProcessMember.Interim(piece, interimIndex, interimTotal))
+            }
         }
     }
     // 挂载预算：桌面端组内 >32 条只挂后 32，超出给「显示更早的 N 条步骤」
@@ -1459,6 +1504,21 @@ private fun ProcessGroupBlock(
                         is ProcessMember.Tool -> ToolCard(
                             tool = member.tool,
                             onOpen = { onOpenDetail(toolDetailOf(member.tool)) },
+                        )
+
+                        is ProcessMember.Interim -> InterimLine(
+                            text = member.text,
+                            title = if (member.total > 1) "中间回复 ${member.index}/${member.total}" else "中间回复",
+                            onOpen = {
+                                onOpenDetail(
+                                    DetailContent(
+                                        title = "中间回复",
+                                        hint = "这一段是过程里说的，后面又被正文顶掉了",
+                                        text = member.text,
+                                        translatable = true,
+                                    ),
+                                )
+                            },
                         )
 
                         is ProcessMember.Thinking -> ThinkingCard(
