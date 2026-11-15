@@ -15,10 +15,11 @@ class TimelineThinkingTest {
     }
 
     @Test
-    fun `未闭合的 thinking 也收进思考`() {
+    fun `未闭合的 thinking 按桌面端口径留在正文`() {
+        // 桌面端只删 `<thinking>…</thinking>` 成对的整块；落单的开标签由 markdown 吃掉标签、内容照显示
         val (body, thinking) = splitThinking("<thinking>还在想")
-        assertEquals("", body)
-        assertEquals("还在想", thinking)
+        assertEquals("还在想", body)
+        assertNull(thinking)
     }
 
     @Test

@@ -197,8 +197,10 @@ class TimelineTest {
     }
 
     @Test
-    fun `unclosed think-replay is dropped too`() {
-        val (body, thinking) = splitThinking("先说一句<THINK-REPLAY>还没写完的思考")
+    fun `unclosed think-replay is dropped`() {
+        // 桌面端只删成对的 `<thinking>…</thinking>`；落单的开标签交给 markdown 吃掉标签、内容照显示
+        // think-replay 属于内部词根，落单也丢
+        val (body, thinking) = splitThinking("先说一句<think-replay>还没写完的思考")
         assertEquals("先说一句", body)
         assertNull(thinking)
     }
@@ -318,11 +320,10 @@ class TimelineTest {
 
     @Test
     fun `unbalanced thinking tags never leak the tag into the body`() {
-        // 真实样本：一条消息里 12 个 <thinking>、只有 4 个 </thinking>。
-        // 旧实现在「上一个还没闭合又来新的开标签」时会把标签本身抄进正文，还会重复段落。
         val raw = "<thinking>甲<thinking>乙</thinking>正文<thinking>丙"
         val (body, thinking) = splitThinking(raw)
-        assertEquals("正文", body)
-        assertTrue("甲   乙   丙".split("   ").all { thinking?.contains(it.trim()) == true })
+        assertEquals("甲正文丙", body)
+        assertEquals("乙", thinking)
+        assertEquals(false, body.contains("<thinking>"))
     }
 }
