@@ -315,4 +315,14 @@ class TimelineTest {
         val item = messages.toTimelineItems().single() as TimelineItem.AssistantMessage
         assertEquals("no tags here", item.thinking)
     }
+
+    @Test
+    fun `unbalanced thinking tags never leak the tag into the body`() {
+        // 真实样本：一条消息里 12 个 <thinking>、只有 4 个 </thinking>。
+        // 旧实现在「上一个还没闭合又来新的开标签」时会把标签本身抄进正文，还会重复段落。
+        val raw = "<thinking>甲<thinking>乙</thinking>正文<thinking>丙"
+        val (body, thinking) = splitThinking(raw)
+        assertEquals("正文", body)
+        assertTrue("甲   乙   丙".split("   ").all { thinking?.contains(it.trim()) == true })
+    }
 }

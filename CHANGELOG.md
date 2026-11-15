@@ -21,7 +21,10 @@ guard-replay 包着的上一轮思考（`<think-replay>…</think-replay>`）整
   不再靠一张名单追宿主的新名字。`isInternalOnlyMessage()` 先看 `meta.display == false`。
 - 思考字段统一过 `thinkingFieldText()`：剥标签壳、内部整段丢弃，纯文本原样保留
   （不能只用 `splitThinking().second`，没有标签时那项是 null）。
-- 单测 400 → 408（`TimelineTest` 8 条 + `ChatRowsTest` 2 条）。
+- 修 `splitThinking` 的游标 bug：上一条 `<thinking>` 还没闭合又来了新的开标签时，旧实现把**标签本身**
+  抄进正文、还把同一段内容重复一遍（真实样本：一条消息 12 个开标签、4 个闭标签，正文里因此露出
+  `<thinking>` 标签头）。现在 `cursor` 始终停在标签外侧，正文里不会再出现任何内部标签。
+- 单测 400 → 409（`TimelineTest` 9 条 + `ChatRowsTest` 2 条）。
 - **0.5.61 的「一个节点只留一张卡」撤回了**：把思考折进正文卡头在实际会话里更难读（用户反馈「非常糟糕」），
   恢复成「思考卡 + 正文」两块，`ThinkingCard` 的点击仍然开浮窗。
 - 0.5.60 的 `<think-replay>` 拆分仍然保留：别的后端把思考拼进正文时还是要收进思考块。

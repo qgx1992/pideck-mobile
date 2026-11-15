@@ -225,6 +225,10 @@ internal fun splitThinking(raw: String): Pair<String, String?> {
 
     val body = StringBuilder()
     val segments = mutableListOf<String>()
+    // cursor 永远停在「当前没被任何标签包住的位置」：开标签之后就是它的内容起点，
+    // 闭标签之后是它后面的正文起点。以前未闭合时 cursor 不动，
+    // 于是 `body.append(raw.substring(cursor, open.range.first))` 会把上一个 `<thinking>` 标签本身
+    // 抄进正文，还会把同一段内容重复一遍（12 个开标签 4 个闭标签的那种消息上就是这么露的）。
     var cursor = 0
     var open: MatchResult? = null
     var openDrop = false
@@ -234,16 +238,15 @@ internal fun splitThinking(raw: String): Pair<String, String?> {
         val kind = tagKindOf(match.groupValues[2])
         if (kind == TagKind.Plain) continue // 不是内部标签：留在正文，一个字不动
         if (!closing) {
-            // 上一次还没闭合就来了新的开标签：把已开的那段按它自己的用途收掉
             if (open != null) {
-                body.append(raw.substring(cursor, open.range.first))
-                if (!openDrop) segments += raw.substring(open.range.last + 1, match.range.first)
+                // 上一个还没闭合就来了新的开标签：手里这段算它的内容，按它自己的用途收掉
+                if (!openDrop) segments += raw.substring(cursor, match.range.first)
             } else {
                 body.append(raw.substring(cursor, match.range.first))
-                cursor = match.range.first
             }
             open = match
             openDrop = kind == TagKind.Drop
+            cursor = match.range.last + 1
             continue
         }
         if (open == null) {
@@ -252,15 +255,14 @@ internal fun splitThinking(raw: String): Pair<String, String?> {
             cursor = match.range.last + 1
             continue
         }
-        if (!openDrop) segments += raw.substring(open.range.last + 1, match.range.first)
+        if (!openDrop) segments += raw.substring(cursor, match.range.first)
         open = null
         openDrop = false
         cursor = match.range.last + 1
     }
 
     if (open != null) {
-        body.append(raw.substring(cursor, open.range.first))
-        if (!openDrop) segments += raw.substring(open.range.last + 1)
+        if (!openDrop) segments += raw.substring(cursor)
     } else {
         body.append(raw.substring(cursor))
     }
