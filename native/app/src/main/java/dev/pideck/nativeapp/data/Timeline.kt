@@ -132,7 +132,7 @@ fun List<ChatMessage>.toTimelineItems(): List<TimelineItem> = mapNotNull { messa
             // 不拆就会在思考块下面再看到一整段带标签的重复内容。
             val (text, inlineThinking) = splitThinking(message.text)
             val thinking = listOfNotNull(
-                message.thinking?.let(::stripThinkTagMarkers)?.trim()?.takeIf { it.isNotBlank() },
+                message.thinking?.let(::thinkingFieldText)?.trim()?.takeIf { it.isNotBlank() },
                 inlineThinking,
             ).distinct().joinToString("\n\n").ifBlank { null }
             if (text.isBlank() && thinking == null) null
@@ -274,16 +274,18 @@ internal fun splitThinking(raw: String): Pair<String, String?> {
 }
 
 /**
- * 去掉思考字段里的标签外壳。
+ * 思考字段的安全化：剥掉标签壳，内部的整段（`<guard-note>` 一类）直接丢。
  *
- * 接口把 thinking 拍平时会连 `<thinking>` 标签一起塞进字段，不剥就会在卡正文里
- * 看到这行标签原文（手机上见过）。只删标签，不动内容。
+ * 不能只用 `splitThinking(...).second`：字段里大多数时候是**没有标签的纯文本**，
+ * 那种情况下第二项是 null，会把正常的思考全丢掉。
  */
-internal fun stripThinkTagMarkers(raw: String): String {
+internal fun thinkingFieldText(raw: String): String? {
     if (!raw.contains('<')) return raw
-    return ANY_TAG_PATTERN.replace(raw) { m ->
-        if (tagKindOf(m.groupValues[2]) == TagKind.Plain) m.value else ""
-    }
+    val (body, inline) = splitThinking(raw)
+    return listOfNotNull(inline?.takeIf { it.isNotBlank() }, body.trim().takeIf { it.isNotBlank() })
+        .distinct()
+        .joinToString("\n\n")
+        .ifBlank { null }
 }
 
 /** 入参/结果压成一行可读文本：对象走紧凑 JSON，字符串去掉外层引号。 */

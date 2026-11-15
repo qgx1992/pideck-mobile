@@ -16,7 +16,12 @@ guard-replay 包着的上一轮思考（`<think-replay>…</think-replay>`）整
   变成组下面一张孤零零的「思考过程」卡。组内条目的 key 用 `<msgKey>-think`，不会和原消息撞。
 - 运行中那张「思考（进行中）」不再把整个回合的思考拼在一起：`ReplySnapshot.latestReasoning` 只取最近一段
   （`data/ReplyMerger.kt`，`Timeline.kt` 的 live 行用它）。前面几段在过程组里已经各有一张卡。
-- 单测 393 → 400（`TimelineTest` 5 条 + `ChatRowsTest` 2 条）。
+- 内部标签改成**按词根**判（PR #1）：`INTERNAL_TAG_ROOTS = ["think", "guard", "internal", "pi-deck"]`，
+  `VISIBLE_THINK_TAGS = {"thinking", "think"}`；`<think-replay>` / `<think-frag>` / `<guard-note>` 整段丢，
+  不再靠一张名单追宿主的新名字。`isInternalOnlyMessage()` 先看 `meta.display == false`。
+- 思考字段统一过 `thinkingFieldText()`：剥标签壳、内部整段丢弃，纯文本原样保留
+  （不能只用 `splitThinking().second`，没有标签时那项是 null）。
+- 单测 400 → 408（`TimelineTest` 8 条 + `ChatRowsTest` 2 条）。
 - **0.5.61 的「一个节点只留一张卡」撤回了**：把思考折进正文卡头在实际会话里更难读（用户反馈「非常糟糕」），
   恢复成「思考卡 + 正文」两块，`ThinkingCard` 的点击仍然开浮窗。
 - 0.5.60 的 `<think-replay>` 拆分仍然保留：别的后端把思考拼进正文时还是要收进思考块。

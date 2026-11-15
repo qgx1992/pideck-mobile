@@ -292,6 +292,27 @@ class TimelineTest {
         assertEquals("正文", body)
         assertEquals("想一下", thinking)
     }
+
+    @Test
+    fun `thinking field drops internal blocks`() {
+        val messages = listOf(
+            ChatMessage(
+                id = "a10",
+                role = "assistant",
+                text = "",
+                thinking = "先想<guard-note>内部说明</guard-note>再写",
+            ),
+        )
+        val item = messages.toTimelineItems().single() as TimelineItem.AssistantMessage
+        assertEquals("先想再写", item.thinking)
+    }
+
+    @Test
+    fun `plain thinking field is kept as is`() {
+        val messages = listOf(
+            ChatMessage(id = "a11", role = "assistant", text = "答", thinking = "no tags here"),
+        )
+        val item = messages.toTimelineItems().single() as TimelineItem.AssistantMessage
+        assertEquals("no tags here", item.thinking)
+    }
 }
-
-
