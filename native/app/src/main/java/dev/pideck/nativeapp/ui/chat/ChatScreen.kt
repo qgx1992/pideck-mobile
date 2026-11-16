@@ -69,6 +69,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
 import androidx.activity.compose.BackHandler
@@ -84,6 +93,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Splitscreen
@@ -1308,7 +1318,7 @@ private sealed interface ProcessMember {
 
 /** 中间回复：一行预览，点开看全文（同思考卡的处理方式）。 */
 @Composable
-private fun InterimLine(text: String, title: String, onOpen: () -> Unit) {
+private fun InterimLine(text: String, counter: String?, onOpen: () -> Unit) {
     val preview = text.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
     Row(
         modifier = Modifier
@@ -1318,18 +1328,21 @@ private fun InterimLine(text: String, title: String, onOpen: () -> Unit) {
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = "💬",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
+        // 前缀不再写「中间回复 1/2」：统一图标 + 计数（用户要求这类前缀换成图片）
+        Icon(
+            imageVector = Icons.Default.Forum,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(14.dp),
         )
-        Spacer(Modifier.size(8.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-        )
+        if (counter != null) {
+            Spacer(Modifier.size(6.dp))
+            Text(
+                text = counter,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
         Spacer(Modifier.size(8.dp))
         Text(
             text = preview,
@@ -1508,7 +1521,7 @@ private fun ProcessGroupBlock(
 
                         is ProcessMember.Interim -> InterimLine(
                             text = member.text,
-                            title = if (member.total > 1) "中间回复 ${member.index}/${member.total}" else "中间回复",
+                            counter = if (member.total > 1) "${member.index}/${member.total}" else null,
                             onOpen = {
                                 onOpenDetail(
                                     DetailContent(
@@ -1524,7 +1537,7 @@ private fun ProcessGroupBlock(
                         is ProcessMember.Thinking -> ThinkingCard(
                             text = member.piece.text,
                             streaming = member.piece.streaming,
-                            title = if (member.total > 1) "思考 ${member.index}/${member.total}" else "思考",
+                            counter = if (member.total > 1) "${member.index}/${member.total}" else null,
                             onOpen = {
                                 onOpenDetail(
                                     DetailContent(
@@ -1571,7 +1584,8 @@ private fun ThinkingCard(
     text: String,
     streaming: Boolean,
     onOpen: () -> Unit,
-    title: String = "思考过程",
+    title: String? = null,
+    counter: String? = null,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
@@ -1584,12 +1598,38 @@ private fun ThinkingCard(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = if (streaming) "$title（进行中）" else title,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
+            // 组内不再写「思考 3/7」这类文字前缀：图标 + 计数就够
+            Icon(
+                imageVector = Icons.Default.Psychology,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp),
             )
+            if (counter != null) {
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = counter,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            if (title != null) {
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (streaming) {
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = "进行中",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.weight(1f))
             Text(
                 text = "${text.length} 字",
                 style = MaterialTheme.typography.labelSmall,
@@ -1611,6 +1651,26 @@ private fun ThinkingCard(
  * 同样是「不再就地展开」：命令输出动辄几百行，塞在气泡里既挤又没法滚动，
  * 浮窗里能滚、能选、能一次复制全文。
  */
+/** 工具图标：读 / 写 / 跑命令 / 搜索 / 联网 / 子代理各一个，认不出就用扳手。 */
+private fun toolIcon(name: String): ImageVector {
+    val n = name.lowercase()
+    return when {
+        n.contains("bash") || n.contains("shell") || n.contains("terminal") || n.contains("exec") ->
+            Icons.Default.Terminal
+        n.contains("edit") || n.contains("write") || n.contains("patch") || n.contains("rename") ->
+            Icons.Default.Edit
+        n.contains("read") || n.contains("view") || n.contains("cat") || n.contains("file") ->
+            Icons.Default.Description
+        n.contains("search") || n.contains("grep") || n.contains("find") || n.contains("glob") ->
+            Icons.Default.Search
+        n.contains("web") || n.contains("fetch") || n.contains("http") || n.contains("browser") ->
+            Icons.Default.Language
+        n.contains("delegate") || n.contains("subagent") || n.contains("task") ->
+            Icons.Default.AccountTree
+        else -> Icons.Default.Build
+    }
+}
+
 @Composable
 private fun ToolCard(tool: ToolView, onOpen: () -> Unit = {}) {
     val tint = when {
@@ -1631,10 +1691,12 @@ private fun ToolCard(tool: ToolView, onOpen: () -> Unit = {}) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             run {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .background(tint, CircleShape),
+                // 以前是一颗 7dp 小圆点，只能看出成功/失败；换成按工具类型选的图标
+                Icon(
+                    imageVector = toolIcon(tool.name),
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(14.dp),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
