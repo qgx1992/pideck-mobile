@@ -212,8 +212,13 @@ class ChatViewModel @Inject constructor(
     private var liveStatsJob: Job? = null
 
     private companion object {
-        /** 流式快照的最小发布间隔：20 次/秒已经比肉眼看字快，再多只是白烧主线程。 */
-        const val LIVE_PUBLISH_INTERVAL_MS = 50L
+        /**
+         * 流式快照的最小发布间隔：一帧一次（约 60 次/秒）。
+         *
+         * 曾经是 50ms：文字变成一小块一小块地跳，看着像「一个字一个字打出来」；
+         * 现在界面流式期间只做纯文本布局（不解析 Markdown），按帧发布才跟得上 token 的速度。
+         */
+        const val LIVE_PUBLISH_INTERVAL_MS = 16L
 
         /** 并行问询面板那一格的键（EphemeralRuntimes 的槽位名）。 */
         const val SLOT_PARALLEL = "parallel"

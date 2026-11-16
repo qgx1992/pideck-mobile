@@ -6,7 +6,6 @@ import kotlinx.coroutines.Dispatchers
 
 import androidx.compose.runtime.getValue
 
-import androidx.compose.runtime.produceState
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -393,23 +392,25 @@ fun MarkdownText(
     modifier: Modifier = Modifier,
     streaming: Boolean = false,
 ) {
-    // 流式那一份每帧都在变，进缓存只会把缓存挤空；收尾后的长消息则反复出现在滚动里，值得留住。
+    // 流式期间**不解析 Markdown**，直接按纯文本画。
     //
-    // 但**流式不能在主线程上解析整段**：一次 delta 就要把几千字重新分词/判表格/找代码块，
-    // 长回复时主线程被它占满，滚动和输入都跟着一顿一顿（用户报「流式输出很不流畅」）。
-    // 这里改成后台解析：新文本到达 → 取消上一次还没算完的 → 算完再替换；
-    // 算的过程中继续显示上一份 blocks（不清空、不闪烁）。
-    val blocks by produceState(
-        initialValue = if (streaming) emptyList() else MarkdownCache.parse(markdown),
-        markdown,
-        streaming,
-    ) {
-        value = if (streaming) {
-            withContext(Dispatchers.Default) { parseMarkdown(markdown) }
-        } else {
-            MarkdownCache.parse(markdown)
+    // 之前是「每 50ms 解析一次整段、解析完再替换配好的 blocks」：解析虽然是后台的，
+    // 但可见文本只在解析完成的那一刻整体替换 —— 表现就是「一个字一个字蹦出来」，
+    // 而不是跟着 token 连续长（用户原话：还是像一个一个打出来，不是流式出来）。
+    // 纯文本渲染每帧只做一次 Text 布局，跟着 token 连续长；收尾时 `streaming` 变 false，
+    // 再一次性换成排好的 Markdown（`**`、表格、代码块都在那一刻生效）。
+    if (streaming) {
+        Column(modifier = modifier) {
+            InlineText(
+                text = markdown,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
         }
+        return
     }
+
+    val blocks = MarkdownCache.parse(markdown)
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
             when (block) {

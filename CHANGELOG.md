@@ -2,7 +2,7 @@
 
 - 过程组里的文字前缀换成图标：思考用「脑」、中间回复用「对话」，`3/7` 这类计数留在图标右边。
 - 工具图标不再自己猜：`data/ToolCategory.kt` 逐条照搬桌面端的 `EXACT_CATEGORY` / `PREFIX_CATEGORY`（`*_inspect` 算检索、`terminal_` 算命令、`subagent_` 算子代理），图标按桌面端 `CATEGORY_ICONS` 一一对到 Material（读文件 `Description`、读图 `Image`、搜索 `Search`、写文件 `NoteAdd`、编辑 `Edit`、命令 `Terminal`、代码 `Code`、联网 `Language`、子代理 `AccountTree`、计划 `Checklist`、提问 `Forum`、其它 `Build`）。
-- **流式更顺**：`ChatViewModel.publishLive()` 把流式快照合并到最多 20 次/秒（原来每个 delta 都赋值一次，长回复时主线程全用来重排版）；`MarkdownText` 的流式解析挪到 `Dispatchers.Default`，算完再替换、算的过程中继续显示上一份（不闪、不清空）。首字计时不受影响（`markTurnFirstContent` 仍逐帧跑）。
+- **流式更顺**：流式期间 `MarkdownText` 只做纯文本布局（**不解析 Markdown**），快照按帧发布（`LIVE_PUBLISH_INTERVAL_MS = 16`）。之前先试过「20 次/秒 + 后台解析」，文字会一小块一小块地跳，看着像「一个字一个字打出来」；现在跟着 token 连续长，收尾那一刻再换成排好版的 Markdown（`**`、表格、代码块在完成时生效）。首字计时不受影响。
 - 组头也不再写「执行过程 🔧13 💭11 💬10」：结束态改成「工具类别图标 ×次数 · 🧠思考数 · 💬中间回复数」，按次数倒序取前三类；运行中保留「正在运行命令 + 参数摘要」（那时候要看的是它在干什么）。
 - 顺手把中间回复那行的 emoji「💬」也换成图标，字号统一 14dp。
 
