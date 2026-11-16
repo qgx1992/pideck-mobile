@@ -149,6 +149,50 @@ class ChatViewModel @Inject constructor(
     private val deviceReady = CompletableDeferred<Unit>()
     private var before: Long? = null
     private var sendJob: Job? = null
+
+    /** 后台暂停：>0 表示「App 在后台，且已经过了 30 秒」。 */
+    private var backgroundAt = 0L
+    private var pauseJob: Job? = null
+
+    /** 界面用：这一轮的实时帧被后台暂停过（回前台会自动补拉 + 续订阅）。 */
+    var streamPaused by mutableStateOf(false)
+        private set
+
+    /**
+     * App 退到后台。超过 [BACKGROUND_PAUSE_MS] 仍挂着这一轮，就停收实时帧：
+     * 后台持续读 SSE 既费电、也常在系统掐断后停在半路（用户回来看到的是「卡住」）。
+     */
+    fun onAppBackground() {
+        backgroundAt = System.currentTimeMillis()
+        pauseJob?.cancel()
+        pauseJob = viewModelScope.launch {
+            delay(BACKGROUND_PAUSE_MS)
+            if (backgroundAt == 0L || !sending) return@launch
+            streamPaused = true
+            watchJob?.cancel()
+            watchJob = null
+            sendJob?.cancel()
+            sendJob = null
+            sending = false
+        }
+    }
+
+    /** App 回到前台：补一次历史（宿主可能已经跑完），再续订阅。 */
+    fun onAppForeground() {
+        if (backgroundAt == 0L) return
+        backgroundAt = 0L
+        pauseJob?.cancel()
+        pauseJob = null
+        if (!streamPaused) return
+        streamPaused = false
+        val seq = ++historyRefreshSeq
+        viewModelScope.launch {
+            refreshHistoryNow(seq)
+            live = null
+            actionNote = "已回到前台，进度已同步"
+        }
+        startWatching()
+    }
     private var merger = ReplyMerger()
 
     /**
@@ -218,7 +262,10 @@ class ChatViewModel @Inject constructor(
          * 曾经是 50ms：文字变成一小块一小块地跳，看着像「一个字一个字打出来」；
          * 现在界面流式期间只做纯文本布局（不解析 Markdown），按帧发布才跟得上 token 的速度。
          */
-        const val LIVE_PUBLISH_INTERVAL_MS = 16L
+        const val LIVE_PUBLISH_INTERVAL_MS = 32L
+
+        /** 退到后台多久之后停收实时帧（宿主那轮继续跑，回前台再补）。 */
+        const val BACKGROUND_PAUSE_MS = 30_000L
 
         /** 并行问询面板那一格的键（EphemeralRuntimes 的槽位名）。 */
         const val SLOT_PARALLEL = "parallel"

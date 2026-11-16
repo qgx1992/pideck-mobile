@@ -1,6 +1,10 @@
 package dev.pideck.nativeapp.ui.chat
 
 import dev.pideck.nativeapp.data.nextReveal
+import dev.pideck.nativeapp.data.shouldReparse
+import dev.pideck.nativeapp.data.repairStreamingMarkdown
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 
 import androidx.compose.runtime.setValue
 
@@ -418,79 +422,7 @@ fun MarkdownText(
         return
     }
 
-    val blocks = MarkdownCache.parse(markdown)
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        blocks.forEach { block ->
-            when (block) {
-                is MdBlock.Paragraph -> InlineText(
-                    text = block.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-
-                is MdBlock.Heading -> InlineText(
-                    text = block.text,
-                    style = when (block.level) {
-                        1 -> MaterialTheme.typography.titleLarge
-                        2 -> MaterialTheme.typography.titleMedium
-                        else -> MaterialTheme.typography.titleSmall
-                    }.copy(fontWeight = FontWeight.SemiBold),
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-
-                is MdBlock.Code -> CodeBlock(lang = block.lang, code = block.code)
-
-                is MdBlock.ListBlock -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    block.items.forEachIndexed { position, item ->
-                        Row {
-                            Text(
-                                text = if (block.ordered) "${position + 1}." else "•",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(end = 6.dp),
-                            )
-                            InlineText(
-                                text = item,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                        }
-                    }
-                }
-
-                is MdBlock.Quote -> Row(verticalAlignment = Alignment.Top) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.outline,
-                        shape = RoundedCornerShape(1.dp),
-                        modifier = Modifier
-                            .padding(end = 10.dp)
-                            .width(3.dp)
-                            .heightIn(min = 18.dp),
-                    ) {}
-                    InlineText(
-                        text = block.text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-
-                is MdBlock.Table -> MdTable(block)
-
-                MdBlock.Rule -> HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant,
-                    thickness = 1.dp,
-                    modifier = Modifier.padding(vertical = 6.dp),
-                )
-            }
-        }
-        if (streaming) {
-            Text(
-                text = "▍",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-    }
+    MarkdownBlocks(MarkdownCache.parse(markdown), modifier = modifier, cursor = streaming)
 }
 
 /**
@@ -588,6 +520,86 @@ private fun TableCell(
     )
 }
 
+@Composable
+internal fun MarkdownBlocks(
+    blocks: List<MdBlock>,
+    modifier: Modifier = Modifier,
+    cursor: Boolean = false,
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        blocks.forEach { block ->
+            when (block) {
+                is MdBlock.Paragraph -> InlineText(
+                    text = block.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+
+                is MdBlock.Heading -> InlineText(
+                    text = block.text,
+                    style = when (block.level) {
+                        1 -> MaterialTheme.typography.titleLarge
+                        2 -> MaterialTheme.typography.titleMedium
+                        else -> MaterialTheme.typography.titleSmall
+                    }.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+
+                is MdBlock.Code -> CodeBlock(lang = block.lang, code = block.code)
+
+                is MdBlock.ListBlock -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    block.items.forEachIndexed { position, item ->
+                        Row {
+                            Text(
+                                text = if (block.ordered) "${position + 1}." else "•",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(end = 6.dp),
+                            )
+                            InlineText(
+                                text = item,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
+
+                is MdBlock.Quote -> Row(verticalAlignment = Alignment.Top) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.outline,
+                        shape = RoundedCornerShape(1.dp),
+                        modifier = Modifier
+                            .padding(end = 10.dp)
+                            .width(3.dp)
+                            .heightIn(min = 18.dp),
+                    ) {}
+                    InlineText(
+                        text = block.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                is MdBlock.Table -> MdTable(block)
+
+                MdBlock.Rule -> HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    thickness = 1.dp,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+            }
+        }
+        if (cursor) {
+            Text(
+                text = "▍",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
 /**
  * 流式正文的逐帧渐显：宿主一条 `text-delta` 只有 3~4 个字（实测 p50 间隔 0ms），
  * 直接整段替换就是「一字一字蹦」。这里按 [nextReveal] 的节奏把已收到的字连续放出来，
@@ -597,6 +609,13 @@ private fun TableCell(
 private fun RevealedText(markdown: String) {
     val latest by rememberUpdatedState(markdown)
     var shown by remember { mutableIntStateOf(0) }
+    var blocks by remember { mutableStateOf<List<MdBlock>?>(null) }
+    var parsedAt by remember { mutableIntStateOf(-1) }
+    var parsedLength by remember { mutableIntStateOf(-1) }
+    var lastParseAt by remember { mutableLongStateOf(0L) }
+    var cursorOn by remember { mutableStateOf(true) }
+    var parsedLengthText by remember { mutableIntStateOf(-1) }
+
     LaunchedEffect(Unit) {
         var last = withFrameNanos { it }
         while (true) {
@@ -604,12 +623,32 @@ private fun RevealedText(markdown: String) {
             val dt = (now - last) / 1_000_000L
             last = now
             val total = latest.length
-            shown = nextReveal(shown, total, dt)
+            val next = nextReveal(shown, total, dt)
+            shown = next
+            cursorOn = next < total
+            val sinceParse = (now - lastParseAt) / 1_000_000L
+            if (shouldReparse(next, parsedAt, sinceParse) && next != parsedLength) {
+                val visible = repairStreamingMarkdown(latest.take(next))
+                if (visible.length != parsedLengthText) {
+                    val parsed = withContext(Dispatchers.Default) { MarkdownCache.parse(visible) }
+                    blocks = parsed
+                    parsedLengthText = visible.length
+                }
+                parsedAt = next
+                parsedLength = next
+                lastParseAt = now
+            }
         }
     }
-    InlineText(
-        text = markdown.take(minOf(shown, markdown.length)),
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurface,
-    )
+
+    val parsed = blocks
+    if (parsed == null) {
+        InlineText(
+            text = markdown.take(minOf(shown, markdown.length)),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    } else {
+        MarkdownBlocks(parsed, cursor = cursorOn)
+    }
 }

@@ -293,6 +293,10 @@ fun ChatScreen(
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onForeground() }
 
+    // 退到后台 30 秒就停收实时帧（省电，也避开系统掐断后半路卡住）；回来补历史再续订阅。
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onAppForeground() }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { viewModel.onAppBackground() }
+
     // 模型表要提前拉：思考档位是从模型的 thinkingLevels 推出来的，
     // 以前只在点开模型选择时才拉，于是「思考」按钮要点一下模型才冒出来。
     // （这一次调用会等 ViewModel 里的设备就位再发请求 —— 以前它比设备读取先跑，

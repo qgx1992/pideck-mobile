@@ -541,6 +541,12 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   ② 改成「20 次/秒 + 后台解析、算完再替换」→ 解析虽是后台的，但可见文本只在解析完成时整体替换，
   表现成「一个字一个字蹦」，用户直接报「不是流式出来的」。要的是跟着 token 连续长，就别让
   解析结果当可见文本的来源。
+- **流式期间也要排版，但只在「攒够量」时解析一次**（`data/StreamingMarkdown.kt`）：
+  `repairStreamingMarkdown()` 补未闭合的 ``` 代码块、奇数个行内反引号 / `**`、缺分隔行的表格，
+  让 `MarkdownCache` 能认出结构；`shouldReparse()` 控制节奏（新增 ≥80 字或距上次 ≥400ms），
+  解析在 `Dispatchers.Default`，解析结果缓存在 `RevealedText` 里按帧显示 —— 每帧都解析会把主线程挤爆。
+  `LIVE_PUBLISH_INTERVAL_MS = 32`（16ms 时重组次数翻倍，肉眼无收益，平滑交给渐显层）。
+  `apk/index.html` 的下载页那段 `meta` 不要用全局 replace（曾把它上面的 DSH 视频哈希一起改坏）。
 - **流式正文要自己渐显，别指望宿主给足粒度**（`data/StreamReveal.kt` 的 `nextReveal` + `Markdown.kt`
   的 `RevealedText`）：实测宿主一条 `text-delta` 平均 3.57 字、p50 间隔 **0ms**、p90 87ms（一阵一阵到），
   直接铺屏必然像打字机。`nextReveal` 按 60 字/秒匀速放、积压 >160 字快放到 900 字/秒、每帧至少 +1
@@ -663,6 +669,9 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   于是空转不结束、整场测试挂到 JVM 被杀（踩过一次，看着像「Gradle daemon 崩了」）。
   所以 `FakePideckApi.stateEvents` 返回的是一条**永不结束**的 `MutableSharedFlow`；
   用 `advanceTimeBy(1_000)` + `runCurrent()` 代替 `advanceUntilIdle()`。
+- **退后台 30 秒要停收实时帧**（`ChatViewModel.onAppBackground/onAppForeground`，由 `ChatScreen` 的
+  `LifecycleEventEffect(ON_STOP/ON_START)` 驱动）：后台持续读 SSE 费电，系统掐断后界面会停在半路。
+  回来先 `refreshHistoryNow()` 补快照再 `startWatching()` 续订阅；宿主那轮没停，别去 `runtime/stop`。
 - **看护（RunWatchService）的失败轮次不能算空闲（0.5.56）**：拉 `/api/sessions/runtimes` 失败时置 `pollFailed`，
   `idlePolls` 不动（否则连续 3 轮就 `stopSelf()`，正在跑的那一轮收不到完成通知），
   并且「回复完成」的 `failed` 取自 `lastStateByDevice` 里该会话的 `status == "error"`，别写死 false。
