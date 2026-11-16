@@ -534,11 +534,13 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   别再按 `name.contains("bash")` 之类自己猜分类 —— 两边分叉会让同一回合的组头与图标说法不一致；
   新增工具名先看桌面端表里有没有，没有就归 `tools`（`ToolCategoryTest` 守着这 30 多条对照）。
 
-- **流式渲染别在主线程整段重解析**（`ui/chat/Markdown.kt` 的 `MarkdownText` + `ui/chat/ChatViewModel.kt`
-  的 `publishLive`）：流式快照最多 20 次/秒落到 Compose 状态（`LIVE_PUBLISH_INTERVAL_MS = 50L`，
-  收尾/清空立即生效），Markdown 解析走 `produceState` + `Dispatchers.Default`，新文本到达就取消上一次
-  未完成的解析、算完再替换（期间继续显示上一份，不清空不闪烁）。以前每个 delta 都赋值 + 主线程
-  `parseMarkdown` 整段，长回复会直接卡死滚动。
+- **流式期间不解析 Markdown**（`ui/chat/Markdown.kt` 的 `MarkdownText` + `ui/chat/ChatViewModel.kt`
+  的 `publishLive`）：`streaming = true` 时只画纯文本（`InlineText`），快照按帧发布
+  （`LIVE_PUBLISH_INTERVAL_MS = 16L`），收尾变 false 才走 `MarkdownCache.parse` 换成排好版。
+  踩过两次：① 每个 delta 都赋值 + 主线程 `parseMarkdown` 整段 → 长回复卡死滚动；
+  ② 改成「20 次/秒 + 后台解析、算完再替换」→ 解析虽是后台的，但可见文本只在解析完成时整体替换，
+  表现成「一个字一个字蹦」，用户直接报「不是流式出来的」。要的是跟着 token 连续长，就别让
+  解析结果当可见文本的来源。
 
 - **过程组有三个不能改的约定**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatScreen.kt` 的
   `ProcessGroupBlock`，0.5.45 对齐桌面端）：
