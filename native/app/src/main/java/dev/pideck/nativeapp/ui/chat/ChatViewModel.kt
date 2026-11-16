@@ -169,6 +169,11 @@ class ChatViewModel @Inject constructor(
         private set
 
     var live by mutableStateOf<ReplySnapshot?>(null)
+
+    // 流式快照最多 20 次/秒落到界面状态上：每个 delta 都赋值＝每个 delta 都让整段 Markdown
+    // 重新布局，长回复时主线程根本排不上队（用户报「流式输出很不流畅」）。
+    // 合并不会丢内容：merger 里是累计文本，下一次发布带的就是完整的一份。
+    private var livePublishedAt = 0L
         private set
 
     var loading by mutableStateOf(true)
@@ -207,6 +212,9 @@ class ChatViewModel @Inject constructor(
     private var liveStatsJob: Job? = null
 
     private companion object {
+        /** 流式快照的最小发布间隔：20 次/秒已经比肉眼看字快，再多只是白烧主线程。 */
+        const val LIVE_PUBLISH_INTERVAL_MS = 50L
+
         /** 并行问询面板那一格的键（EphemeralRuntimes 的槽位名）。 */
         const val SLOT_PARALLEL = "parallel"
 
@@ -1641,7 +1649,7 @@ class ChatViewModel @Inject constructor(
                             onFrame()
                             if (sending) return@collect
                             val snapshot = applyWatchFrame(frame.data) ?: return@collect
-                            live = snapshot
+                            publishLive(snapshot)
                             if (snapshot.finished) {
                                 snapshot.errorText?.takeIf { it.isNotBlank() }?.let {
                                     SessionActivity.markTurnResult(deviceId, sessionId, failed = true)
@@ -1808,6 +1816,18 @@ class ChatViewModel @Inject constructor(
      * 首个增量到达。正文与「任意增量」分开记（对应桌面 `firstTextAt` 与 `firstDeltaAt`）：
      * 首字用正文（思考阶段没有字可读），生成速度用任意增量（思考也算在吐 token）。
      */
+    /** 把流式快照交给界面（最多 [LIVE_PUBLISH_INTERVAL_MS] 一次；收尾 / 清空立刻生效）。 */
+    private fun publishLive(snapshot: ReplySnapshot?) {
+        if (snapshot == null) {
+            live = null
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (!snapshot.finished && now - livePublishedAt < LIVE_PUBLISH_INTERVAL_MS) return
+        livePublishedAt = now
+        live = snapshot
+    }
+
     private fun markTurnFirstContent(snapshot: ReplySnapshot) {
         if (turnStartedAt <= 0L) return
         val now = System.currentTimeMillis()
@@ -2169,7 +2189,7 @@ class ChatViewModel @Inject constructor(
                                     if (parsed != null) merger.applyFrame(parsed) else merger.snapshot()
                                 }
                             }
-                            live = snapshot
+                            publishLive(snapshot)
                             if (snapshot != null) markTurnFirstContent(snapshot)
                             if (snapshot?.errorText != null) error = snapshot.errorText
                         }

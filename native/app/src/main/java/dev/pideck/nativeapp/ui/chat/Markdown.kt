@@ -1,5 +1,13 @@
 package dev.pideck.nativeapp.ui.chat
 
+import kotlinx.coroutines.withContext
+
+import kotlinx.coroutines.Dispatchers
+
+import androidx.compose.runtime.getValue
+
+import androidx.compose.runtime.produceState
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -386,8 +394,21 @@ fun MarkdownText(
     streaming: Boolean = false,
 ) {
     // 流式那一份每帧都在变，进缓存只会把缓存挤空；收尾后的长消息则反复出现在滚动里，值得留住。
-    val blocks = remember(markdown, streaming) {
-        if (streaming) parseMarkdown(markdown) else MarkdownCache.parse(markdown)
+    //
+    // 但**流式不能在主线程上解析整段**：一次 delta 就要把几千字重新分词/判表格/找代码块，
+    // 长回复时主线程被它占满，滚动和输入都跟着一顿一顿（用户报「流式输出很不流畅」）。
+    // 这里改成后台解析：新文本到达 → 取消上一次还没算完的 → 算完再替换；
+    // 算的过程中继续显示上一份 blocks（不清空、不闪烁）。
+    val blocks by produceState(
+        initialValue = if (streaming) emptyList() else MarkdownCache.parse(markdown),
+        markdown,
+        streaming,
+    ) {
+        value = if (streaming) {
+            withContext(Dispatchers.Default) { parseMarkdown(markdown) }
+        } else {
+            MarkdownCache.parse(markdown)
+        }
     }
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
