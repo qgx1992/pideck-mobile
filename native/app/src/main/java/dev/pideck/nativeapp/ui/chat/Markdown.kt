@@ -1,10 +1,9 @@
 package dev.pideck.nativeapp.ui.chat
 
 import dev.pideck.nativeapp.data.nextReveal
-import dev.pideck.nativeapp.data.shouldReparse
 import dev.pideck.nativeapp.data.repairStreamingMarkdown
+import dev.pideck.nativeapp.data.stablePrefixLength
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableLongStateOf
 
 import androidx.compose.runtime.setValue
 
@@ -609,12 +608,8 @@ internal fun MarkdownBlocks(
 private fun RevealedText(markdown: String) {
     val latest by rememberUpdatedState(markdown)
     var shown by remember { mutableIntStateOf(0) }
-    var blocks by remember { mutableStateOf<List<MdBlock>?>(null) }
-    var parsedAt by remember { mutableIntStateOf(-1) }
-    var parsedLength by remember { mutableIntStateOf(-1) }
-    var lastParseAt by remember { mutableLongStateOf(0L) }
-    var cursorOn by remember { mutableStateOf(true) }
-    var parsedLengthText by remember { mutableIntStateOf(-1) }
+    var headBlocks by remember { mutableStateOf<List<MdBlock>?>(null) }
+    var parsedHead by remember { mutableIntStateOf(-1) }
 
     LaunchedEffect(Unit) {
         var last = withFrameNanos { it }
@@ -622,33 +617,40 @@ private fun RevealedText(markdown: String) {
             val now = withFrameNanos { it }
             val dt = (now - last) / 1_000_000L
             last = now
-            val total = latest.length
-            val next = nextReveal(shown, total, dt)
-            shown = next
-            cursorOn = next < total
-            val sinceParse = (now - lastParseAt) / 1_000_000L
-            if (shouldReparse(next, parsedAt, sinceParse) && next != parsedLength) {
-                val visible = repairStreamingMarkdown(latest.take(next))
-                if (visible.length != parsedLengthText) {
-                    val parsed = withContext(Dispatchers.Default) { MarkdownCache.parse(visible) }
-                    blocks = parsed
-                    parsedLengthText = visible.length
-                }
-                parsedAt = next
-                parsedLength = next
-                lastParseAt = now
-            }
+            shown = nextReveal(shown, latest.length, dt)
         }
     }
 
-    val parsed = blocks
-    if (parsed == null) {
-        InlineText(
-            text = markdown.take(minOf(shown, markdown.length)),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-    } else {
-        MarkdownBlocks(parsed, cursor = cursorOn)
+    val visible = markdown.take(minOf(shown, markdown.length))
+    // 只有「已经写完的段落」交给解析器；最后一段还在长，就按纯文本逐帧画。
+    // 之前是整段一起解析、解析完才替换，于是文字只在每次解析时前进一次 —— 看起来一大块一大块地出现。
+    val stableEnd = stablePrefixLength(visible)
+    val head = visible.substring(0, stableEnd)
+    val tail = visible.substring(stableEnd)
+    val headLength = head.length
+
+    LaunchedEffect(headLength) {
+        if (headLength <= 0) {
+            headBlocks = null
+            parsedHead = -1
+            return@LaunchedEffect
+        }
+        if (headLength == parsedHead) return@LaunchedEffect
+        val parsed = withContext(Dispatchers.Default) { MarkdownCache.parse(repairStreamingMarkdown(head)) }
+        headBlocks = parsed
+        parsedHead = headLength
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        headBlocks?.let { MarkdownBlocks(it) }
+        val pending = shown < markdown.length
+        val tailText = if (pending) tail + "▍" else tail
+        if (tailText.isNotEmpty()) {
+            InlineText(
+                text = tailText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
     }
 }

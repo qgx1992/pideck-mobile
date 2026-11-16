@@ -26,6 +26,23 @@ fun repairStreamingMarkdown(text: String): String {
 }
 
 /**
+ * 「已经写完的段落」到哪里结束（返回下标，[0] 表示还没有完整段落）。
+ *
+ * 流式渲染只把这段交给解析器，后面那一段（正在长的那段）按纯文本逐帧画。
+ * 之前是整段一起解析、解析完才替换 —— 文字只在每次解析时前进一次，看起来「一大块一大块」地出现。
+ *
+ * 未闭合的代码块不切：切在围栏里会把半截代码当普通段落排一遍，反而跳。
+ */
+fun stablePrefixLength(text: String): Int {
+    if (text.isEmpty()) return 0
+    val openFence = countOf(text, "```") % 2 == 1
+    val limit = if (openFence) text.lastIndexOf("```").coerceAtLeast(0) else text.length
+    if (limit <= 0) return 0
+    val cut = text.lastIndexOf(NL + NL, limit - 1)
+    return if (cut < 0) 0 else cut + 2
+}
+
+/**
  * 要不要重新解析一次（解析放在后台线程，每帧都做会把主线程挤爆）。
  *
  * @param shown 当前已经露出来的字数

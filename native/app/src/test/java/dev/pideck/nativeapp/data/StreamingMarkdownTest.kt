@@ -70,4 +70,21 @@ class StreamingMarkdownTest {
         // 第一次解析
         assertTrue(shouldReparse(shown = 1, parsedAt = -1, sinceLastParseMs = 0))
     }
+
+    @Test
+    fun `no blank line yet means nothing is stable`() {
+        assertEquals(0, stablePrefixLength("正在写的这一段落"))
+    }
+
+    @Test
+    fun `completed paragraph is stable`() {
+        val text = "第一段写完了\n\n第二段还在长"
+        assertEquals("第一段写完了\n\n".length, stablePrefixLength(text))
+    }
+
+    @Test
+    fun `unclosed fence is not split`() {
+        val text = "说明\n\n```kotlin\nval a = 1"
+        assertEquals("说明\n\n".length, stablePrefixLength(text))
+    }
 }
