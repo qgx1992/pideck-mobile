@@ -582,6 +582,7 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   读超时 `SHORT_READ_TIMEOUT_SECONDS = 45`，**所有一次性请求（`state` / `messagesPage` / `postJson` / `getText` /
   `rawGet` / `createSession`）都必须走它**。以前全部走无限超时的那个：撞上半开连接时一次 GET 就永久挂着，
   表现是「首页一直转圈」「轮询静默停摆」。守门测试 `data/ApiClientTimeoutTest.kt`。
+- **静默看护不能一刀切**（0.5.64）：`ChatViewModel` 的 guard 超时后先 `api.runtimes` 查这一轮还在不在跑，在跑就重置计时继续等（工具/长命令执行期间 SSE 上确实没有帧）；问不到运行态给两次机会，别把「问不到」当「跑完了」。
 - **一轮发送的三个守卫**（0.5.41，`ui/chat/ChatViewModel.kt` 的 `send()`）：
   ① 空闲看护 —— collect 包在 `coroutineScope { launch(stream) + launch(guard) }` 里，guard 每
   `STREAM_IDLE_CHECK_MS = 15s` 量一次「距上一帧多久」，超过 `STREAM_IDLE_TIMEOUT_MS = 3min` 就

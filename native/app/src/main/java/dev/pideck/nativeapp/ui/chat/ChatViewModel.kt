@@ -2151,6 +2151,9 @@ class ChatViewModel @Inject constructor(
             try {
                 // 请求一 collect 就立刻发出；先打点，首字从这里起算（≈ 宿主的 startedAt）。
                 markTurnRequestSent()
+                // 看护要用它们查运行态（send 期间设备/令牌不会变，先抓成局部量）
+                val d = device
+                val t = token
                 lastStreamFrameAt = System.currentTimeMillis()
                 streamTimedOut = false
                 coroutineScope {
@@ -2174,15 +2177,42 @@ class ChatViewModel @Inject constructor(
                     // 看护：长时间一个帧都没有就收摊。只 cancel 这一条收集协程，
                     // 不 cancel 外层 try/finally —— 收尾（补拉历史、结算统计）必须照常跑。
                     val guard = launch {
+                        var reassured = false
+                        var unknownChecks = 0
                         while (isActive) {
                             delay(STREAM_IDLE_CHECK_MS)
-                            if (System.currentTimeMillis() - lastStreamFrameAt > STREAM_IDLE_TIMEOUT_MS) {
-                                streamTimedOut = true
-                                error = "连接停在了半路：宿主 ${STREAM_IDLE_TIMEOUT_MS / 60_000} 分钟没有回应，" +
-                                    "已停止接收这一轮"
-                                stream.cancel()
-                                break
+                            if (System.currentTimeMillis() - lastStreamFrameAt <= STREAM_IDLE_TIMEOUT_MS) continue
+                            // 先别急着收摊：宿主的工具/长命令执行期间 SSE 上确实一个帧都没有
+                            //（模型在思考、命令在跑的时候宿主不产出增量），3 分钟一刀切会把正常长任务砍掉。
+                            // 问一次运行态：那一轮还在跑就继续等，并把计时重置，下一轮再等这么久。
+                            val running = if (d != null && t != null) {
+                                attempt {
+                                    api.runtimes(d, t).any { it.sessionId == sessionId && it.isRunning }
+                                }.getOrNull()
+                            } else {
+                                false
                             }
+                            if (running == null) {
+                                // 问不到（宿主忙/网络抖）：再给两次机会，别把「问不到」当成「跑完了」
+                                unknownChecks += 1
+                                lastStreamFrameAt = System.currentTimeMillis()
+                                if (unknownChecks <= 2) continue
+                            } else {
+                                unknownChecks = 0
+                                if (running) {
+                                    lastStreamFrameAt = System.currentTimeMillis()
+                                    if (!reassured) {
+                                        reassured = true
+                                        actionNote = "宿主还在跑这一步（长时间没有输出是正常的），继续等"
+                                    }
+                                    continue
+                                }
+                            }
+                            streamTimedOut = true
+                            error = "连接停在了半路：宿主 ${STREAM_IDLE_TIMEOUT_MS / 60_000} 分钟没有回应，" +
+                                "这一轮在宿主上也已经结束，已停止接收"
+                            stream.cancel()
+                            break
                         }
                     }
                     stream.join()
