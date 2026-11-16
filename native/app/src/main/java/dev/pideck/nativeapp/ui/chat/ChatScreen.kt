@@ -1362,6 +1362,90 @@ private fun InterimLine(text: String, counter: String?, onOpen: () -> Unit) {
     }
 }
 
+/**
+ * 组头统计（结束态）：图标 + 次数，口径与桌面端 `ProcessGroupStep` 一致 ——
+ * 工具按类别归并（最多三类），思考一次一颗「脑」，中间回复一段一次「对话」。
+ *
+ * 以前这里是 `ProcessActivity.summary` 拼出来的「执行命令 ×6 · 思考 ×7」文字 + 🔧💭💬 emoji，
+ * 图标一套走下来（思考/中间回复/工具）就它还在用 emoji。
+ */
+@Composable
+private fun ProcessHeaderStats(toolNames: List<String>, thinkingCount: Int, interimCount: Int) {
+    val kinds = toolNames
+        .groupingBy { ToolCategoryMap.of(it) }
+        .eachCount()
+        .entries
+        .sortedByDescending { it.value }
+        .take(3)
+    val any = kinds.isNotEmpty() || thinkingCount > 0 || interimCount > 0
+    if (!any) {
+        Text(
+            text = "过程",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    var first = true
+    kinds.forEach { entry ->
+        if (!first) HeaderDot()
+        first = false
+        Icon(
+            imageVector = categoryIcon(entry.key),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(13.dp),
+        )
+        Spacer(Modifier.size(3.dp))
+        Text(
+            text = "${entry.value}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (thinkingCount > 0) {
+        if (!first) HeaderDot()
+        first = false
+        Icon(
+            imageVector = Icons.Default.Psychology,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(13.dp),
+        )
+        Spacer(Modifier.size(3.dp))
+        Text(
+            text = "$thinkingCount",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (interimCount > 0) {
+        if (!first) HeaderDot()
+        Icon(
+            imageVector = Icons.Default.Forum,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(13.dp),
+        )
+        Spacer(Modifier.size(3.dp))
+        Text(
+            text = "$interimCount",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun HeaderDot() {
+    Text(
+        text = "·",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.padding(horizontal = 5.dp),
+    )
+}
+
 @Composable
 private fun ProcessGroupBlock(
     row: ChatRow.Process,
@@ -1429,15 +1513,29 @@ private fun ProcessGroupBlock(
                 tint = MaterialTheme.colorScheme.outline,
             )
             Spacer(Modifier.size(4.dp))
-            Text(
-                text = row.summary,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                // 摘要里已经有各类次数，不再另起一段「· 83 次调用」（那截会掉到第二行）
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = runningDetail != null),
-            )
+            if (row.streaming) {
+                // 运行中要的是「正在干什么」，文字比图标有用（最后一条工具的类别 + 参数摘要）
+                Text(
+                    text = row.summary,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = runningDetail != null),
+                )
+            } else {
+                // 结束态与桌面端一致：当前最主要的那个类别 → 图标；各类次数跟在图标后面
+                Row(
+                    modifier = Modifier.weight(1f, fill = runningDetail != null),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ProcessHeaderStats(
+                        toolNames = row.toolNames,
+                        thinkingCount = row.thinkingCount,
+                        interimCount = row.interimCount,
+                    )
+                }
+            }
             if (runningDetail != null) {
                 Text(
                     text = " · ",
@@ -1676,7 +1774,9 @@ private fun ThinkingCard(
  * | questions | MessageCircleQuestionMark | Forum |
  * | tools | Wrench | Build |
  */
-private fun toolIcon(name: String): ImageVector = when (ToolCategoryMap.of(name)) {
+private fun toolIcon(name: String): ImageVector = categoryIcon(ToolCategoryMap.of(name))
+
+private fun categoryIcon(category: ToolCategory): ImageVector = when (category) {
     ToolCategory.Read -> Icons.Default.Description
     ToolCategory.ReadImage -> Icons.Default.Image
     ToolCategory.Search -> Icons.Default.Search
