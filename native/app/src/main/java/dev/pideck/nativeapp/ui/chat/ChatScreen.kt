@@ -16,6 +16,10 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.FileDownload
@@ -156,6 +160,8 @@ import dev.pideck.nativeapp.data.formatTurnStats
 import dev.pideck.nativeapp.data.TimelineItem
 import dev.pideck.nativeapp.data.splitGoalBanner
 import dev.pideck.nativeapp.data.Prefs
+import dev.pideck.nativeapp.data.ToolCategory
+import dev.pideck.nativeapp.data.ToolCategoryMap
 import dev.pideck.nativeapp.data.ProcessActivity
 import dev.pideck.nativeapp.data.visibleMemberCount
 import dev.pideck.nativeapp.data.ToolView
@@ -1652,25 +1658,37 @@ private fun ThinkingCard(
  * 同样是「不再就地展开」：命令输出动辄几百行，塞在气泡里既挤又没法滚动，
  * 浮窗里能滚、能选、能一次复制全文。
  */
-/** 工具图标：读 / 写 / 跑命令 / 搜索 / 联网 / 子代理各一个，认不出就用扳手。 */
-private fun toolIcon(name: String): ImageVector {
-    val n = name.lowercase()
-    return when {
-        // 用户要的「> 提示符」：chevron 就是终端里那个提示符的形状，比 Terminal 的小窗更像命令行
-        n.contains("bash") || n.contains("shell") || n.contains("terminal") || n.contains("exec") ->
-            Icons.Default.ChevronRight
-        n.contains("edit") || n.contains("write") || n.contains("patch") || n.contains("rename") ->
-            Icons.Default.Edit
-        n.contains("read") || n.contains("view") || n.contains("cat") || n.contains("file") ->
-            Icons.Default.Description
-        n.contains("search") || n.contains("grep") || n.contains("find") || n.contains("glob") ->
-            Icons.Default.Search
-        n.contains("web") || n.contains("fetch") || n.contains("http") || n.contains("browser") ->
-            Icons.Default.Language
-        n.contains("delegate") || n.contains("subagent") || n.contains("task") ->
-            Icons.Default.AccountTree
-        else -> Icons.Default.Build
-    }
+/**
+ * 工具图标：**逐条照搬桌面端的 `CATEGORY_ICONS`**（lucide → Material 最接近的那颗）。
+ *
+ * | 桌面端 | lucide | 这里 |
+ * |---|---|---|
+ * | read | FileText | Description |
+ * | readImage | Image | Image |
+ * | search | Search | Search |
+ * | write | FilePlus | NoteAdd |
+ * | edit | SquarePen | Edit |
+ * | commands | Terminal | Terminal |
+ * | code | SquareCode | Code |
+ * | webSearch / webFetch | Globe | Language |
+ * | subagents | Network | AccountTree |
+ * | plan | ListChecks | Checklist |
+ * | questions | MessageCircleQuestionMark | Forum |
+ * | tools | Wrench | Build |
+ */
+private fun toolIcon(name: String): ImageVector = when (ToolCategoryMap.of(name)) {
+    ToolCategory.Read -> Icons.Default.Description
+    ToolCategory.ReadImage -> Icons.Default.Image
+    ToolCategory.Search -> Icons.Default.Search
+    ToolCategory.Write -> Icons.Default.NoteAdd
+    ToolCategory.Edit -> Icons.Default.Edit
+    ToolCategory.Commands -> Icons.Default.Terminal
+    ToolCategory.Code -> Icons.Default.Code
+    ToolCategory.WebSearch, ToolCategory.WebFetch -> Icons.Default.Language
+    ToolCategory.Subagents -> Icons.Default.AccountTree
+    ToolCategory.Plan -> Icons.Default.Checklist
+    ToolCategory.Questions -> Icons.Default.Forum
+    ToolCategory.Tools -> Icons.Default.Build
 }
 
 @Composable
