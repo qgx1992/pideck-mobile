@@ -1,6 +1,7 @@
 ## 0.5.65 — 2026-11-16
 
-- 过程组里的文字前缀换成图标：思考用「脑」、中间回复用「对话」、工具按类型（跑命令 / 编辑 / 读文件 / 搜索 / 联网 / 子代理 / 其它）各一个图标；`3/7` 这类计数留在图标右边，`1 字`、展开按钮不变。
+- 过程组里的文字前缀换成图标：思考用「脑」、中间回复用「对话」，`3/7` 这类计数留在图标右边。
+- 工具图标不再自己猜：`data/ToolCategory.kt` 逐条照搬桌面端的 `EXACT_CATEGORY` / `PREFIX_CATEGORY`（`*_inspect` 算检索、`terminal_` 算命令、`subagent_` 算子代理），图标按桌面端 `CATEGORY_ICONS` 一一对到 Material（读文件 `Description`、读图 `Image`、搜索 `Search`、写文件 `NoteAdd`、编辑 `Edit`、命令 `Terminal`、代码 `Code`、联网 `Language`、子代理 `AccountTree`、计划 `Checklist`、提问 `Forum`、其它 `Build`）。
 - 顺手把中间回复那行的 emoji「💬」也换成图标，字号统一 14dp。
 
 ## 0.5.64 — 2026-11-16

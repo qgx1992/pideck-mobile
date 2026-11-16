@@ -523,6 +523,12 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
     用量额度（`/api/usage/:provider`）默认关闭，仍未做。
 
 - **中间回复按成对 `<thinking>` 边界切**（`data/Timeline.kt` 的 `splitBodySegments`）：Web 端一轮里会有好几段正文（组头 💬N），手机以前当成一大段。最后一段才是最终回答，前面几段进 `AssistantMessage.interim`、由 `ProcessGroupBlock` 渲染成 💬 行。**别用 `Regex.split` 配捕获组来切** —— Kotlin 走 Java 的 `Pattern.split`，捕获组不会出现在结果里，会整段错位（曾把「只有思考」的条目直接吞掉）；用 `findAll` + 自己按 `range` 切片。
+- **工具图标与归类只认桌面端那张表**（`native/app/src/main/java/dev/pideck/nativeapp/data/ToolCategory.kt`）：
+  桌面端 `mermaid-GHXKKRXX-DTtnNymj.js` 里的 `EXACT_CATEGORY` / `PREFIX_CATEGORY` / `CATEGORY_ICONS` 是唯一真源，
+  手机端逐条对照（`*_inspect`→检索、`terminal_`→命令、`subagent_`→子代理，其余落 `tools`）。
+  别再按 `name.contains("bash")` 之类自己猜分类 —— 两边分叉会让同一回合的组头与图标说法不一致；
+  新增工具名先看桌面端表里有没有，没有就归 `tools`（`ToolCategoryTest` 守着这 30 多条对照）。
+
 - **过程组有三个不能改的约定**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatScreen.kt` 的
   `ProcessGroupBlock`，0.5.45 对齐桌面端）：
   1. **手动展开优先**：用 `manualSet` / `manualOpen` 两个布尔，`open = if (manualSet) manualOpen else autoOpen`。
