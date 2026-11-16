@@ -48,6 +48,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -311,7 +315,19 @@ fun parseMarkdown(source: String): List<MdBlock> {
 }
 
 /** 行内：`**粗**`、`*斜*`、`` `码` ``。算不出来的原样保留。 */
-fun inlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
+/** 行内链接的颜色（正文里跟着主题走太重，这里固定品牌蓝，与行内代码底色同一套）。 */
+private val LinkColor = androidx.compose.ui.graphics.Color(0xFF3C8DFF)
+
+/**
+ * 行内 markdown。
+ *
+ * 链接现在真的能点：`[文字](https://…)`、`<https://…>`、裸 `https://…` 走系统浏览器；
+ * 其它协议（`file://…`、`D:/…`、相对路径）没法在手机上打开，点一下是把路径**复制**走。
+ */
+fun inlineMarkdown(
+    text: String,
+    onCopyLink: ((String) -> Unit)? = null,
+): AnnotatedString = buildAnnotatedString {
     var index = 0
     while (index < text.length) {
         val char = text[index]
@@ -355,10 +371,73 @@ fun inlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
                 }
             }
 
+            char == '[' -> {
+                val close = text.indexOf(']', index + 1)
+                val open = if (close > index && close + 1 < text.length && text[close + 1] == '(') {
+                    text.indexOf(')', close + 2)
+                } else {
+                    -1
+                }
+                if (close > index && open > close) {
+                    val label = text.substring(index + 1, close).ifBlank { "链接" }
+                    val target = text.substring(close + 2, open).trim().substringBefore(' ')
+                    appendLink(target, label, onCopyLink)
+                    index = open + 1
+                } else {
+                    append(char)
+                    index += 1
+                }
+            }
+
+            char == '<' -> {
+                val end = text.indexOf('>', index + 1)
+                val inner = if (end > index) text.substring(index + 1, end).trim() else ""
+                if (inner.startsWith("http://") || inner.startsWith("https://")) {
+                    appendLink(inner, inner, onCopyLink)
+                    index = end + 1
+                } else {
+                    append(char)
+                    index += 1
+                }
+            }
+
+            text.startsWith("http://", index) || text.startsWith("https://", index) -> {
+                var end = index
+                while (end < text.length && !text[end].isWhitespace() && text[end] !in "，。；：！？、）」』】") end += 1
+                val url = text.substring(index, end).trimEnd('.', ',', ';', ')')
+                appendLink(url, url, onCopyLink)
+                index += url.length
+            }
+
             else -> {
                 append(char)
                 index += 1
             }
+        }
+    }
+}
+
+/**
+ * http(s) 交给系统浏览器（`LinkAnnotation.Url` 由 Text 自己处理点击）；
+ * 其它协议手机上打不开 —— 做成可点，点了把目标复制到剪贴板。
+ */
+private fun AnnotatedString.Builder.appendLink(
+    target: String,
+    label: String,
+    onCopyLink: ((String) -> Unit)?,
+) {
+    val style = SpanStyle(color = LinkColor, textDecoration = TextDecoration.Underline)
+    if (target.startsWith("http://") || target.startsWith("https://") || target.startsWith("mailto:")) {
+        withLink(LinkAnnotation.Url(target)) {
+            withStyle(style) { append(label) }
+        }
+    } else {
+        withLink(
+            LinkAnnotation.Clickable(tag = target) {
+                onCopyLink?.invoke(target)
+            },
+        ) {
+            withStyle(style) { append(label) }
         }
     }
 }
@@ -397,7 +476,10 @@ private fun InlineText(
     color: Color,
     modifier: Modifier = Modifier,
 ) {
-    val annotated = remember(text) { inlineMarkdown(text) }
+    val clipboard = LocalClipboardManager.current
+    val annotated = remember(text) {
+        inlineMarkdown(text, onCopyLink = { target -> clipboard.setText(AnnotatedString(target)) })
+    }
     Text(text = annotated, style = style, color = color, modifier = modifier)
 }
 
