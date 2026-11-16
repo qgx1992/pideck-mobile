@@ -15,6 +15,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.FileDownload
@@ -1655,8 +1656,9 @@ private fun ThinkingCard(
 private fun toolIcon(name: String): ImageVector {
     val n = name.lowercase()
     return when {
+        // 用户要的「> 提示符」：chevron 就是终端里那个提示符的形状，比 Terminal 的小窗更像命令行
         n.contains("bash") || n.contains("shell") || n.contains("terminal") || n.contains("exec") ->
-            Icons.Default.Terminal
+            Icons.Default.ChevronRight
         n.contains("edit") || n.contains("write") || n.contains("patch") || n.contains("rename") ->
             Icons.Default.Edit
         n.contains("read") || n.contains("view") || n.contains("cat") || n.contains("file") ->
