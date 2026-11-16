@@ -541,6 +541,10 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   ② 改成「20 次/秒 + 后台解析、算完再替换」→ 解析虽是后台的，但可见文本只在解析完成时整体替换，
   表现成「一个字一个字蹦」，用户直接报「不是流式出来的」。要的是跟着 token 连续长，就别让
   解析结果当可见文本的来源。
+- **流式正文要自己渐显，别指望宿主给足粒度**（`data/StreamReveal.kt` 的 `nextReveal` + `Markdown.kt`
+  的 `RevealedText`）：实测宿主一条 `text-delta` 平均 3.57 字、p50 间隔 **0ms**、p90 87ms（一阵一阵到），
+  直接铺屏必然像打字机。`nextReveal` 按 60 字/秒匀速放、积压 >160 字快放到 900 字/秒、每帧至少 +1
+  字，永不越过已收到的长度；`RevealedText` 用 `withFrameNanos` 逐帧推进、`rememberUpdatedState` 跟最新文本。
 
 - **过程组有三个不能改的约定**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatScreen.kt` 的
   `ProcessGroupBlock`，0.5.45 对齐桌面端）：
