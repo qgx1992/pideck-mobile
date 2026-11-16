@@ -534,6 +534,12 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   别再按 `name.contains("bash")` 之类自己猜分类 —— 两边分叉会让同一回合的组头与图标说法不一致；
   新增工具名先看桌面端表里有没有，没有就归 `tools`（`ToolCategoryTest` 守着这 30 多条对照）。
 
+- **流式渲染别在主线程整段重解析**（`ui/chat/Markdown.kt` 的 `MarkdownText` + `ui/chat/ChatViewModel.kt`
+  的 `publishLive`）：流式快照最多 20 次/秒落到 Compose 状态（`LIVE_PUBLISH_INTERVAL_MS = 50L`，
+  收尾/清空立即生效），Markdown 解析走 `produceState` + `Dispatchers.Default`，新文本到达就取消上一次
+  未完成的解析、算完再替换（期间继续显示上一份，不清空不闪烁）。以前每个 delta 都赋值 + 主线程
+  `parseMarkdown` 整段，长回复会直接卡死滚动。
+
 - **过程组有三个不能改的约定**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatScreen.kt` 的
   `ProcessGroupBlock`，0.5.45 对齐桌面端）：
   1. **手动展开优先**：用 `manualSet` / `manualOpen` 两个布尔，`open = if (manualSet) manualOpen else autoOpen`。
