@@ -56,13 +56,15 @@ versionCode = major*1000 + minor*100 + patch      # 0.5.28 → 528，0.2.0 → 2
 
 两者独立，用户会明确指定走哪条：
 
-1. **本地包（局域网测试）**：`cd native && ./gradlew --offline -q :app:testDebugUnitTest`
+1. **本地包（局域网测试，默认就做）**：`cd native && ./gradlew --offline -q :app:testDebugUnitTest`
    → `./gradlew :app:assembleRelease`（产物 `native/app/build/outputs/apk/release/app-release.apk`）
    → 拷成 `apk/PiDeck-native-<版本>-release.apk` → 重写 `apk/SHA256SUMS.txt` → 改 `apk/index.html`
-   → 校验 8080 上的页面与包 sha256。
+   → 提交并 push master。**「校验 / 验收」的结论留给用户**：自己只核到「页面 200、下载哈希与
+   `SHA256SUMS.txt` 一致」，不要替用户宣布「已验证」。
    `apk/` 在 `.gitignore` 里，目录里只保留最新一个 PiDeck 包（旧包发布后删掉并同步 `SHA256SUMS.txt`）。
-2. **GitHub Release**：`git push origin master` → 打 `vX.Y.Z` tag 并推送 → CI 构建签名包并挂到 Release
-   → 用 `gh release edit` 补标题与说明（工作流本身不写 body）。
+2. **GitHub Release（只有用户拍板后才做）**：用户说「发 release / 发布」，才打 `vX.Y.Z` tag 并推送
+   → CI 构建签名包并挂到 Release → 用 `gh release edit` 补标题与说明（工作流本身不写 body）。
+   没人发话就停在「本地包已出、已 push master」。
 
 > 本机 `git push` 需要显式走系统代理：`git -c http.proxy=http://127.0.0.1:7897 push ...`
 > （代理端口会随 Clash 重启变化，先 `netstat` 确认）。
