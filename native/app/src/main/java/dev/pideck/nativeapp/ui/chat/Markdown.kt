@@ -1,5 +1,17 @@
 package dev.pideck.nativeapp.ui.chat
 
+import dev.pideck.nativeapp.data.nextReveal
+
+import androidx.compose.runtime.setValue
+
+import androidx.compose.runtime.LaunchedEffect
+
+import androidx.compose.runtime.withFrameNanos
+
+import androidx.compose.runtime.rememberUpdatedState
+
+import androidx.compose.runtime.mutableIntStateOf
+
 import kotlinx.coroutines.withContext
 
 import kotlinx.coroutines.Dispatchers
@@ -401,11 +413,7 @@ fun MarkdownText(
     // 再一次性换成排好的 Markdown（`**`、表格、代码块都在那一刻生效）。
     if (streaming) {
         Column(modifier = modifier) {
-            InlineText(
-                text = markdown,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+            RevealedText(markdown)
         }
         return
     }
@@ -577,5 +585,31 @@ private fun TableCell(
             MaterialTheme.colorScheme.onSurface
         },
         modifier = cellModifier.padding(horizontal = 10.dp, vertical = 8.dp),
+    )
+}
+
+/**
+ * 流式正文的逐帧渐显：宿主一条 `text-delta` 只有 3~4 个字（实测 p50 间隔 0ms），
+ * 直接整段替换就是「一字一字蹦」。这里按 [nextReveal] 的节奏把已收到的字连续放出来，
+ * 新字先落在缓冲里、再匀速追上 —— 看起来才是连续的流。
+ */
+@Composable
+private fun RevealedText(markdown: String) {
+    val latest by rememberUpdatedState(markdown)
+    var shown by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        var last = withFrameNanos { it }
+        while (true) {
+            val now = withFrameNanos { it }
+            val dt = (now - last) / 1_000_000L
+            last = now
+            val total = latest.length
+            shown = nextReveal(shown, total, dt)
+        }
+    }
+    InlineText(
+        text = markdown.take(minOf(shown, markdown.length)),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurface,
     )
 }
