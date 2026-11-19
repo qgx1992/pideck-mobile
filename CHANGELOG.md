@@ -1,3 +1,15 @@
+## 0.5.67 — 2026-11-16
+
+新建会话能选安全等级了。
+
+- 首页新会话面板加「安全 X」胶囊（只对 pi 后端显示）：选项来自宿主的 `/api/state` 的
+  `security.levels`（实测本机三档：关闭 / 标准 / 严格），带每档的说明；第一项是「跟随电脑端默认」，
+  副标题写明电脑端当前是哪一档。
+- 宿主没有「创建时带等级」的参数（`POST /api/sessions` 只吃 projectId / backend / acpToolId /
+  model / thinkingLevel），所以选中的等级在会话建好之后调
+  `POST /api/sessions/:id/security-level` 落下去；设失败不挡住建会话，只提示一句。
+- 与 DSH 的权限预设是两套机制（`privilegeControlFor`）：dsh 走 `permissionPreset`，acp 没有这一层。
+
 ## 0.5.66 — 2026-11-16
 
 流式显示从「纯文本渐显」升级成「边来边排版」，并补上后台省电。

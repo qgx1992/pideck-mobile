@@ -8,6 +8,9 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.pideck.nativeapp.data.attempt
+import dev.pideck.nativeapp.data.SecurityState
+import dev.pideck.nativeapp.data.parseSecurityState
 import dev.pideck.nativeapp.data.AcpTool
 import dev.pideck.nativeapp.data.AvailableModel
 import dev.pideck.nativeapp.data.AgentBackend
@@ -79,6 +82,18 @@ class HomeViewModel @Inject constructor(
 
     /** 界面看的那一行红字：动作错误优先，其次是这一屏的拉取失败。 */
     val error: String? get() = actionError ?: loadState.message
+
+    /** 宿主的安全等级表（`/api/state` 的 security）：新会话可选，只对 pi 生效。 */
+    var security by mutableStateOf(SecurityState())
+        private set
+
+    /** 新会话要用的等级；null = 跟随桌面端默认。 */
+    var selectedSecurityLevelId by mutableStateOf<String?>(null)
+        private set
+
+    fun chooseSecurityLevel(levelId: String?) {
+        selectedSecurityLevelId = levelId
+    }
 
     var creating by mutableStateOf(false)
         private set
@@ -199,7 +214,7 @@ class HomeViewModel @Inject constructor(
                 deviceName = conn.device.name
             }
             // 列表页刚拉过的状态先垫上，首页不至于空着等网络
-            stateStore.cached(deviceId)?.let { apply(it.projects, it.sessions, it.acpTools) }
+            stateStore.cached(deviceId)?.let { apply(it.projects, it.sessions, it.acpTools, parseSecurityState(it.security) ?: SecurityState()) }
             load()
             loadModels()
         }
@@ -227,7 +242,12 @@ class HomeViewModel @Inject constructor(
                     is StateFetch.Fresh -> {
                         etag = fetched.etag
                         stateStore.put(deviceId, fetched.state)
-                        apply(fetched.state.projects, fetched.state.sessions, fetched.state.acpTools)
+                        apply(
+                            fetched.state.projects,
+                            fetched.state.sessions,
+                            fetched.state.acpTools,
+                            parseSecurityState(fetched.state.security) ?: SecurityState(),
+                        )
                     }
 
                     StateFetch.NotModified -> Unit
@@ -329,6 +349,14 @@ class HomeViewModel @Inject constructor(
                     model = selectedModel.takeIf { chosen == AgentBackend.Pi },
                     thinkingLevel = selectedThinking.takeIf { chosen == AgentBackend.Pi },
                 )
+                // 独立接口，不在创建 body 里：宿主只给 `POST /api/sessions/:id/security-level`，
+                // 且只认 pi 会话。设失败不该挡住建会话，提示一句就够。
+                if (chosen == AgentBackend.Pi) {
+                    selectedSecurityLevelId?.let { level ->
+                        attempt { api.setSessionSecurityLevel(target, token, id, level) }
+                            .onFailure { actionError = "会话建好了，但安全等级没设上：${describeConnectionError(it)}" }
+                    }
+                }
                 onCreated(id)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
@@ -340,7 +368,13 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun apply(nextProjects: List<Project>, nextSessions: List<Session>, tools: List<AcpTool>) {
+    private fun apply(
+        nextProjects: List<Project>,
+        nextSessions: List<Session>,
+        tools: List<AcpTool>,
+        nextSecurity: SecurityState? = null,
+    ) {
+        nextSecurity?.let { security = it }
         acpTools = tools
         // 选中的 ACP 工具在桌面端被删了：退回 pi，别留着建一个宿主不认识的会话
         if (backend is AgentBackend.Acp && tools.none { it.id == (backend as AgentBackend.Acp).toolId }) {

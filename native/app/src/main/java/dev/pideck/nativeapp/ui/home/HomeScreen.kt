@@ -223,6 +223,19 @@ fun HomeScreen(
                 }
             }
 
+            if (viewModel.backend == AgentBackend.Pi && viewModel.security.levels.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SecurityPicker(viewModel = viewModel)
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+
             item {
                 OutlinedTextField(
                     value = text,
@@ -557,6 +570,72 @@ private fun InfoCard(title: String, body: String) {
  * 没选模型就给 pi 的标准表。默认 `null` = 跟随电脑端默认 —— 宿主按
  * 「模型能力表 → `settings.defaultThinkingLevel`」解析，本端不猜。
  */
+@Composable
+private fun SecurityPicker(viewModel: HomeViewModel) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val security = viewModel.security
+    val selected = viewModel.selectedSecurityLevelId
+    Box {
+        SelectChip(
+            text = "安全 " + (security.levelOf(selected)?.name ?: "跟随默认"),
+            onClick = { expanded = true },
+            trailing = Icons.Filled.KeyboardArrowDown,
+            // 只对 pi 生效：dsh 是权限预设，acp 根本没有这一层（宿主会 400）
+            enabled = !viewModel.creating && security.levels.isNotEmpty(),
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text("跟随电脑端默认", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            security.defaultLevelId?.let { security.levelOf(it)?.name }
+                                ?.let { "电脑端现在是「$it」" } ?: "不指定，由电脑端的默认等级决定",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                trailingIcon = if (selected == null) {
+                    { Icon(Icons.Filled.Check, contentDescription = null) }
+                } else {
+                    null
+                },
+                onClick = {
+                    viewModel.chooseSecurityLevel(null)
+                    expanded = false
+                },
+            )
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            security.levels.forEach { level ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(level.name, style = MaterialTheme.typography.bodyMedium)
+                            level.description?.let {
+                                Text(
+                                    it,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    },
+                    trailingIcon = if (selected == level.id) {
+                        { Icon(Icons.Filled.Check, contentDescription = null) }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        viewModel.chooseSecurityLevel(level.id)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ThinkingPicker(viewModel: HomeViewModel) {
     var expanded by rememberSaveable { mutableStateOf(false) }

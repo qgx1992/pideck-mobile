@@ -340,6 +340,12 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   - **DI**：`di/AppBindings.kt` 用 `@Binds` 把 `PideckApi` 与 `DeviceDirectory` 绑到真实实现
     （真实实现的 `@Provides` 在 `di/AppModule.kt`）。要给 ViewModel 写行为测试，
     用 `@TestInstallIn` 换掉 `AppBindings` 塞假实现即可，不必搭 mock server、也不要改生产装配。
+- **安全等级与 DSH 权限预设是两套东西**（`data/RuntimeActions.kt` 的 `privilegeControlFor` /
+  `parseSecurityState`）：pi 会话走 `/api/state` 的 `security.levels` +
+  `POST /api/sessions/:id/security-level`；dsh 走 `permissionPreset`；acp 没有这一层（宿主 400
+  `securityUnsupportedBackend`）。**宿主没有「创建时带等级」的参数**，所以新建会话选完等级要在
+  建好之后补一次 `setSessionSecurityLevel`，失败不挡建会话。别再往 `createSessionBody` 里塞
+  `permissionPreset` —— 拿 DSH 的预设写到 pi 会话上会让它之后调不了工具。
 - **新会话的模型偏好只在 pi 上带**（`native/app/src/main/java/dev/pideck/nativeapp/data/Images.kt`
   的 `ChatPayloads.createSessionBody`）：宿主 `createSessionDraft` 的 `model` 是
   `!acp && input.model ? … : void 0`，DSH 则用它自己的模型体系。带 `model` 时形状必须是
