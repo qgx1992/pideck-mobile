@@ -15,6 +15,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Code
@@ -154,6 +155,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.pideck.nativeapp.data.BusySendMode
+import dev.pideck.nativeapp.data.ComposerMode
 import dev.pideck.nativeapp.data.defaultTranslateTarget
 import dev.pideck.nativeapp.data.TurnStats
 import dev.pideck.nativeapp.data.formatTurnStats
@@ -684,6 +686,16 @@ fun ChatScreen(
                 busyMode = viewModel.effectiveBusyMode,
                 busyModes = viewModel.busyModes,
                 onBusyModeChange = { viewModel.rememberBusySendMode(it) },
+                mode = viewModel.composerMode,
+                onModeChange = { viewModel.chooseComposerMode(it) },
+                planReady = viewModel.planReady,
+                onExecutePlan = {
+                    val text = draft
+                    draft = ""
+                    ChatDrafts.clear(deviceId, viewModel.sessionId)
+                    viewModel.leavePlanMode()
+                    submitText(text.ifBlank { "按上面的计划开始执行。" }, viewModel.effectiveBusyMode)
+                },
                 onSend = { mode ->
                     val text = draft
                     draft = ""
@@ -1910,6 +1922,10 @@ private fun Composer(
     onOpenPrompts: () -> Unit = {},
     promptError: String? = null,
     onDismissPromptError: () -> Unit = {},
+    mode: ComposerMode = ComposerMode.Normal,
+    onModeChange: (ComposerMode) -> Unit = {},
+    planReady: Boolean = false,
+    onExecutePlan: () -> Unit = {},
 ) {
     // 输入区不需要一个「底板」：之前是 Surface + tonalElevation，会在底部铺出一条
     // 顶边笔直的浅色方块，跟圆角输入卡片放一起很割裂。改成向上渐隐的遮罩，
@@ -2005,6 +2021,23 @@ private fun Composer(
 
                 null -> Unit
             }
+            // 计划模式：先把「只读分析」说清楚；产出 Plan: 之后给一键执行。
+            if (mode == ComposerMode.Plan) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (planReady) "计划已生成，确认后执行" else "计划模式：只读分析，先出计划再执行",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (planReady) {
+                        TextButton(onClick = onExecutePlan) { Text("执行计划") }
+                    }
+                }
+            }
             // 整条输入区就是一张卡片：正文在上，动作在下。
             // 以前是「圆形按钮 + 输入框 + 圆形按钮」并排，两个浮在框外的圆点看着很别扭。
             Surface(
@@ -2032,7 +2065,11 @@ private fun Composer(
                             Box {
                                 if (value.isEmpty()) {
                                     Text(
-                                        text = "发消息给这个会话…",
+                                        text = when (mode) {
+                                            ComposerMode.Normal -> "发消息给这个会话…"
+                                            ComposerMode.Plan -> "输入任务以生成计划"
+                                            ComposerMode.Goal -> "输入要达成的目标，发送后会自动连续推进"
+                                        },
                                         style = MaterialTheme.typography.bodyLarge,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -2061,6 +2098,7 @@ private fun Composer(
                             size = 32,
                             container = Color.Transparent,
                         )
+                        ModeChip(mode = mode, onModeChange = onModeChange)
                         Spacer(Modifier.weight(1f))
                         // 正在跑、而且框里有内容：先给一个「怎么发」的选择器，
                         // 停止按钮和发送按钮并存 —— 停止不会清掉输入框。
@@ -2657,5 +2695,40 @@ private fun SheetAction(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.outline,
         )
+    }
+}
+
+/**
+ * 输入框左下角的模式胶囊（正常 / 计划 / 目标）。
+ *
+ * 只在**聊天页**出现：模式是靠提示词前缀实现的（宿主 Web 侧没有 agentMessage 通道，
+ * 指令会作为用户消息落盘、显示时由 `ComposerModePayloads.displayText` 剥掉），
+ * 所以别把它搬到新建会话面板 —— 那里没有「发第一条消息」的时机。
+ */
+@Composable
+private fun ModeChip(mode: ComposerMode, onModeChange: (ComposerMode) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        SelectChip(
+            text = mode.label,
+            onClick = { open = true },
+            accent = mode != ComposerMode.Normal,
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            ComposerMode.entries.forEach { entry ->
+                DropdownMenuItem(
+                    text = { Text(entry.label) },
+                    onClick = {
+                        open = false
+                        onModeChange(entry)
+                    },
+                    trailingIcon = if (entry == mode) {
+                        { Icon(Icons.Default.Check, contentDescription = null) }
+                    } else {
+                        null
+                    },
+                )
+            }
+        }
     }
 }

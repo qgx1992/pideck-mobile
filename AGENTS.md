@@ -602,6 +602,12 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
   不做「有一张卡但不知道在问什么」。展开内容走 `AnimatedVisibility`，选项列仍是 `heightIn(max = 320.dp)` 内部滚动。
 
+- **计划 / 目标模式只能靠拼提示词**（`data/ComposerMode.kt` 的 `ComposerModePayloads`）：
+  桌面端这两档用隐藏载荷 `agentMessage`（`__PI_DECK_PLAN_MODE__` / `__PI_DECK_GOAL_MODE__`），
+  而 Web 侧 `/api/sessions/:id/prompt` 与 `/api/chat` 只把 `message` 往下传 —— 手机端只能把
+  同款指令拼进 `message`，落盘的消息因此带指令原文。界面用 `displayText()` 剥掉（只认我们自己
+  拼出来的形状，别做成通用清洗），`hasPlan()` 决定要不要给「执行计划」。等宿主开放
+  `agentMessage` 再换通道，顺便把 `BASELINE` 升上去。
 - **改偏好要走运行时命令，停止走 abort**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt`
   的 `applyModel` / `applyThinking` / `stop`）：
   - `POST /api/sessions/:id/update` **只改 catalog 记录**，跑着的 agent 还按旧模型回答（表现「胶囊变了回答没变」）。

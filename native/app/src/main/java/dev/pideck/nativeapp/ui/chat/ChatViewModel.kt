@@ -25,6 +25,8 @@ import dev.pideck.nativeapp.data.ChatMessage
 import dev.pideck.nativeapp.data.CacheStat
 import dev.pideck.nativeapp.data.CacheStatBuilder
 import dev.pideck.nativeapp.data.ChatPayloads
+import dev.pideck.nativeapp.data.ComposerMode
+import dev.pideck.nativeapp.data.ComposerModePayloads
 import dev.pideck.nativeapp.data.PendingUiRequest
 import dev.pideck.nativeapp.data.ForkEdit
 import dev.pideck.nativeapp.data.PideckJson
@@ -2182,9 +2184,28 @@ class ChatViewModel @Inject constructor(
         imageError = null
     }
 
+    /** 输入框上的模式（正常 / 计划 / 目标），发送后不清零 —— 桌面端也是手动切回。 */
+    var composerMode by mutableStateOf(ComposerMode.Normal)
+        private set
+
+    fun chooseComposerMode(mode: ComposerMode) {
+        composerMode = mode
+    }
+
+    /** 最新一条回答里有没有 `Plan:` 编号计划（计划模式下才给「执行计划」）。 */
+    val planReady: Boolean
+        get() = composerMode == ComposerMode.Plan && items.lastOrNull { it is TimelineItem.AssistantMessage }
+            ?.let { ComposerModePayloads.hasPlan((it as TimelineItem.AssistantMessage).text) } == true
+
+    /** 计划看完了，切回正常模式再发这一轮（桌面端「执行计划」同义）。 */
+    fun leavePlanMode() {
+        if (composerMode == ComposerMode.Plan) composerMode = ComposerMode.Normal
+    }
+
     fun send(text: String) {
         val target = device ?: return
         val body = text.trim()
+        val outgoing = ComposerModePayloads.wrap(composerMode, body)
         val attached = images
         if ((body.isEmpty() && attached.isEmpty()) || sending) return
         sending = true
@@ -2206,7 +2227,7 @@ class ChatViewModel @Inject constructor(
                 data = image.dataUrl.substringAfter("base64,"),
             )
         }
-        val localText = body
+        val localText = ComposerModePayloads.displayText(outgoing)
         items = items + TimelineItem.UserMessage(
             key = localKey,
             text = localText,
@@ -2217,7 +2238,7 @@ class ChatViewModel @Inject constructor(
         sendJob = viewModelScope.launch {
             val payload = ChatPayloads.chatBody(
                 sessionId = sessionId,
-                text = body,
+                text = outgoing,
                 imageDataUrls = attached.map { it.dataUrl },
             )
             try {
@@ -2491,10 +2512,11 @@ class ChatViewModel @Inject constructor(
         val target = device ?: return
         val body = text.trim()
         if (body.isEmpty()) return
+        val outgoing = ComposerModePayloads.wrap(composerMode, body)
         // 先上屏：等落盘再显示会有半秒「没反应」，重拉历史时这条本地气泡会被真实记录替掉
         items = items + TimelineItem.UserMessage(
             key = "local-${System.currentTimeMillis()}",
-            text = body,
+            text = ComposerModePayloads.displayText(outgoing),
             timestamp = System.currentTimeMillis(),
         )
         viewModelScope.launch {
@@ -2503,7 +2525,7 @@ class ChatViewModel @Inject constructor(
                     target,
                     token,
                     sessionId,
-                    ChatPayloads.promptBody(newRequestId(), body, "steer"),
+                    ChatPayloads.promptBody(newRequestId(), outgoing, "steer"),
                 )
                 if (!delivery.accepted) error = delivery.error ?: "宿主没有接受这条消息"
             } catch (e: CancellationException) {
@@ -2519,19 +2541,20 @@ class ChatViewModel @Inject constructor(
         val target = device ?: return
         val body = text.trim()
         if (body.isEmpty()) return
+        val outgoing = ComposerModePayloads.wrap(composerMode, body)
         viewModelScope.launch {
             try {
                 val delivery = api.sendPrompt(
                     target,
                     token,
                     sessionId,
-                    ChatPayloads.promptBody(newRequestId(), body, "followUp"),
+                    ChatPayloads.promptBody(newRequestId(), outgoing, "followUp"),
                 )
                 if (!delivery.accepted) {
                     error = delivery.error ?: "宿主没有接受这条消息"
                     return@launch
                 }
-                queuedPrompts = queuedPrompts + QueuedPrompt(body, lastMessageSeq)
+                queuedPrompts = queuedPrompts + QueuedPrompt(outgoing, lastMessageSeq)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {

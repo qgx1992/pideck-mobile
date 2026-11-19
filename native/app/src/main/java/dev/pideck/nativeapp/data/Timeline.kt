@@ -123,7 +123,9 @@ fun List<ChatMessage>.toTimelineItems(): List<TimelineItem> = mapNotNull { messa
 
         "user" -> TimelineItem.UserMessage(
             key = "msg-${message.id}",
-            text = message.text,
+            // 计划/目标模式会把指令拼进 message（宿主 Web 侧没有 agentMessage 通道），
+            // 界面上只显示用户自己打的那句。
+            text = ComposerModePayloads.displayText(message.text),
             timestamp = message.timestamp,
             images = message.images.filter { it.data.isNotBlank() },
         )
