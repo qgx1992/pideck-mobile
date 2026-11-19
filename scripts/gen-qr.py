@@ -23,7 +23,7 @@ import qrcode.image.svg
 # Windows 控制台默认 GBK，输出 ✓ 之类会直接抛 UnicodeEncodeError
 sys.stdout.reconfigure(encoding="utf-8")
 
-APK_DIR = Path(__file__).resolve().parents[2] / "apk"
+APK_DIR = Path(__file__).resolve().parents[1] / "apk"
 INDEX = APK_DIR / "index.html"
 QR_FILE = APK_DIR / "qr.svg"
 
