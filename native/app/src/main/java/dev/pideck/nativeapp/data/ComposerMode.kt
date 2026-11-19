@@ -3,11 +3,17 @@ package dev.pideck.nativeapp.data
 /**
  * 输入框的三个模式（对齐桌面端的 `composerMode`：normal / plan / goal）。
  *
- * 宿主在**桌面端**是用 `agentMessage` 这个隐藏载荷送指令的：`message` 只进聊天记录，
- * `agentMessage` 才交给 agent。但 Web 侧（`POST /api/sessions/:id/prompt`、`/api/chat`）
- * 的处理器只把 `message` 往下传，`agentMessage` 会被丢掉（实测 0.11.3 主进程里只有桌面端
- * 自己那 4 处）—— 所以手机这边只能把指令拼进 `message`，落盘的消息里会带这段文字。
- * 界面上由 [displayText] 剥掉，用户看到的是自己打的那句。
+ * **通道（0.5.69 起）**：桌面端把模式指令放在 `agentMessage` 这个隐藏载荷里 —— `message`
+ * 只进聊天记录，`agentMessage` 才交给 agent。宿主 0.13.0 的 Web 层已经认这个字段
+ * （`POST /api/sessions/:id/prompt` 与 `/api/chat` 都读 `body.agentMessage`，上限 64 KB），
+ * 所以手机端也走同一条路：用户打的那句话落盘，标记与指令只进提示词。
+ *
+ * 0.13.0 还有一层守卫：会话没注入 `pi-deck-plan-mode.ts` / `pi-deck-goal-mode.ts` 时，
+ * 带标记的 `agentMessage` 会被丢掉、回退成 `message`（只记一条 warn），也就是说这里发出去的
+ * 东西在任何宿主上都不会坏，最多退化成一条普通消息。
+ *
+ * 更早的宿主（0.12 及以前）会忽略 `agentMessage`，那种情况只能靠 [displayText] 把落盘的
+ * 标记剥掉 —— 老消息里已经带着标记，这个函数仍然要认。
  */
 enum class ComposerMode(val label: String) {
     Normal("正常"),
@@ -28,18 +34,41 @@ object ComposerModePayloads {
         "请先只做只读分析，不要修改文件。最后必须输出以 `Plan:` 开头的编号计划，格式如下：\n" +
             "Plan:\n1. 第一步\n2. 第二步"
 
-    /** 真正发给 agent 的那段（会作为用户消息落盘）。 */
-    fun wrap(mode: ComposerMode, text: String): String {
-        val trimmed = text.trim()
+    /** 一次发送的两个载荷：`message` 进聊天记录，`agentMessage` 交给 agent。 */
+    data class Submission(val message: String, val agentMessage: String?) {
+        /** 本地先画出来的那一句（不显示标记与指令）。 */
+        val display: String get() = ComposerModePayloads.displayText(message).trim()
+    }
+
+    /**
+     * 按桌面端的规则算两个载荷。
+     *
+     * `/` 开头的斜杠命令不套模式 —— 桌面端也是这么判的（命令要原样交给宿主解析）。
+     */
+    fun submission(mode: ComposerMode, text: String): Submission {
+        if (text.trimStart().startsWith("/")) return Submission(text, null)
         return when (mode) {
-            ComposerMode.Normal -> text
-            ComposerMode.Plan -> listOf(
-                PLAN_MARKER,
-                trimmed.ifEmpty { PLAN_DEFAULT },
-                "",
-                PLAN_INSTRUCTION,
-            ).joinToString("\n")
-            ComposerMode.Goal -> listOf(GOAL_MARKER, trimmed.ifEmpty { GOAL_DEFAULT }).joinToString("\n")
+            ComposerMode.Normal -> Submission(text, null)
+            ComposerMode.Plan -> {
+                // 空文本只带图片时，用桌面端那句默认指令当可见消息（宿主拒收空 message）。
+                val visible = text.trim().ifEmpty { PLAN_DEFAULT }
+                Submission(
+                    message = if (text.isBlank()) visible else text,
+                    agentMessage = listOf(
+                        PLAN_MARKER,
+                        visible,
+                        "",
+                        PLAN_INSTRUCTION,
+                    ).joinToString("\n"),
+                )
+            }
+            ComposerMode.Goal -> {
+                val visible = text.trim().ifEmpty { GOAL_DEFAULT }
+                Submission(
+                    message = if (text.isBlank()) visible else text,
+                    agentMessage = listOf(GOAL_MARKER, visible).joinToString("\n"),
+                )
+            }
         }
     }
 
@@ -48,6 +77,7 @@ object ComposerModePayloads {
      *
      * 只认我们自己拼出来的形状（首行标记 + 计划模式的可选尾段），别把它做成通用清洗 ——
      * 用户真的打字说「__PI_DECK_PLAN_MODE__ 是什么」时不该被吃。
+     * 现在只用于 0.5.68 及更早落盘的老消息。
      */
     fun displayText(text: String): String {
         if (text.startsWith(PLAN_MARKER)) {

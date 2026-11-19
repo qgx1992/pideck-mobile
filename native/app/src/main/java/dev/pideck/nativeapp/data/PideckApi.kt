@@ -241,6 +241,18 @@ interface PideckApi {
         category: String? = null,
     ): String?
 
+    /**
+     * 桌面端提示词模板（`GET /api/prompt-templates`，桌面端 0.13.0 起）。
+     *
+     * 读的是 pi 的模板目录（`~/.pi/agent/prompts` 与项目内 `.pi/prompts`），
+     * 不是 `/api/prompts` 那个云端提示词库。老宿主的这条路由不存在（404），
+     * 调用方要按「宿主太旧」处理，别当成空清单。
+     */
+    suspend fun promptTemplates(device: Device, token: String?): List<PromptTemplate>
+
+    /** 一条模板的正文（`GET /api/prompt-templates/:name` → `detail.content`）。 */
+    suspend fun promptTemplateContent(device: Device, token: String?, name: String): String?
+
     /** 最近提交（`GET /api/git/log?projectId=&limit=`），只读。 */
     suspend fun gitLog(device: Device, token: String?, projectId: String, limit: Int = 15): List<GitCommit>
 }
@@ -750,6 +762,21 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
     ): String? = withContext(Dispatchers.IO) {
         val query = if (category.isNullOrBlank()) "" else "?category=" + encode(category)
         PromptsParse.content(getText(device, token, "/api/prompts/" + encode(slug) + query))
+    }
+
+    override suspend fun promptTemplates(
+        device: Device,
+        token: String?,
+    ): List<PromptTemplate> = withContext(Dispatchers.IO) {
+        PromptTemplatesParse.list(getText(device, token, "/api/prompt-templates"))
+    }
+
+    override suspend fun promptTemplateContent(
+        device: Device,
+        token: String?,
+        name: String,
+    ): String? = withContext(Dispatchers.IO) {
+        PromptTemplatesParse.content(getText(device, token, "/api/prompt-templates/" + encode(name)))
     }
 
     override suspend fun gitLog(

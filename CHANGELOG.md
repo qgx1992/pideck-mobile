@@ -1,3 +1,21 @@
+## 0.5.69 — 2026-11-19
+
+计划 / 目标模式不再污染聊天记录，提示词面板接上电脑上的模板。
+
+- **`agentMessage` 通道**：桌面端 0.13.0 起 `/api/sessions/:id/prompt` 与 `/api/chat` 都认
+  `agentMessage`（上限 64 KB）。计划 / 目标模式改成 `message` = 你打的那句话、
+  `agentMessage` = 标记 + 指令，落盘的消息里不再有 `__PI_DECK_PLAN_MODE__`。
+  老宿主会忽略这个字段（退化成一条普通消息），0.5.68 及更早落盘的老消息仍由
+  `ComposerModePayloads.displayText` 剥标记。宿主还有个守卫：会话没注入
+  `pi-deck-plan-mode.ts` / `pi-deck-goal-mode.ts` 时会丢掉标记并回退成 `message`，不会报错。
+  `/` 开头的斜杠命令不套模式（和桌面端一样）。
+- **桌面端提示词模板**：提示词面板加第三段「桌面端模板」，读 `GET /api/prompt-templates`
+  （pi 的 `~/.pi/agent/prompts` 与项目内 `.pi/prompts`，桌面端 0.13.0 起）。点一条先展开正文
+  再插入；老宿主没有这条路由时给一句「宿主 0.13.0 起才有」，不当成「没有模板」。
+- **适配基线升到 0.13.0**：0.11.3 → 0.13.0 的差异都对过账（新增 `/api/agents`、
+  `/api/prompt-templates`，`/api/state` 多 `sessionAgentBindings`，runtime 动作 12 → 21），
+  会话投影 / 消息分页 / SSE 帧 / 建会话参数都没变。
+
 ## 0.5.68 — 2026-11-19
 
 输入框能切「正常 / 计划 / 目标」了。

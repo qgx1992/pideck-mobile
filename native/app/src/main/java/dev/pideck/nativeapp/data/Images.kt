@@ -122,10 +122,18 @@ object ImagePrep {
  */
 object ChatPayloads {
 
-    fun chatBody(sessionId: String, text: String, imageDataUrls: List<String>): JsonObject =
+    fun chatBody(
+        sessionId: String,
+        text: String,
+        imageDataUrls: List<String>,
+        agentMessage: String? = null,
+    ): JsonObject =
         buildJsonObject {
             put("id", sessionId)
             put("messages", buildJsonArray { add(userMessage(text, imageDataUrls)) })
+            // 宿主 0.13.0 起认这个字段：message 只进记录，agentMessage 才交给 agent。
+            // 老宿主会忽略它 —— 那句话就退化成一条普通消息，不会报错。
+            if (!agentMessage.isNullOrBlank()) put("agentMessage", agentMessage)
         }
 
     /**
@@ -136,11 +144,17 @@ object ChatPayloads {
      * 「排队到下一轮」才成立（`/api/chat` 的 body 没有这个字段，
      * 宿主忙碌时一律按 steer 处理）。
      */
-    fun promptBody(requestId: String, text: String, behavior: String? = null): JsonObject =
+    fun promptBody(
+        requestId: String,
+        text: String,
+        behavior: String? = null,
+        agentMessage: String? = null,
+    ): JsonObject =
         buildJsonObject {
             put("requestId", requestId)
             put("message", text.trim())
             if (!behavior.isNullOrBlank()) put("streamingBehavior", behavior)
+            if (!agentMessage.isNullOrBlank()) put("agentMessage", agentMessage)
         }
 
     /**

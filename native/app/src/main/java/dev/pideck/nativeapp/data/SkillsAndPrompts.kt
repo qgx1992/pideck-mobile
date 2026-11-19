@@ -194,3 +194,45 @@ object PromptsParse {
         return (detail["promptContent"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
     }
 }
+/**
+ * 桌面端提示词模板（`GET /api/prompt-templates`，桌面端 0.13.0 起）。
+ *
+ * 和上面那套 `/api/prompts` 不是一回事：那个是桌面端「提示词库」（sqlite 的 `xueprompts` 表），
+ * 这个是 pi 自己的模板目录（`~/.pi/agent/prompts` 与项目内 `.pi/prompts`），
+ * 以前只有 Electron IPC 能读，手机端拿不到。
+ */
+data class PromptTemplate(
+    val name: String,
+    val description: String,
+    val scope: String?,
+    val enabled: Boolean,
+)
+
+object PromptTemplatesParse {
+
+    /** `{"templates":[{name,description,scope,enabled}]}`；坏回包给空列表。 */
+    fun list(text: String): List<PromptTemplate> {
+        val root = attempt { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
+            ?: return emptyList()
+        val items = (root["templates"] as? JsonArray).orEmpty()
+        return items.mapNotNull { element ->
+            val obj = element as? JsonObject ?: return@mapNotNull null
+            val name = (obj["name"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            PromptTemplate(
+                name = name,
+                description = (obj["description"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+                scope = (obj["scope"] as? JsonPrimitive)?.contentOrNull,
+                enabled = (obj["enabled"] as? JsonPrimitive)?.booleanOrNull ?: true,
+            )
+        }
+    }
+
+    /** `{"detail":{content,description,name,scope}}` → 正文；取不到给 null。 */
+    fun content(text: String): String? {
+        val root = attempt { PideckJson.parseToJsonElement(text) }.getOrNull() as? JsonObject
+            ?: return null
+        val detail = root["detail"] as? JsonObject ?: root
+        return (detail["content"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+    }
+}

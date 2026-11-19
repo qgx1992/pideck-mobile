@@ -128,6 +128,12 @@ open class FakePideckApi : PideckApi {
     override suspend fun promptContent(device: Device, token: String?, slug: String, category: String?): String? =
         throw NotImplementedError("FakePideckApi.promptContent 未打桩")
 
+    override suspend fun promptTemplates(device: Device, token: String?): List<PromptTemplate> =
+        throw NotImplementedError("FakePideckApi.promptTemplates 未打桩")
+
+    override suspend fun promptTemplateContent(device: Device, token: String?, name: String): String? =
+        throw NotImplementedError("FakePideckApi.promptTemplateContent 未打桩")
+
     override suspend fun gitLog(device: Device, token: String?, projectId: String, limit: Int): List<GitCommit> =
         throw NotImplementedError("FakePideckApi.gitLog 未打桩")
 

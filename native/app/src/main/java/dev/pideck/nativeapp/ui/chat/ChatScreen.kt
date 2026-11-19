@@ -714,6 +714,7 @@ fun ChatScreen(
                     viewModel.openPromptLibrary()
                     viewModel.loadQuickMessages()
                     viewModel.loadLocalPrompts()
+                    viewModel.loadHostTemplates()
                     showPrompts = true
                 },
                 promptError = viewModel.promptInsertError,
@@ -892,6 +893,10 @@ fun ChatScreen(
             onSaveLocal = { viewModel.saveLocalPrompt() },
             onRemoveLocal = { viewModel.removeLocalPrompt(it) },
             onPreviewLocal = { viewModel.previewLocalPrompt(it) },
+            hostTemplates = viewModel.hostTemplates,
+            hostTemplatesBusy = viewModel.hostTemplatesBusy,
+            hostTemplatesError = viewModel.hostTemplatesError,
+            onPreviewHost = { viewModel.previewHostTemplate(it) },
             quickMessages = viewModel.quickMessages,
             quickDraft = viewModel.quickDraft,
             onQuickDraftChange = viewModel::updateQuickDraft,

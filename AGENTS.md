@@ -509,7 +509,12 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   - 页面在 `ui/settings/SkillsExtensionsScreen.kt` + `ui/settings/SkillsViewModel.kt`，排序在
     `data/SkillsAndPrompts.kt` 的 `SkillsParse.sortedSkills/sortedExtensions`（失效沉底、启用在前），
     单测 `data/SkillsAndPromptsTest.kt`。
-  - **提示词库有两个来源，别混成一个**：`GET /api/prompts` 是桌面端那套云端提示词库
+  - **桌面端提示词模板走 `GET /api/prompt-templates`（0.13.0 起）**：这是 pi 自己的模板目录
+  （`~/.pi/agent/prompts` 与项目内 `.pi/prompts`），列表项 `{name, description, scope, enabled}`，
+  详情 `{detail:{content, description, name, scope}}`；和 `/api/prompts`（桌面端 sqlite 里的提示词库）
+  不是一回事。手机端在提示词面板第三段「桌面端模板」里用（`PromptTemplatesParse`），点一条先看正文
+  再插入。老宿主没这条路由（404）→ 界面写「宿主 0.13.0 起才有」，**不要**把它显示成「没有模板」。
+- **提示词库有两个来源，别混成一个**：`GET /api/prompts` 是桌面端那套云端提示词库
     （本机 sqlite 的 `xueprompts` 表，没导入过就是空数组）；桌面端「提示词」面板里那些
     `~/.pi/agent/prompts/*.md` 模板**只有 IPC**（`prompts:list` / `prompts:get`），Web 侧没有路由，
     手机拿不到。所以面板第二段是本机模板（`data/LocalPrompts.kt`，用户自己存的长文本），
@@ -602,12 +607,16 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   标题栏整条就是折叠开关，默认展开、按 `requestId` 记忆；收起时右侧仍留一行题干（`maxLines = 1`），
   不做「有一张卡但不知道在问什么」。展开内容走 `AnimatedVisibility`，选项列仍是 `heightIn(max = 320.dp)` 内部滚动。
 
-- **计划 / 目标模式只能靠拼提示词**（`data/ComposerMode.kt` 的 `ComposerModePayloads`）：
-  桌面端这两档用隐藏载荷 `agentMessage`（`__PI_DECK_PLAN_MODE__` / `__PI_DECK_GOAL_MODE__`），
-  而 Web 侧 `/api/sessions/:id/prompt` 与 `/api/chat` 只把 `message` 往下传 —— 手机端只能把
-  同款指令拼进 `message`，落盘的消息因此带指令原文。界面用 `displayText()` 剥掉（只认我们自己
-  拼出来的形状，别做成通用清洗），`hasPlan()` 决定要不要给「执行计划」。等宿主开放
-  `agentMessage` 再换通道，顺便把 `BASELINE` 升上去。
+- **计划 / 目标模式走 `agentMessage` 隐藏通道**（`data/ComposerMode.kt` 的 `ComposerModePayloads`，0.5.69 起）：
+  桌面端 0.13.0 的 Web 层已接受 `agentMessage`（`/api/sessions/:id/prompt` 与 `/api/chat` 都读，
+  `trim().slice(0, 64*1024)`），所以是 `message` = 用户原文（落盘、别人看得到）、
+  `agentMessage` = 标记 + 指令（`__PI_DECK_PLAN_MODE__` / `__PI_DECK_GOAL_MODE__`，拼法与桌面端
+  `buildComposerPromptSubmission` 逐字一致）。别再把它拼回 `message`：那会让聊天记录里出现隐藏指令。
+  - 宿主守卫：会话没注入 `pi-deck-plan-mode.ts` / `pi-deck-goal-mode.ts` 时，带标记的
+    `agentMessage` 会被丢弃并**回退成 `message`**（只 warn）—— 所以任何宿主上都不会坏。
+  - 老宿主（0.12 及以前）忽略 `agentMessage`，0.5.68 及更早落盘的消息里仍带标记，
+    `displayText()` 负责剥（只认我们自己拼出来的形状，别做成通用清洗）；`hasPlan()` 决定要不要给「执行计划」。
+  - `/` 开头的斜杠命令不套模式（桌面端同样判）。
 - **改偏好要走运行时命令，停止走 abort**（`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatViewModel.kt`
   的 `applyModel` / `applyThinking` / `stop`）：
   - `POST /api/sessions/:id/update` **只改 catalog 记录**，跑着的 agent 还按旧模型回答（表现「胶囊变了回答没变」）。

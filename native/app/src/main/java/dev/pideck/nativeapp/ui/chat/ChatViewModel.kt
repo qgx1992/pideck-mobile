@@ -33,6 +33,7 @@ import dev.pideck.nativeapp.data.PideckJson
 import dev.pideck.nativeapp.data.PideckState
 import dev.pideck.nativeapp.data.PrivilegeControl
 import dev.pideck.nativeapp.data.PromptSummary
+import dev.pideck.nativeapp.data.PromptTemplate
 import dev.pideck.nativeapp.data.LocalPrompts
 import dev.pideck.nativeapp.data.TranslateTarget
 import dev.pideck.nativeapp.data.TranslationState
@@ -1245,6 +1246,22 @@ class ChatViewModel @Inject constructor(
     var promptPreviewBusy by mutableStateOf(false)
         private set
 
+    /**
+     * 桌面端提示词模板（`GET /api/prompt-templates`，宿主 0.13.0 起）。
+     *
+     * 注意与 [prompts] 的区别：那个是桌面端「提示词库」（sqlite 里导入过的），
+     * 这个是 pi 自己 `~/.pi/agent/prompts` 里的模板 —— 以前只有桌面端读得到。
+     */
+    var hostTemplates by mutableStateOf<List<PromptTemplate>>(emptyList())
+        private set
+
+    var hostTemplatesBusy by mutableStateOf(false)
+        private set
+
+    /** 宿主太旧（没有这条路由）时说一句，别把「读不到」当成「没有模板」。 */
+    var hostTemplatesError by mutableStateOf<String?>(null)
+        private set
+
     /** 快捷消息（本机清单，见 `data/QuickMessages.kt`）。 */
     var quickMessages by mutableStateOf<List<String>>(emptyList())
         private set
@@ -1342,6 +1359,58 @@ class ChatViewModel @Inject constructor(
         promptPreview = null
         promptPreviewBody = null
         promptPreviewBusy = false
+    }
+
+    /** 打开提示词面板时拉一次宿主模板（失败静默到 [hostTemplatesError]，不挡面板）。 */
+    fun loadHostTemplates() {
+        if (hostTemplatesBusy) return
+        hostTemplatesBusy = true
+        viewModelScope.launch {
+            try {
+                deviceReady.await()
+                val target = device ?: return@launch
+                val result = attempt { api.promptTemplates(target, token) }
+                result
+                    .onSuccess {
+                        hostTemplates = it
+                        hostTemplatesError = null
+                    }
+                    .onFailure {
+                        hostTemplatesError = "桌面端模板没读到（宿主 0.13.0 起才有这条接口）：" +
+                            dev.pideck.nativeapp.data.describeConnectionError(it)
+                    }
+            } finally {
+                hostTemplatesBusy = false
+            }
+        }
+    }
+
+    /** 预览宿主模板：先看正文（模板里常有 `{{变量}}`），再决定插不插入。 */
+    fun previewHostTemplate(template: PromptTemplate) {
+        promptPreview = PromptSummary(
+            slug = template.name,
+            title = template.name,
+            description = template.description,
+            category = "桌面端",
+        )
+        promptPreviewBody = null
+        promptPreviewBusy = true
+        viewModelScope.launch {
+            try {
+                deviceReady.await()
+                val target = device
+                promptPreviewBody = if (target == null) {
+                    null
+                } else {
+                    attempt { api.promptTemplateContent(target, token, template.name) }.getOrNull()
+                }
+                if (promptPreviewBody == null) {
+                    promptInsertError = "这条桌面端模板取不到正文（可能已经在电脑上删掉了）"
+                }
+            } finally {
+                promptPreviewBusy = false
+            }
+        }
     }
 
     fun loadQuickMessages() {
@@ -2205,7 +2274,9 @@ class ChatViewModel @Inject constructor(
     fun send(text: String) {
         val target = device ?: return
         val body = text.trim()
-        val outgoing = ComposerModePayloads.wrap(composerMode, body)
+        // message 进聊天记录、agentMessage 交给 agent（桌面端同一套）；老宿主忽略后者。
+        val submission = ComposerModePayloads.submission(composerMode, text)
+        val outgoing = submission.message
         val attached = images
         if ((body.isEmpty() && attached.isEmpty()) || sending) return
         sending = true
@@ -2227,7 +2298,7 @@ class ChatViewModel @Inject constructor(
                 data = image.dataUrl.substringAfter("base64,"),
             )
         }
-        val localText = ComposerModePayloads.displayText(outgoing)
+        val localText = submission.display
         items = items + TimelineItem.UserMessage(
             key = localKey,
             text = localText,
@@ -2240,6 +2311,7 @@ class ChatViewModel @Inject constructor(
                 sessionId = sessionId,
                 text = outgoing,
                 imageDataUrls = attached.map { it.dataUrl },
+                agentMessage = submission.agentMessage,
             )
             try {
                 // 请求一 collect 就立刻发出；先打点，首字从这里起算（≈ 宿主的 startedAt）。
@@ -2512,11 +2584,12 @@ class ChatViewModel @Inject constructor(
         val target = device ?: return
         val body = text.trim()
         if (body.isEmpty()) return
-        val outgoing = ComposerModePayloads.wrap(composerMode, body)
+        val submission = ComposerModePayloads.submission(composerMode, text)
+        val outgoing = submission.message
         // 先上屏：等落盘再显示会有半秒「没反应」，重拉历史时这条本地气泡会被真实记录替掉
         items = items + TimelineItem.UserMessage(
             key = "local-${System.currentTimeMillis()}",
-            text = ComposerModePayloads.displayText(outgoing),
+            text = submission.display,
             timestamp = System.currentTimeMillis(),
         )
         viewModelScope.launch {
@@ -2525,7 +2598,12 @@ class ChatViewModel @Inject constructor(
                     target,
                     token,
                     sessionId,
-                    ChatPayloads.promptBody(newRequestId(), outgoing, "steer"),
+                    ChatPayloads.promptBody(
+                        newRequestId(),
+                        outgoing,
+                        "steer",
+                        agentMessage = submission.agentMessage,
+                    ),
                 )
                 if (!delivery.accepted) error = delivery.error ?: "宿主没有接受这条消息"
             } catch (e: CancellationException) {
@@ -2541,14 +2619,20 @@ class ChatViewModel @Inject constructor(
         val target = device ?: return
         val body = text.trim()
         if (body.isEmpty()) return
-        val outgoing = ComposerModePayloads.wrap(composerMode, body)
+        val submission = ComposerModePayloads.submission(composerMode, text)
+        val outgoing = submission.message
         viewModelScope.launch {
             try {
                 val delivery = api.sendPrompt(
                     target,
                     token,
                     sessionId,
-                    ChatPayloads.promptBody(newRequestId(), outgoing, "followUp"),
+                    ChatPayloads.promptBody(
+                        newRequestId(),
+                        outgoing,
+                        "followUp",
+                        agentMessage = submission.agentMessage,
+                    ),
                 )
                 if (!delivery.accepted) {
                     error = delivery.error ?: "宿主没有接受这条消息"

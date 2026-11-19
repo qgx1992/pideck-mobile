@@ -4,15 +4,21 @@ package dev.pideck.nativeapp.data
  * 宿主版本与客户端的适配基线。
  *
  * `/api/state` 的 `version` 是桌面端 0.10.0 才加进来的常量字段（老宿主没有，解析出来是 null）。
- * 本客户端按 **0.11.0** 的接口面对账过一次（0.11.0–0.11.3 与 0.10.0 的路由 / 字段 / 流帧完全一致，
- * 唯一新增是 `role:"tool"` 消息可以带 `images`），
- * 所以低版本不是不能用，只是「没对账过」—— 设置页把这件事说清楚，别让人对着一个
+ * 本客户端按 **0.13.0** 的接口面对账过一次：
+ * - 0.10.0 → 0.11.3：路由 / 字段 / 流帧完全一致，唯一新增是 `role:"tool"` 消息可以带 `images`；
+ * - 0.11.3 → 0.13.0：新增 `GET /api/agents`、`POST /api/agents/:id/use`、
+ *   `GET /api/prompt-templates(/:name)`，`/api/state` 多一个 `sessionAgentBindings`，
+ *   runtime 动作从 12 个扩到 21 个（新增 compact / export-html / edit-message / delete-message /
+ *   prepare-resend / permission / clone / fork / get-fork-messages / rewind-*），
+ *   并且 `agentMessage` 成了 Web 层正式字段；会话投影、消息分页、SSE 帧、建会话参数都没变。
+ *
+ * 低版本不是不能用，只是「没对账过」—— 设置页把这件事说清楚，别让人对着一个
  * 表现怪异的宿主猜。
  */
 object HostCompat {
 
     /** 本客户端按哪个桌面端版本对过接口。涨这个值要真的重新对账，别当装饰。 */
-    const val BASELINE = "0.11.0"
+    const val BASELINE = "0.13.0"
 
     /** 取版本号前三段数字（`0.10.0-beta.1` → `[0, 10, 0]`），认不出来返回 null。 */
     fun parse(version: String?): List<Int>? {

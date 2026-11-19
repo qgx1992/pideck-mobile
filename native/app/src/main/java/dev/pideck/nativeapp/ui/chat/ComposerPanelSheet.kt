@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.pideck.nativeapp.data.PromptSummary
+import dev.pideck.nativeapp.data.PromptTemplate
 import dev.pideck.nativeapp.data.LocalPrompts
 import dev.pideck.nativeapp.data.QuickMessages
 import dev.pideck.nativeapp.ui.theme.SelectChip
@@ -104,6 +105,11 @@ internal fun ComposerPanelSheet(
     onSaveLocal: () -> Unit,
     onRemoveLocal: (String) -> Unit,
     onPreviewLocal: (LocalPrompts.Prompt) -> Unit,
+    // ---- 提示词库 · 桌面端模板（宿主 0.13.0 起） ----
+    hostTemplates: List<PromptTemplate>,
+    hostTemplatesBusy: Boolean,
+    hostTemplatesError: String?,
+    onPreviewHost: (PromptTemplate) -> Unit,
     // ---- 快捷消息 ----
     quickMessages: List<String>,
     quickDraft: String,
@@ -164,6 +170,10 @@ internal fun ComposerPanelSheet(
                         onSaveLocal = onSaveLocal,
                         onRemoveLocal = onRemoveLocal,
                         onPreviewLocal = onPreviewLocal,
+                        hostTemplates = hostTemplates,
+                        hostTemplatesBusy = hostTemplatesBusy,
+                        hostTemplatesError = hostTemplatesError,
+                        onPreviewHost = onPreviewHost,
                     )
 
                     ComposerPanelTab.Quick -> QuickMessageList(
@@ -211,6 +221,10 @@ private fun PromptList(
     onSaveLocal: () -> Unit,
     onRemoveLocal: (String) -> Unit,
     onPreviewLocal: (LocalPrompts.Prompt) -> Unit,
+    hostTemplates: List<PromptTemplate>,
+    hostTemplatesBusy: Boolean,
+    hostTemplatesError: String?,
+    onPreviewHost: (PromptTemplate) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
@@ -292,6 +306,62 @@ private fun PromptList(
                             Icons.Default.Close,
                             contentDescription = "删除这个模板",
                             modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        // ---- 桌面端模板（pi 的 ~/.pi/agent/prompts，桌面端 0.13.0 起才有接口） ----
+        item(key = "template-header") {
+            SectionHeader(
+                title = "桌面端模板",
+                hint = if (hostTemplatesBusy) "正在读…" else "来自 /api/prompt-templates",
+                action = null,
+                onAction = {},
+                extraTop = 10.dp,
+            )
+        }
+        if (hostTemplatesError != null) {
+            item(key = "template-error") {
+                Text(
+                    hostTemplatesError,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+            }
+        }
+        if (!hostTemplatesBusy && hostTemplatesError == null && hostTemplates.isEmpty()) {
+            item(key = "template-empty") {
+                Text(
+                    "桌面端还没有提示词模板。在电脑上放进 pi 的 prompts 目录后，回到这里重新打开面板就能看到。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+            }
+        }
+        items(hostTemplates, key = { "tpl-" + it.name }) { template ->
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().clickable { onPreviewHost(template) },
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                    Text(
+                        template.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (template.description.isNotBlank()) {
+                        Text(
+                            template.description,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
