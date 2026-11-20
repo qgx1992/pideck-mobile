@@ -366,17 +366,6 @@ class ChatViewModel @Inject constructor(
     private var streamTimedOut: Boolean = false
 
     /** 并行问询面板的状态；null = 面板关着。 */
-    var parallelAsk by mutableStateOf<ParallelAsk?>(null)
-        private set
-
-    /** 「插入输入框」交接：面板点插入就写这里，界面取走塞进草稿。 */
-    var parallelInsert by mutableStateOf<String?>(null)
-        private set
-
-    private var askJob: Job? = null
-    /** 匿名会话（并行问询 / 浮窗翻译）的运行时台账，见 data/EphemeralRuntimes.kt。 */
-    private val ephemeral = EphemeralRuntimes()
-    private var askMerger = ReplyMerger()
 
     /** 浮窗里那段译文（思考卡点「翻译」时才有）。 */
 
@@ -2270,7 +2259,7 @@ class ChatViewModel @Inject constructor(
             BusySendMode.STEER -> steerDuringRun(text)
             BusySendMode.SEND_NOW -> sendNowInterrupting(text)
             BusySendMode.FOLLOW_UP -> enqueueFollowUp(text)
-            BusySendMode.PARALLEL -> startParallelAsk(text)
+            BusySendMode.PARALLEL -> parallelAsker.start(text)
         }
     }
 
@@ -2392,97 +2381,31 @@ class ChatViewModel @Inject constructor(
      * 模型与思考档位由宿主按启动默认值填，客户端不用传；答案走该会话的回复流，
      * 面板里逐字显示，收尾后可以把它插回输入框。
      */
-    private fun startParallelAsk(text: String) {
-        val target = device ?: return
-        val question = text.trim()
-        if (question.isEmpty()) return
-        val projectId = projectIdOf()
-        if (projectId == null) {
-            actionNote = "这个会话没有归属项目，没法另开匿名会话"
-            return
+    /** 匿名运行时台账：并行问询与翻译共用，离开页面时由它自己的 stopScope 收尾。 */
+    private val ephemeral = EphemeralRuntimes()
+
+    // ---- 并行问询（实现在 ParallelAskController 里） ----
+    private val parallelAsker = ParallelAskController(
+        scope = viewModelScope,
+        api = { api },
+        device = { device },
+        token = { token },
+        projectId = { projectIdOf() },
+        ephemeral = ephemeral,
+        onNote = { actionNote = it },
+    )
+
+    val parallelAsk: ParallelAsk? get() = parallelAsker.parallelAsk
+
+    var parallelInsert: String?
+        get() = parallelAsker.parallelInsert
+        set(value) {
+            parallelAsker.parallelInsert = value
         }
-        askJob?.cancel()
-        stopParallelRuntime()
-        askMerger = ReplyMerger()
-        parallelAsk = ParallelAsk(question = question, sessionId = "", busy = true)
-        askJob = viewModelScope.launch {
-            try {
-                val anon = api.createAnonymousSession(target, token, projectId)
-                parallelAsk = parallelAsk?.copy(sessionId = anon)
-                // 会话一建出来就先登记：后面 prompt 抛异常、或宿主不回 agentId / accepted=false 时，
-                // 先记账：agentId 要等 prompt 的响应才知道，记在前面的意义是「中途取消也有人收尾」。
-                ephemeral.put(SLOT_PARALLEL, RuntimeTarget(anon, "", 0L))
-                val delivery = api.sendPrompt(
-                    target,
-                    token,
-                    anon,
-                    ChatPayloads.promptBody(newRequestId(), question),
-                )
-                if (delivery.agentId != null) {
-                    ephemeral.put(SLOT_PARALLEL, RuntimeTarget(anon, delivery.agentId, delivery.runtimeGeneration ?: 0L))
-                }
-                if (!delivery.accepted) {
-                    parallelAsk = parallelAsk?.copy(busy = false, error = delivery.error ?: "宿主没有接受这条问题")
-                    return@launch
-                }
-                // 先投递后订阅也不丢帧：服务端在订阅时会回放本轮已产出的帧。
-                try {
-                    api.sessionStream(target, token, anon).collect { frame ->
-                        val snapshot = when {
-                            frame.data.trim() == "[DONE]" -> askMerger.finish()
-                            else -> {
-                                val parsed = attempt {
-                                    PideckJson.parseToJsonElement(frame.data) as? JsonObject
-                                }.getOrNull()
-                                if (parsed != null) askMerger.applyFrame(parsed) else askMerger.snapshot()
-                            }
-                        } ?: return@collect
-                        parallelAsk = parallelAsk?.copy(
-                            answer = snapshot.text,
-                            busy = !snapshot.finished,
-                            error = snapshot.errorText,
-                        )
-                        // 这一轮收尾就别再挂着 keepAlive 的订阅（服务端不会主动断）
-                        if (snapshot.finished) throw AskStreamDone()
-                    }
-                } catch (e: AskStreamDone) {
-                    // 正常收尾
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                if (e is CancellationException) throw e
-                parallelAsk = parallelAsk?.copy(busy = false, error = describeConnectionError(e))
-            }
-        }
-    }
 
-    /** 面板上「插入输入框」：把答案交出去，然后收掉匿名会话。 */
-    fun insertParallelAnswer() {
-        val ask = parallelAsk ?: return
-        if (ask.answer.isBlank()) return
-        parallelInsert = ask.answer.trim()
-        closeParallelAsk()
-    }
+    fun insertParallelAnswer() = parallelAsker.insertAnswer()
 
-    /** 关面板：取消订阅并停掉匿名会话的 runtime（`noSession` 会话不会自己出现在项目列表里）。 */
-    fun closeParallelAsk() {
-        askJob?.cancel()
-        askJob = null
-        parallelAsk = null
-        stopParallelRuntime()
-    }
-
-    /**
-     * 收尾专用的后台 scope：**不能**用 viewModelScope。
-     *
-     * `ViewModel.clear()` 先关 closeables（viewModelScope 在内）再调 `onCleared()`，
-     * 所以 onCleared 里用 `viewModelScope.launch` 发的请求一条都发不出去（宿主上留一个 noSession 运行时）。
-     * 这个 scope 故意不 cancel：请求发完由 SupervisorJob 自然结束。
-     */
-    private fun stopParallelRuntime() {
-        ephemeral.stop(SLOT_PARALLEL, device, token, api)
-    }
+    fun closeParallelAsk() = parallelAsker.close()
 
     /**
      * 把浮窗里那段正文交给宿主翻一遍。
@@ -2519,7 +2442,7 @@ class ChatViewModel @Inject constructor(
 
     override fun onCleared() {
         // 两个匿名运行时都要卸：以前只清并行问询那个，翻译的从头到尾没有清理点。
-        stopParallelRuntime()
+        parallelAsker.close()
         translator.closeTranslation()
         super.onCleared()
     }
