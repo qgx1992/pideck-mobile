@@ -78,6 +78,10 @@ internal fun ChatMessage.isInternalOnlyMessage(): Boolean {
     // 先按字段判一次、再看 type —— 宿主以后再加一种投影类型也不会又漏一次
     //（第一次漏的就是 guard-replay）。
     if (meta.bool("display") == false) return true
+    // `guard-*` 是 agent 自己的格式纠偏 nudge（`guard-frag-nudge` / `guard-replay`）：
+    // 宿主给的 `display` 是 true，但它是写给模型看的，落到聊天流里就是一句莫名其妙的
+    //「这段思考里有 1-2 个字的短句…」—— 0.5.70 之前整条被 internal 标签剥空才显得「没显示」。
+    if (meta.string("customType").orEmpty().startsWith("guard-")) return true
     return when (meta.string("type")) {
         "customMessage" -> meta.bool("display") != true
         "customEntry" -> {
