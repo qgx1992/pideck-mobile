@@ -28,13 +28,14 @@ class ChatViewModelInitOrderTest {
         val declared = listOf(
             "var busySendMode by",
             "var queuedPrompts by",
-            "var parallelAsk by",
-            "var parallelInsert by",
         )
         declared.forEach { field ->
             val at = source.indexOf(field)
             assertTrue("$field 不见了", at > 0)
             assertTrue("$field 必须声明在 init 之前（否则 init 里赋值会 NPE）", at < initAt)
         }
+
+        // 并行问询与翻译已经搬到 Controller：初始化顺序的隐患随之搬走，
+        // 这里只守 ChatViewModel 自己还在 init 里赋值的那几项。
     }
 }
