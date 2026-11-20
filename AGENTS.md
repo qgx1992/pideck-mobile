@@ -189,6 +189,9 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 加新的 sheet 时在这一个类里加一行，再在 `ChatScreen` 里 `overlays.xxx = true` ——
 **不要再写第 19 个 `var showXxx by remember { mutableStateOf(false) }`**。
 不放 ViewModel 是刻意的：它们描述「这一屏上开着什么」，换会话/重建组合时应该重来。
+`ChatScreen.kt` 只留 `val overlays = remember { ChatOverlays() }` 与一行 `ChatOverlayHost(...)` 调用；
+**面板本体挂在 `ui/chat/ChatOverlays.kt`**（`internal fun ChatOverlayHost`，`@OptIn(ExperimentalMaterial3Api::class)`）。
+`.kt` 文件里凡是被搬走的 `private fun`（`SheetAction` / `clock` 等）都改成了 `internal`，新加辅助函数时记住这点。
 
 ## 原生客户端（0.5.x，2026-11 起接管）
 
