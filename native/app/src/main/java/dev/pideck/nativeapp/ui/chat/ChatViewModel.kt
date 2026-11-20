@@ -1211,6 +1211,65 @@ class ChatViewModel @Inject constructor(
     fun openDir(dir: String) = workspace.openDir(dir)
 
 
+    // ---- 提示词库（实现在 PromptLibraryController 里） ----
+    private val promptLibrary = PromptLibraryController(
+        scope = viewModelScope,
+        api = { api },
+        device = { device },
+        token = { token },
+        localPrompts = { localLibrary.prompts },
+    )
+
+    val prompts: List<PromptSummary> get() = promptLibrary.prompts
+
+    val promptCategories: List<String> get() = promptLibrary.promptCategories
+
+    val promptCategory: String? get() = promptLibrary.promptCategory
+
+    val promptQuery: String get() = promptLibrary.promptQuery
+
+    val promptsBusy: Boolean get() = promptLibrary.promptsBusy
+
+    val promptsError: String? get() = promptLibrary.promptsError
+
+    var promptInsertError: String?
+        get() = promptLibrary.promptInsertError
+        set(value) {
+            promptLibrary.promptInsertError = value
+        }
+
+    val promptPreview: PromptSummary? get() = promptLibrary.promptPreview
+
+    val promptPreviewBody: String? get() = promptLibrary.promptPreviewBody
+
+    val promptPreviewBusy: Boolean get() = promptLibrary.promptPreviewBusy
+
+    val hostTemplates: List<PromptTemplate> get() = promptLibrary.hostTemplates
+
+    val promptsHasMorePages: Boolean get() = promptLibrary.promptsHasMorePages
+
+    val hostTemplatesBusy: Boolean get() = promptLibrary.hostTemplatesBusy
+
+    val hostTemplatesError: String? get() = promptLibrary.hostTemplatesError
+
+    fun openPromptLibrary() = promptLibrary.openPromptLibrary()
+
+    fun searchPrompts(text: String) = promptLibrary.searchPrompts(text)
+
+    fun pickPromptCategory(category: String?) = promptLibrary.pickPromptCategory(category)
+
+    fun loadMorePrompts() = promptLibrary.loadMorePrompts()
+
+    fun previewPrompt(prompt: PromptSummary) = promptLibrary.previewPrompt(prompt)
+
+    fun closePromptPreview() = promptLibrary.closePromptPreview()
+
+    fun loadHostTemplates() = promptLibrary.loadHostTemplates()
+
+    fun previewHostTemplate(template: PromptTemplate) = promptLibrary.previewHostTemplate(template)
+
+    fun previewLocalPrompt(prompt: LocalPrompts.Prompt) = promptLibrary.previewLocalPrompt(prompt)
+
     // ---- 快捷消息 / 本机模板（实现在 LocalLibraryController 里） ----
     private val localLibrary = LocalLibraryController(viewModelScope)
 
@@ -1258,219 +1317,10 @@ class ChatViewModel @Inject constructor(
 
     fun removeLocalPrompt(id: String) = localLibrary.removeLocalPrompt(id)
 
-    fun previewLocalPrompt(prompt: LocalPrompts.Prompt) {
-        promptPreview = PromptSummary(
-            slug = prompt.id,
-            title = prompt.title,
-            description = "",
-            category = "本机",
-        )
-        promptPreviewBody = prompt.body
-        promptPreviewBusy = false
-    }
-
 
     // ---- 提示词库（`/api/prompts`，桌面端 Web 的「提示词库」对话框） ----
     // 与工作区同一套策略：打开面板才拉，翻页按需；写操作是 IPC，这里只读。
 
-    var prompts by mutableStateOf<List<PromptSummary>>(emptyList())
-        private set
-
-    var promptCategories by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    /** null = 全部分类。 */
-    var promptCategory by mutableStateOf<String?>(null)
-        private set
-
-    var promptQuery by mutableStateOf("")
-        private set
-
-    var promptsBusy by mutableStateOf(false)
-        private set
-
-    var promptsError by mutableStateOf<String?>(null)
-        private set
-
-    /** 插入失败的一句提示（输入框旁边一行小字，别用 Toast：会盖住键盘上方）。 */
-    var promptInsertError by mutableStateOf<String?>(null)
-
-    /**
-     * 预览中的那条提示词（点列表行 → 先看模板正文，再决定插不插入）。
-     *
-     * 桌面端点一条也是「先展开正文」：模板里常有 `{{变量}}` 与多段说明，
-     * 直接塞进输入框会让人不知道自己在发什么。
-     */
-    var promptPreview by mutableStateOf<PromptSummary?>(null)
-        private set
-
-    var promptPreviewBody by mutableStateOf<String?>(null)
-        private set
-
-    var promptPreviewBusy by mutableStateOf(false)
-        private set
-
-    /**
-     * 桌面端提示词模板（`GET /api/prompt-templates`，宿主 0.13.0 起）。
-     *
-     * 注意与 [prompts] 的区别：那个是桌面端「提示词库」（sqlite 里导入过的），
-     * 这个是 pi 自己 `~/.pi/agent/prompts` 里的模板 —— 以前只有桌面端读得到。
-     */
-    var hostTemplates by mutableStateOf<List<PromptTemplate>>(emptyList())
-        private set
-
-    var hostTemplatesBusy by mutableStateOf(false)
-        private set
-
-    /** 宿主太旧（没有这条路由）时说一句，别把「读不到」当成「没有模板」。 */
-    var hostTemplatesError by mutableStateOf<String?>(null)
-        private set
-
-    /** 快捷消息（本机清单，见 `data/QuickMessages.kt`）。 */
-    private var promptPage = 1
-    private var promptsHasMore = false
-
-    val promptsHasMorePages: Boolean get() = promptsHasMore
-
-    fun openPromptLibrary() {
-        prompts = emptyList()
-        promptPage = 1
-        promptsHasMore = false
-        promptsError = null
-        loadPrompts(reset = true)
-    }
-
-    fun searchPrompts(text: String) {
-        if (text == promptQuery) return
-        promptQuery = text
-        // 搜索是服务端做的（`?search=`），这里退抖一下再打，别每敲一个字都请求
-        searchJob?.cancel()
-        searchJob = viewModelScope.launch {
-            delay(300)
-            loadPrompts(reset = true)
-        }
-    }
-
-    fun pickPromptCategory(category: String?) {
-        if (category == promptCategory) return
-        promptCategory = category
-        loadPrompts(reset = true)
-    }
-
-    fun loadMorePrompts() {
-        if (promptsBusy || !promptsHasMore) return
-        loadPrompts(reset = false)
-    }
-
-    private var searchJob: Job? = null
-
-    private fun loadPrompts(reset: Boolean) {
-        val device = device ?: return
-        if (promptsBusy) return
-        promptsBusy = true
-        promptsError = null
-        val page = if (reset) 1 else promptPage + 1
-        viewModelScope.launch {
-            try {
-                val result = api.prompts(
-                    device = device,
-                    token = token,
-                    search = promptQuery.trim(),
-                    category = promptCategory,
-                    page = page,
-                    pageSize = 20,
-                )
-                prompts = if (reset) result.prompts else prompts + result.prompts.filterNot { incoming ->
-                    prompts.any { it.slug == incoming.slug }
-                }
-                promptCategories = result.categories
-                promptPage = page
-                promptsHasMore = result.hasMore && result.prompts.isNotEmpty()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-
-                promptsError = dev.pideck.nativeapp.data.describeConnectionError(e)
-            } finally {
-                promptsBusy = false
-            }
-        }
-    }
-
-    fun previewPrompt(prompt: PromptSummary) {
-        promptPreview = prompt
-        promptPreviewBody = null
-        promptPreviewBusy = true
-        viewModelScope.launch {
-            try {
-                promptPreviewBody = promptBody(prompt)
-                if (promptPreviewBody == null) {
-                    promptInsertError = "这条提示词取不到内容（可能已经在桌面端删掉了）"
-                }
-            } finally {
-                promptPreviewBusy = false
-            }
-        }
-    }
-
-    fun closePromptPreview() {
-        promptPreview = null
-        promptPreviewBody = null
-        promptPreviewBusy = false
-    }
-
-    /** 打开提示词面板时拉一次宿主模板（失败静默到 [hostTemplatesError]，不挡面板）。 */
-    fun loadHostTemplates() {
-        if (hostTemplatesBusy) return
-        hostTemplatesBusy = true
-        viewModelScope.launch {
-            try {
-                deviceReady.await()
-                val target = device ?: return@launch
-                val result = attempt { api.promptTemplates(target, token) }
-                result
-                    .onSuccess {
-                        hostTemplates = it
-                        hostTemplatesError = null
-                    }
-                    .onFailure {
-                        hostTemplatesError = "桌面端模板没读到（宿主 0.13.0 起才有这条接口）：" +
-                            dev.pideck.nativeapp.data.describeConnectionError(it)
-                    }
-            } finally {
-                hostTemplatesBusy = false
-            }
-        }
-    }
-
-    /** 预览宿主模板：先看正文（模板里常有 `{{变量}}`），再决定插不插入。 */
-    fun previewHostTemplate(template: PromptTemplate) {
-        promptPreview = PromptSummary(
-            slug = template.name,
-            title = template.name,
-            description = template.description,
-            category = "桌面端",
-        )
-        promptPreviewBody = null
-        promptPreviewBusy = true
-        viewModelScope.launch {
-            try {
-                deviceReady.await()
-                val target = device
-                promptPreviewBody = if (target == null) {
-                    null
-                } else {
-                    attempt { api.promptTemplateContent(target, token, template.name) }.getOrNull()
-                }
-                if (promptPreviewBody == null) {
-                    promptInsertError = "这条桌面端模板取不到正文（可能已经在电脑上删掉了）"
-                }
-            } finally {
-                promptPreviewBusy = false
-            }
-        }
-    }
 
 
     /**
@@ -1483,10 +1333,6 @@ class ChatViewModel @Inject constructor(
 
 
     /** 取正文（列表只有摘要）。取不到返回 null，调用方给一句提示、不要把输入框清空。 */
-    suspend fun promptBody(prompt: PromptSummary): String? = attempt {
-        val device = device ?: return@attempt null
-        api.promptContent(device, token, prompt.slug, prompt.category)
-    }.getOrNull()
 
     /** 抽屉打开时调用；同一会话只自动拉一次，之后靠下拉/切页手动刷。 */
     // ---- `@` 文件候选 ----
