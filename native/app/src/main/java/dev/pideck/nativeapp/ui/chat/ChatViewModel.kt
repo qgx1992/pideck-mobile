@@ -1211,6 +1211,65 @@ class ChatViewModel @Inject constructor(
     fun openDir(dir: String) = workspace.openDir(dir)
 
 
+    // ---- 快捷消息 / 本机模板（实现在 LocalLibraryController 里） ----
+    private val localLibrary = LocalLibraryController(viewModelScope)
+
+    val quickMessages: List<String> get() = localLibrary.quickMessages
+
+    var quickDraft: String
+        get() = localLibrary.quickDraft
+        set(value) {
+            localLibrary.quickDraft = value
+        }
+
+    fun updateQuickDraft(value: String) {
+        localLibrary.quickDraft = value
+    }
+
+    val localPrompts: List<LocalPrompts.Prompt> get() = localLibrary.prompts
+
+    var localPromptTitle: String
+        get() = localLibrary.promptTitle
+        set(value) {
+            localLibrary.promptTitle = value
+        }
+
+    var localPromptBody: String
+        get() = localLibrary.promptBody
+        set(value) {
+            localLibrary.promptBody = value
+        }
+
+    val localPromptEditor: Boolean get() = localLibrary.editorOpen
+
+    fun loadQuickMessages() = localLibrary.loadQuickMessages()
+
+    fun addQuickMessage() = localLibrary.addQuickMessage()
+
+    fun removeQuickMessage(text: String) = localLibrary.removeQuickMessage(text)
+
+    fun loadLocalPrompts() = localLibrary.loadLocalPrompts()
+
+    fun openLocalPromptEditor() = localLibrary.openLocalPromptEditor()
+
+    fun closeLocalPromptEditor() = localLibrary.closeLocalPromptEditor()
+
+    fun saveLocalPrompt() = localLibrary.saveLocalPrompt()
+
+    fun removeLocalPrompt(id: String) = localLibrary.removeLocalPrompt(id)
+
+    fun previewLocalPrompt(prompt: LocalPrompts.Prompt) {
+        promptPreview = PromptSummary(
+            slug = prompt.id,
+            title = prompt.title,
+            description = "",
+            category = "本机",
+        )
+        promptPreviewBody = prompt.body
+        promptPreviewBusy = false
+    }
+
+
     // ---- 提示词库（`/api/prompts`，桌面端 Web 的「提示词库」对话框） ----
     // 与工作区同一套策略：打开面板才拉，翻页按需；写操作是 IPC，这里只读。
 
@@ -1268,11 +1327,6 @@ class ChatViewModel @Inject constructor(
         private set
 
     /** 快捷消息（本机清单，见 `data/QuickMessages.kt`）。 */
-    var quickMessages by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    var quickDraft by mutableStateOf("")
-
     private var promptPage = 1
     private var promptsHasMore = false
 
@@ -1418,24 +1472,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun loadQuickMessages() {
-        quickMessages = QuickMessages.load()
-    }
-
-    fun updateQuickDraft(text: String) {
-        quickDraft = text
-    }
-
-    fun addQuickMessage() {
-        val text = quickDraft.trim()
-        if (text.isBlank()) return
-        quickMessages = QuickMessages.add(text)
-        quickDraft = ""
-    }
-
-    fun removeQuickMessage(text: String) {
-        quickMessages = QuickMessages.remove(text)
-    }
 
     /**
      * 本机模板（`data/LocalPrompts.kt`）。
@@ -1444,52 +1480,7 @@ class ChatViewModel @Inject constructor(
      * （`prompts:list` / `prompts:get`），Web 侧没有路由；`/api/prompts` 是另一个库。
      * 宿主那个库没导入过东西时它就是空的，面板不能只长一个空列表。
      */
-    var localPrompts by mutableStateOf<List<LocalPrompts.Prompt>>(emptyList())
-        private set
 
-    var localPromptTitle by mutableStateOf("")
-    var localPromptBody by mutableStateOf("")
-
-    var localPromptEditor by mutableStateOf(false)
-        private set
-
-    fun loadLocalPrompts() {
-        localPrompts = LocalPrompts.load()
-    }
-
-    fun openLocalPromptEditor() {
-        localPromptTitle = ""
-        localPromptBody = ""
-        localPromptEditor = true
-    }
-
-    fun closeLocalPromptEditor() {
-        localPromptEditor = false
-    }
-
-    fun saveLocalPrompt() {
-        if (localPromptBody.isBlank()) return
-        localPrompts = LocalPrompts.add(localPromptTitle, localPromptBody)
-        localPromptEditor = false
-        localPromptTitle = ""
-        localPromptBody = ""
-    }
-
-    fun removeLocalPrompt(id: String) {
-        localPrompts = LocalPrompts.remove(id)
-    }
-
-    /** 本机模板也走同一个预览态：先看正文再插入，行为与桌面端模板一致。 */
-    fun previewLocalPrompt(prompt: LocalPrompts.Prompt) {
-        promptPreview = PromptSummary(
-            slug = prompt.id,
-            title = prompt.title,
-            description = "",
-            category = "本机",
-        )
-        promptPreviewBody = prompt.body
-        promptPreviewBusy = false
-    }
 
     /** 取正文（列表只有摘要）。取不到返回 null，调用方给一句提示、不要把输入框清空。 */
     suspend fun promptBody(prompt: PromptSummary): String? = attempt {
