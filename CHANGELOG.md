@@ -12,6 +12,9 @@
 - 下一步是把 14 个 sheet 的挂载也搬出主函数（`ChatScreen` 目前单函数仍有 900+ 行），
   再拆 `ChatViewModel` 的工作区 / 提示词 / 翻译三块。
 
+`ChatViewModel` 与 `ChatScreen` 的结构拆分：浮层开关集中到 `ChatOverlays`、8 个浮层挂载搬进 `ChatOverlayHost`、差异/工作区/本机模板/提示词库各拆成独立 controller。
+
+
 ## 0.5.69 — 2026-11-19
 
 计划 / 目标模式不再污染聊天记录，提示词面板接上电脑上的模板。

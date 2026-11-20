@@ -603,6 +603,13 @@ cd native && ./gradlew --offline -q :app:assembleRelease     # 产物 app/build/
   运行中的子代理只有锚点、完成才落记录 —— 要看新的就点工作区面板右上角的刷新。
   `toolUses` / `tokens` / `completedAt` 宿主经常不给，缺就整段不写，**别显示 `0 tok` / `0 秒` 占位**
   （`subagentDurationText` 有单测守着）。
+- **聊天页的状态容器与控制器**（0.5.70 起，别再往 `ChatViewModel` 里塞第 87 个 `mutableStateOf`）：
+  `ui/chat/ChatOverlays.kt` 的 `ChatOverlays` 收所有浮层开关（18 个），浮层挂载全在 `ChatOverlayHost(...)` 里，
+  主函数只留 `val overlays = remember { ChatOverlays() }`；`DiffController` / `WorkspaceController` /
+  `LocalLibraryController` / `PromptLibraryController` 各管一块，`ChatViewModel` 里只留转发（getter，
+  界面会赋值的用 `var` 转发）。新增一块状态时先问：能不能挂到这四个上。
+  **翻译与并行问询还与 `EphemeralRuntimes` 强耦合**（匿名运行时台账），要拆先把台账注入进去。
+
 - **`meta.display == false` 的内部注入不画**（`data/Timeline.kt` 的 `isInternalOnlyMessage()`）：
   宿主把 pi 的 `custom_message` 投影成 `role="system"` + `meta.type="customMessage"` + `meta.display`；
   `display:false` 是「给模型看的内部上下文」（目标模式的 `Continue the current goal…`、guard-replay 的
