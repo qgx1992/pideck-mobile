@@ -379,12 +379,6 @@ class ChatViewModel @Inject constructor(
     private var askMerger = ReplyMerger()
 
     /** 浮窗里那段译文（思考卡点「翻译」时才有）。 */
-    var translation by mutableStateOf<TranslationState?>(null)
-        private set
-
-    /** 译文对应的原文与运行时：重翻 / 改译方向都靠它，关浮窗要把匿名会话卸掉。 */
-    private var translateSource = ""
-    private var translateJob: Job? = null
 
     init {
         restoreBusySendMode()
@@ -2496,102 +2490,25 @@ class ChatViewModel @Inject constructor(
      * 走的是与「并行发送」同一条路：匿名会话（`noSession`，不落盘）→ `prompt` → 读回复流 →
      * 收尾 `runtime/stop`。翻完立刻卸运行时，别让它挂在那儿占上下文。
      */
-    fun translate(text: String, target: TranslateTarget = defaultTranslateTarget(text)) {
-        val target_device = device ?: return
-        val body = text.trim()
-        if (body.isEmpty()) return
-        val projectId = projectIdOf()
-        if (projectId == null) {
-            translation = TranslationState(target = target, error = "这个会话没有归属项目，开不了匿名会话")
-            return
-        }
-        translateJob?.cancel()
-        stopTranslateRuntime()
-        translateSource = body
-        translation = TranslationState(target = target, busy = true)
-        val merger = ReplyMerger()
-        translateJob = viewModelScope.launch {
-            try {
-                val anon = api.createAnonymousSession(target_device, token, projectId)
-                ephemeral.put(SLOT_TRANSLATE, RuntimeTarget(anon, "", 0L))
-                val delivery = api.sendPrompt(
-                    target_device,
-                    token,
-                    anon,
-                    ChatPayloads.promptBody(newRequestId(), translateInstruction(body, target)),
-                )
-                if (delivery.agentId != null) {
-                    ephemeral.put(SLOT_TRANSLATE, RuntimeTarget(anon, delivery.agentId, delivery.runtimeGeneration ?: 0L))
-                }
-                if (!delivery.accepted) {
-                    translation = TranslationState(
-                        target = target,
-                        error = delivery.error ?: "宿主没有接受这条翻译请求",
-                    )
-                    return@launch
-                }
-                api.sessionStream(target_device, token, anon).collect { frame ->
-                    val snapshot = when {
-                        frame.data.trim() == "[DONE]" -> merger.finish()
-                        else -> {
-                            val parsed = attempt {
-                                PideckJson.parseToJsonElement(frame.data) as? JsonObject
-                            }.getOrNull()
-                            if (parsed != null) merger.applyFrame(parsed) else merger.snapshot()
-                        }
-                    } ?: return@collect
-                    translation = TranslationState(
-                        target = target,
-                        busy = !snapshot.finished,
-                        text = snapshot.text,
-                        error = snapshot.errorText,
-                    )
-                    if (snapshot.finished) throw AskStreamDone()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: AskStreamDone) {
-                // 正常收尾：译文已在上面写进状态
-                translation = translation?.copy(busy = false)
-            } catch (e: Throwable) {
-                if (e is CancellationException) throw e
-                translation = TranslationState(target = target, error = describeConnectionError(e))
-            } finally {
-                withContext(NonCancellable) { stopTranslateRuntimeNow() }
-            }
-        }
-    }
+    // ---- 翻译（实现在 TranslationController 里） ----
+    private val translator = TranslationController(
+        scope = viewModelScope,
+        api = { api },
+        device = { device },
+        token = { token },
+        projectId = { projectIdOf() },
+        ephemeral = ephemeral,
+    )
 
-    /** 「改译成英文 / 中文」：拿同一段原文按反方向再翻一次。 */
-    fun flipTranslation() {
-        val state = translation ?: return
-        if (state.busy) return
-        val source = translateSource
-        if (source.isBlank()) return
-        translate(source, state.target.flipped())
-    }
+    val translation: TranslationState? get() = translator.translation
 
-    /** 关浮窗：取消订阅、清状态、卸掉匿名会话的运行时。 */
-    fun closeTranslation() {
-        translateJob?.cancel()
-        translateJob = null
-        translation = null
-        translateSource = ""
-        stopTranslateRuntime()
-    }
+    fun translate(text: String, target: TranslateTarget = defaultTranslateTarget(text)) =
+        translator.translate(text, target)
 
-    private fun stopTranslateRuntime() {
-        ephemeral.stop(SLOT_TRANSLATE, device, token, api)
-    }
+    fun flipTranslation() = translator.flipTranslation()
 
-    /** 收尾用：这里已经在协程里，直接等请求发完再走（`attempt` 不会把取消抛成失败）。 */
-    private suspend fun stopTranslateRuntimeNow() {
-        val runtime = ephemeral.take(SLOT_TRANSLATE) ?: return
-        val target = device ?: return
-        attempt {
-            api.stopRuntime(target, token, runtime.sessionId, runtime.agentId, runtime.runtimeGeneration)
-        }
-    }
+    fun closeTranslation() = translator.closeTranslation()
+
 
     /** 排队消息一旦出现在历史里就撤掉提示（宿主那边已经没有「待发」这回事）。 */
     private fun reconcileQueue(messages: List<ChatMessage>) {
@@ -2603,7 +2520,7 @@ class ChatViewModel @Inject constructor(
     override fun onCleared() {
         // 两个匿名运行时都要卸：以前只清并行问询那个，翻译的从头到尾没有清理点。
         stopParallelRuntime()
-        stopTranslateRuntime()
+        translator.closeTranslation()
         super.onCleared()
     }
 }
