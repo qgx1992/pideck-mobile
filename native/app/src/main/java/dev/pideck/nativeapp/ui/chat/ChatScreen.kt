@@ -310,34 +310,20 @@ fun ChatScreen(
         if (!viewModel.streaming) viewModel.refreshContext()
     }
 
-    var showWorkspace by remember { mutableStateOf(false) }
+    val overlays = remember { ChatOverlays() }
     // 顶栏的模型 / 思考档位选择器
-    var showModelSheet by remember { mutableStateOf(false) }
     // 兜底：万一首次拉取失败（主机刚起 / 断线），点开选择器时再补一次
-    LaunchedEffect(showModelSheet) {
-        if (showModelSheet && viewModel.availableModels.isEmpty()) viewModel.loadModels()
+    LaunchedEffect(overlays.model) {
+        if (overlays.model && viewModel.availableModels.isEmpty()) viewModel.loadModels()
     }
-    var showThinkingSheet by remember { mutableStateOf(false) }
     // 本会话的历史提问：点一条跳回那一段
-    var showHistory by remember { mutableStateOf(false) }
     // 历史跳转：key = 要落到的提问，tick 让「再点同一条」也能重新滚、重新闪
-    var jumpKey by remember { mutableStateOf<String?>(null) }
-    var jumpTick by remember { mutableIntStateOf(0) }
     // 闪谁：key + tick（tick 只是为了让同一个 key 也能再触发一次动画）
-    var flashKey by remember { mutableStateOf<String?>(null) }
-    var flashTick by remember { mutableIntStateOf(0) }
     // 顶栏溢出口：导出 HTML / 权限预设 / 上下文用量
-    var showMore by remember { mutableStateOf(false) }
-    var showPermission by remember { mutableStateOf(false) }
-    var showSecurity by remember { mutableStateOf(false) }
-    var showContext by remember { mutableStateOf(false) }
     // 图片附件：系统相册多选；粘贴走剪贴板
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
     ) { uris -> viewModel.addImages(uris) }
-    var showAttachSheet by remember { mutableStateOf(false) }
-    var showPrompts by remember { mutableStateOf(false) }
-    var panelTab by remember { mutableStateOf(ComposerPanelTab.Quick) }
 
     /**
      * 真正「发出去」的那一步：输入框的发送键与快捷消息的「直接发送」共用。
@@ -365,10 +351,7 @@ fun ChatScreen(
     }
 
     // 长按消息 → 复制全文 / 复制代码块 / 自由复制
-    var actionTarget by remember { mutableStateOf<TimelineItem?>(null) }
     // 思考 / 工具点开的那块浮窗（与「自由复制」同一套外壳）
-    var detail by remember { mutableStateOf<DetailContent?>(null) }
-    var freeCopyTarget by remember { mutableStateOf<TimelineItem?>(null) }
 
     // 一次性提示统一走事件：状态里那份可能被下一条覆盖、或在显示期间被清空。
     LaunchedEffect(Unit) {
@@ -450,7 +433,7 @@ fun ChatScreen(
                         contentDescription = "工作区",
                         onClick = {
                             viewModel.loadWorkspace()
-                            showWorkspace = true
+                            overlays.workspace = true
                         },
                         modifier = Modifier.padding(end = 2.dp),
                     )
@@ -459,10 +442,10 @@ fun ChatScreen(
                         AppIconButton(
                             icon = Icons.Default.MoreVert,
                             contentDescription = "更多",
-                            onClick = { showMore = true },
+                            onClick = { overlays.more = true },
                             modifier = Modifier.padding(end = 6.dp),
                         )
-                        DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
+                        DropdownMenu(expanded = overlays.more, onDismissRequest = { overlays.more = false }) {
                             DropdownMenuItem(
                                 text = {
                                     Column {
@@ -477,7 +460,7 @@ fun ChatScreen(
                                 leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) },
                                 enabled = !viewModel.exportBusy,
                                 onClick = {
-                                    showMore = false
+                                    overlays.more = false
                                     viewModel.exportHtml()
                                 },
                             )
@@ -498,7 +481,7 @@ fun ChatScreen(
                                 leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
                                 enabled = !viewModel.restarting,
                                 onClick = {
-                                    showMore = false
+                                    overlays.more = false
                                     viewModel.restartRuntime()
                                 },
                             )
@@ -518,9 +501,9 @@ fun ChatScreen(
                                     },
                                     leadingIcon = { Icon(Icons.Default.Shield, contentDescription = null) },
                                     onClick = {
-                                        showMore = false
+                                        overlays.more = false
                                         viewModel.refreshSecurity()
-                                        showSecurity = true
+                                        overlays.security = true
                                     },
                                 )
                                 PrivilegeControl.PermissionPreset -> DropdownMenuItem(
@@ -536,8 +519,8 @@ fun ChatScreen(
                                     },
                                     leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
                                     onClick = {
-                                        showMore = false
-                                        showPermission = true
+                                        overlays.more = false
+                                        overlays.permission = true
                                     },
                                 )
                                 PrivilegeControl.None -> Unit
@@ -557,10 +540,10 @@ fun ChatScreen(
                                 },
                                 leadingIcon = { Icon(Icons.Default.DataUsage, contentDescription = null) },
                                 onClick = {
-                                    showMore = false
+                                    overlays.more = false
                                     viewModel.refreshContext()
                                     viewModel.refreshCacheStat()
-                                    showContext = true
+                                    overlays.context = true
                                 },
                             )
                         }
@@ -604,7 +587,7 @@ fun ChatScreen(
                         // 记录本来就不带模型，实际跑的是电脑端的默认模型（运行时起来后会换成
                         // 真实名字，见 ChatViewModel.displayModel）
                         text = viewModel.displayModel?.shortLabel ?: "默认模型",
-                        onClick = { showModelSheet = true },
+                        onClick = { overlays.model = true },
                         icon = Icons.Default.Memory,
                         trailing = Icons.Filled.KeyboardArrowDown,
                         accent = viewModel.displayModel == null,
@@ -618,7 +601,7 @@ fun ChatScreen(
                     val level = viewModel.displayThinking?.takeIf { it in levels }
                     SelectChip(
                         text = "思考 ${level?.let(::thinkingLabel) ?: "默认"}",
-                        onClick = { showThinkingSheet = true },
+                        onClick = { overlays.thinking = true },
                         trailing = Icons.Filled.KeyboardArrowDown,
                         accent = level in setOf("high", "xhigh", "max"),
                     )
@@ -632,7 +615,7 @@ fun ChatScreen(
                         onClick = {
                             viewModel.refreshContext()
                             viewModel.refreshCacheStat()
-                            showContext = true
+                            overlays.context = true
                         },
                         accent = usage.overflow || usage.contextPercent >= 85,
                     )
@@ -641,7 +624,7 @@ fun ChatScreen(
                 AppIconButton(
                     icon = Icons.Default.History,
                     contentDescription = "本会话历史",
-                    onClick = { showHistory = true },
+                    onClick = { overlays.history = true },
                     size = 34,
                 )
             }
@@ -680,7 +663,7 @@ fun ChatScreen(
                 sending = viewModel.streaming,
                 images = viewModel.images,
                 imageError = viewModel.imageError,
-                onAttach = { showAttachSheet = true },
+                onAttach = { overlays.attach = true },
                 onRemoveImage = { viewModel.removeImage(it) },
                 onDismissImageError = { viewModel.dismissImageError() },
                 busyMode = viewModel.effectiveBusyMode,
@@ -715,7 +698,7 @@ fun ChatScreen(
                     viewModel.loadQuickMessages()
                     viewModel.loadLocalPrompts()
                     viewModel.loadHostTemplates()
-                    showPrompts = true
+                    overlays.prompts = true
                 },
                 promptError = viewModel.promptInsertError,
                 onDismissPromptError = { viewModel.promptInsertError = null },
@@ -803,14 +786,14 @@ fun ChatScreen(
                             is ChatRow.Single -> when (val item = row.item) {
                                 is TimelineItem.UserMessage -> UserBubble(
                                     item = item,
-                                    onLongPress = { actionTarget = item },
-                                    flashTick = if (item.key == flashKey) flashTick else 0,
+                                    onLongPress = { overlays.actionTarget = item },
+                                    flashTick = if (item.key == overlays.flashKey) overlays.flashTick else 0,
                                 )
 
                                 is TimelineItem.AssistantMessage -> AssistantBlock(
                                     item = item,
-                                    onLongPress = { actionTarget = item },
-                                    onOpenDetail = { viewModel.closeTranslation(); detail = it },
+                                    onLongPress = { overlays.actionTarget = item },
+                                    onOpenDetail = { viewModel.closeTranslation(); overlays.detail = it },
                                 )
                             }
 
@@ -818,7 +801,7 @@ fun ChatScreen(
                                 row = row,
                                 // 「流式对话时展开中间过程」关掉时全程保持折叠（手动展开的不受影响）
                                 autoOpen = expandInterim && row.streaming && row.key == lastKey,
-                                onOpenDetail = { detail = it },
+                                onOpenDetail = { overlays.detail = it },
                             )
                         }
                     }
@@ -845,24 +828,24 @@ fun ChatScreen(
     }
 
     WorkspacePanel(
-        visible = showWorkspace,
-        onDismiss = { showWorkspace = false },
+        visible = overlays.workspace,
+        onDismiss = { overlays.workspace = false },
         viewModel = viewModel,
         // 文件树里的 @ 键：把 `@相对路径` 拼到输入框，跟桌面端同一个用法
         onInsertMention = { path ->
             val needsSpace = draft.isNotEmpty() && !draft.endsWith(" ")
             draft = draft + (if (needsSpace) " " else "") + "@" + path + " "
             ChatDrafts.put(deviceId, viewModel.sessionId, draft)
-            showWorkspace = false
+            overlays.workspace = false
             atBottom = true
         },
     )
     }
 
-    if (showPrompts) {
+    if (overlays.prompts) {
         ComposerPanelSheet(
-            tab = panelTab,
-            onTabChange = { panelTab = it },
+            tab = overlays.panelTab,
+            onTabChange = { overlays.panelTab = it },
             prompts = viewModel.prompts,
             categories = viewModel.promptCategories,
             category = viewModel.promptCategory,
@@ -880,7 +863,7 @@ fun ChatScreen(
             onBackFromPreview = { viewModel.closePromptPreview() },
             onInsertPreview = { body ->
                 insertIntoDraft(body)
-                showPrompts = false
+                overlays.prompts = false
             },
             localPrompts = viewModel.localPrompts,
             localEditor = viewModel.localPromptEditor,
@@ -904,26 +887,26 @@ fun ChatScreen(
             onRemoveQuick = { viewModel.removeQuickMessage(it) },
             onInsertQuick = { text ->
                 insertIntoDraft(text)
-                showPrompts = false
+                overlays.prompts = false
             },
             onSendQuick = { text ->
-                showPrompts = false
+                overlays.prompts = false
                 sendText(text)
             },
             onDismiss = {
-                showPrompts = false
+                overlays.prompts = false
                 viewModel.closePromptPreview()
             },
         )
     }
 
-    if (showAttachSheet) {
-        ModalBottomSheet(onDismissRequest = { showAttachSheet = false }) {
+    if (overlays.attach) {
+        ModalBottomSheet(onDismissRequest = { overlays.attach = false }) {
             SheetAction(
                 label = "从相册选择",
                 detail = "最多 ${ImagePrep.MAX_COUNT} 张",
                 onClick = {
-                    showAttachSheet = false
+                    overlays.attach = false
                     imagePicker.launch("image/*")
                 },
             )
@@ -931,7 +914,7 @@ fun ChatScreen(
                 label = "粘贴图片",
                 detail = "剪贴板里的截图",
                 onClick = {
-                    showAttachSheet = false
+                    overlays.attach = false
                     viewModel.pasteImage()
                 },
             )
@@ -939,21 +922,21 @@ fun ChatScreen(
         }
     }
 
-    actionTarget?.let { target ->
+    overlays.actionTarget?.let { target ->
         MessageActionsSheet(
             item = target,
-            onDismiss = { actionTarget = null },
+            onDismiss = { overlays.actionTarget = null },
             onFreeCopy = {
-                actionTarget = null
-                freeCopyTarget = target
+                overlays.actionTarget = null
+                overlays.freeCopy = target
             },
             onEditMessage = {
-                actionTarget = null
+                overlays.actionTarget = null
                 (target as? TimelineItem.UserMessage)?.let(viewModel::openEditMessage)
             },
             onCopy = { text ->
                 clipboard.setText(AnnotatedString(text))
-                actionTarget = null
+                overlays.actionTarget = null
                 scope.launch { snackbar.showSnackbar("已复制 ${text.length} 字") }
             },
         )
@@ -964,39 +947,39 @@ fun ChatScreen(
         EditMessageDialog(viewModel)
     }
 
-    if (showModelSheet) {
+    if (overlays.model) {
         ModelSheet(
             models = viewModel.availableModels,
             current = viewModel.displayModel,
             busy = viewModel.modelsBusy,
             onRefresh = { viewModel.loadModels(force = true) },
             onPick = { model ->
-                showModelSheet = false
+                overlays.model = false
                 viewModel.applyModel(
                     SessionModel(provider = model.provider, modelId = model.id, modelName = model.name),
                 )
             },
-            onDismiss = { showModelSheet = false },
+            onDismiss = { overlays.model = false },
         )
     }
-    if (showThinkingSheet) {
+    if (overlays.thinking) {
         ThinkingSheet(
             levels = viewModel.thinkingLevels,
             current = viewModel.displayThinking,
             modelLabel = viewModel.displayModel?.shortLabel,
             onPick = { level ->
-                showThinkingSheet = false
+                overlays.thinking = false
                 viewModel.applyThinking(level)
             },
-            onDismiss = { showThinkingSheet = false },
+            onDismiss = { overlays.thinking = false },
         )
     }
     // 历史跳转：滚到那一句并让它停稳。
     // 直接 scrollToItem 有两个坑 —— ① 顶上挂着「加载更早的消息」时行下标要 +1；
     // ② 行高要等布局量完才知道，量之前滚到的是估算位置。所以滚完校验一次，
     //    目标没贴到顶部就再来一遍（最多 3 次，够覆盖慢机型上的长列表）。
-    LaunchedEffect(jumpKey, jumpTick) {
-        val key = jumpKey ?: return@LaunchedEffect
+    LaunchedEffect(overlays.jumpKey, overlays.jumpTick) {
+        val key = overlays.jumpKey ?: return@LaunchedEffect
         if (key.isEmpty()) return@LaunchedEffect
         repeat(3) {
             val leading = if (viewModel.hasOlder) 1 else 0
@@ -1010,13 +993,13 @@ fun ChatScreen(
         }
     }
     // 高亮闪完就清掉，别让气泡一直亮着
-    LaunchedEffect(flashKey, flashTick) {
-        if (flashKey == null) return@LaunchedEffect
+    LaunchedEffect(overlays.flashKey, overlays.flashTick) {
+        if (overlays.flashKey == null) return@LaunchedEffect
         kotlinx.coroutines.delay(1_800)
-        flashKey = null
+        overlays.flashKey = null
     }
 
-    freeCopyTarget?.let { target ->
+    overlays.freeCopy?.let { target ->
         FreeCopyDialog(
             text = when (target) {
                 is TimelineItem.UserMessage -> target.text
@@ -1024,23 +1007,23 @@ fun ChatScreen(
             },
             onCopyAll = { text ->
                 clipboard.setText(AnnotatedString(text))
-                freeCopyTarget = null
+                overlays.freeCopy = null
                 scope.launch { snackbar.showSnackbar("已复制 ${text.length} 字") }
             },
-            onDismiss = { freeCopyTarget = null },
+            onDismiss = { overlays.freeCopy = null },
         )
     }
-    detail?.let { content ->
+    overlays.detail?.let { content ->
         DetailDialog(
             content = content,
             onCopyAll = { text ->
                 clipboard.setText(AnnotatedString(text))
-                detail = null
+                overlays.detail = null
                 viewModel.closeTranslation()
                 scope.launch { snackbar.showSnackbar("已复制 ${text.length} 字") }
             },
             onDismiss = {
-                detail = null
+                overlays.detail = null
                 viewModel.closeTranslation()
             },
             translation = if (content.translatable) viewModel.translation else null,
@@ -1066,46 +1049,46 @@ fun ChatScreen(
             },
         )
     }
-    if (showHistory) {
+    if (overlays.history) {
         val turns = remember(viewModel.items) { buildHistoryTurns(viewModel.items, ::clock) }
         HistorySheet(
             turns = turns,
-            onDismiss = { showHistory = false },
+            onDismiss = { overlays.history = false },
             onPick = { turn ->
-                showHistory = false
+                overlays.history = false
                 atBottom = false
-                jumpKey = turn.key
-                jumpTick += 1
-                flashKey = turn.key
-                flashTick += 1
+                overlays.jumpKey = turn.key
+                overlays.jumpTick += 1
+                overlays.flashKey = turn.key
+                overlays.flashTick += 1
             },
         )
     }
-    if (showSecurity) {
+    if (overlays.security) {
         SecurityLevelSheet(
             security = viewModel.security,
             sessionId = viewModel.sessionId,
             busy = viewModel.securityBusy,
             onPick = { levelId ->
                 viewModel.chooseSecurityLevel(levelId)
-                showSecurity = false
+                overlays.security = false
             },
             onRefresh = { viewModel.refreshSecurity() },
-            onDismiss = { showSecurity = false },
+            onDismiss = { overlays.security = false },
         )
     }
-    if (showPermission) {
+    if (overlays.permission) {
         PermissionSheet(
             current = viewModel.permissionPreset,
             busy = viewModel.presetBusy,
             onPick = { preset ->
                 viewModel.choosePermission(preset)
-                showPermission = false
+                overlays.permission = false
             },
-            onDismiss = { showPermission = false },
+            onDismiss = { overlays.permission = false },
         )
     }
-    if (showContext) {
+    if (overlays.context) {
         ContextSheet(
             usage = viewModel.contextUsage,
             busy = viewModel.contextBusy,
@@ -1120,11 +1103,39 @@ fun ChatScreen(
                 viewModel.refreshCacheStat()
             },
             onCompact = { prompt -> viewModel.compact(prompt) },
-            onDismiss = { showContext = false },
+            onDismiss = { overlays.context = false },
         )
     }
     FilePreviewDialog(viewModel = viewModel)
     DiffDialog(viewModel = viewModel)
+}
+
+/**
+ * 聊天页的浮层开关（提示词面板 / 附件 / 模型 / 历史 / 上下文 / 导出预览……）。
+ *
+ * 这些以前是 `ChatScreen` 里 18 个分散的 `remember`，主函数光状态声明就占了一屏。
+ * 收进一个容器后，主函数只留一行 `val overlays = remember { ChatOverlays() }`；
+ * 容器不进 ViewModel —— 它描述的是「这一屏上开着什么」，换会话或重建组合时就该重来一次。
+ */
+private class ChatOverlays {
+    var workspace by mutableStateOf(false)
+    var model by mutableStateOf(false)
+    var thinking by mutableStateOf(false)
+    var history by mutableStateOf(false)
+    var more by mutableStateOf(false)
+    var permission by mutableStateOf(false)
+    var security by mutableStateOf(false)
+    var context by mutableStateOf(false)
+    var attach by mutableStateOf(false)
+    var prompts by mutableStateOf(false)
+    var panelTab by mutableStateOf(ComposerPanelTab.Quick)
+    var actionTarget by mutableStateOf<TimelineItem?>(null)
+    var detail by mutableStateOf<DetailContent?>(null)
+    var freeCopy by mutableStateOf<TimelineItem?>(null)
+    var jumpKey by mutableStateOf<String?>(null)
+    var jumpTick by mutableIntStateOf(0)
+    var flashKey by mutableStateOf<String?>(null)
+    var flashTick by mutableIntStateOf(0)
 }
 
 @Composable

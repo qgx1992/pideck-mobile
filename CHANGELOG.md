@@ -1,3 +1,17 @@
+## 0.5.70 — 2026-11-20
+
+聊天页开始瘦身（第一步，行为不变）。
+
+- **浮层开关收进一个容器**：`ui/chat/ChatScreen.kt` 里 18 个散落的
+  `var showXxx by remember { mutableStateOf(false) }`（提示词面板、附件、模型、思考档位、
+  历史、更多菜单、权限、安全等级、上下文、导出预览、消息动作、详情浮窗、自由复制、跳转/闪烁高亮……）
+  收进 `private class ChatOverlays`，主函数只留一行
+  `val overlays = remember { ChatOverlays() }`。
+- 为什么不做成 ViewModel 状态：这些开关描述的是「这一屏上开着什么」，
+  换会话、转屏重建时本来就该重来一次；放进 ViewModel 会让「切走再切回仍然开着」变成新语义。
+- 下一步是把 14 个 sheet 的挂载也搬出主函数（`ChatScreen` 目前单函数仍有 900+ 行），
+  再拆 `ChatViewModel` 的工作区 / 提示词 / 翻译三块。
+
 ## 0.5.69 — 2026-11-19
 
 计划 / 目标模式不再污染聊天记录，提示词面板接上电脑上的模板。

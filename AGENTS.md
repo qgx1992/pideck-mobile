@@ -181,6 +181,15 @@ curl -s http://<本机局域网IP>:8080/<包名>.apk | sha256sum             # �
 - 发版时想验证这套逻辑：本地包号比 Release 低一档即可（0.5.49 装本地、0.5.50 发 Release），
   设置里应当报「有新版 0.5.50」。
 
+### 聊天页的浮层开关集中在 `ChatOverlays`
+
+`native/app/src/main/java/dev/pideck/nativeapp/ui/chat/ChatScreen.kt` 顶部的
+`private class ChatOverlays` 持有 18 个浮层开关（提示词面板 / 附件 / 模型 / 思考档位 / 历史 /
+更多菜单 / 权限 / 安全等级 / 上下文 / 导出预览 / 消息动作 / 详情浮窗 / 自由复制 / 跳转与闪烁高亮）。
+加新的 sheet 时在这一个类里加一行，再在 `ChatScreen` 里 `overlays.xxx = true` ——
+**不要再写第 19 个 `var showXxx by remember { mutableStateOf(false) }`**。
+不放 ViewModel 是刻意的：它们描述「这一屏上开着什么」，换会话/重建组合时应该重来。
+
 ## 原生客户端（0.5.x，2026-11 起接管）
 
 现在的客户端是纯 Kotlin + Compose，源码在 `native/app/src/main/java/dev/pideck/nativeapp/`，
