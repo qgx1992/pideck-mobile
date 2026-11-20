@@ -1683,51 +1683,27 @@ class ChatViewModel @Inject constructor(
         previewText = ""
     }
 
-    // ---- 改动 diff（点「改动」里的文件看具体改了哪几行） ----
+    // ---- 改动 diff（实现在 DiffController 里，这里只做转发） ----
+    private val diffController = DiffController(
+        scope = viewModelScope,
+        api = { api },
+        device = { device },
+        token = { token },
+        projectId = { projectIdOf() },
+    )
 
-    var diffPath by mutableStateOf<String?>(null)
-        private set
+    val diffPath: String? get() = diffController.path
 
-    var diffText by mutableStateOf("")
-        private set
+    val diffText: String get() = diffController.text
 
-    var diffBusy by mutableStateOf(false)
-        private set
+    val diffBusy: Boolean get() = diffController.busy
 
-    var diffGroup by mutableStateOf("workingTree")
-        private set
+    val diffGroup: String get() = diffController.group
 
-    fun openDiff(file: ChangedFile) {
-        val device = device ?: return
-        val projectId = projectIdOf() ?: return
-        diffPath = file.path
-        diffGroup = file.group
-        diffText = ""
-        diffBusy = true
-        viewModelScope.launch {
-            try {
-                val payload = api.fileDiff(device, token, projectId, file.group, file.path)
-                diffText = if (payload == null) {
-                    ""
-                } else {
-                    LineDiff.render(payload.original, payload.modified)
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
+    fun openDiff(file: ChangedFile) = diffController.open(file)
 
-                diffText = dev.pideck.nativeapp.data.describeConnectionError(e)
-            } finally {
-                diffBusy = false
-            }
-        }
-    }
+    fun closeDiff() = diffController.close()
 
-    fun closeDiff() {
-        diffPath = null
-        diffText = ""
-    }
 
     private fun projectIdOf(): String? =
         stateStore.session(deviceId, sessionId)?.projectId
