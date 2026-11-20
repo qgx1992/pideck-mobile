@@ -342,7 +342,7 @@ private fun PromptList(
                 )
             }
         }
-        items(hostTemplates, key = { "tpl-" + it.name }) { template ->
+        items(hostTemplates, key = { "tpl-" + it.scope + "-" + it.name }) { template ->
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                 shape = RoundedCornerShape(12.dp),

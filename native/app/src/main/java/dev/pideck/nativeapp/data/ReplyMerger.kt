@@ -195,7 +195,9 @@ class ReplyMerger(
                         state = if (type == "tool-output-error") "output-error" else "output-available",
                         input = frame["input"],
                         output = frame["output"],
-                        errorText = frame.str("errorText") ?: "Tool failed",
+                        // 只有真错误才写 errorText：以前成功的结果也拿到 "Tool failed"，
+                        // 工具卡会显示失败并藏掉 output。
+                        errorText = if (type == "tool-output-error") frame.str("errorText") ?: "Tool failed" else null,
                     )
                 }
                 return snapshot()

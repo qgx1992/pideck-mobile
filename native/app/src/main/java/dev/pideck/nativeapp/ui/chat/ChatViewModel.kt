@@ -1862,7 +1862,13 @@ class ChatViewModel @Inject constructor(
      * 再走 `viewModelScope.launch` 版本等于什么都没做（注释承诺的收尾从未执行）。
      */
     private suspend fun refreshHistoryNow(seq: Int) {
-        val target = device ?: return
+        // 设备被删 / 令牌读不出来时不能就这么早退：loading 初值是 true，
+        // 早退的结果是聊天页永远停在「正在读取消息…」，连个错误都没有。
+        val target = device ?: run {
+            loading = false
+            error = "设备已不存在，回设备页重新添加"
+            return
+        }
         if (items.isEmpty()) loading = true
         if (seq == historyRefreshSeq && items.isEmpty()) error = null
         try {
