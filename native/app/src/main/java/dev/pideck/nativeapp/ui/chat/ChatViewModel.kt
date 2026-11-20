@@ -1178,33 +1178,38 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    // ---- 工作区（抽屉里的三页） ----
-    // 三份数据都是「点开抽屉才拉」，别处跑完一轮回到前台时顺带刷一下。
+    // ---- 工作区（抽屉里的三页）：实现在 WorkspaceController 里 ----
+    private val workspace = WorkspaceController(
+        scope = viewModelScope,
+        api = { api },
+        device = { device },
+        token = { token },
+        session = { stateStore.session(deviceId, sessionId) },
+        projectId = { projectIdOf() },
+        onSubagents = { subagents = it },
+    )
 
-    var workspaceTodo by mutableStateOf<WorkspaceTodo?>(null)
-        private set
+    val workspaceTodo: WorkspaceTodo? get() = workspace.todo
 
-    var workspaceChanges by mutableStateOf<WorkspaceChanges?>(null)
-        private set
+    val workspaceChanges: WorkspaceChanges? get() = workspace.changes
 
-    /** 工作区「改动」页底部的最近提交（`/api/git/log`，只读，失败就空着不影响上面）。 */
-    var workspaceCommits by mutableStateOf<List<GitCommit>>(emptyList())
-        private set
+    val workspaceCommits: List<GitCommit> get() = workspace.commits
 
-    var workspaceFiles by mutableStateOf<List<FileNode>>(emptyList())
-        private set
+    val workspaceFiles: List<FileNode> get() = workspace.files
 
     /** 文件页当前所在目录（项目内相对路径，"" 是根）。 */
-    var workspaceDir by mutableStateOf("")
-        private set
+    val workspaceDir: String get() = workspace.dir
 
-    var workspaceBusy by mutableStateOf(false)
-        private set
+    val workspaceBusy: Boolean get() = workspace.busy
 
-    var workspaceError by mutableStateOf<String?>(null)
-        private set
+    val workspaceError: String? get() = workspace.error
 
-    private var workspaceLoaded = false
+    fun loadWorkspace(force: Boolean = false) = workspace.load(force)
+
+    fun refreshWorkspace() = workspace.refresh()
+
+    fun openDir(dir: String) = workspace.openDir(dir)
+
 
     // ---- 提示词库（`/api/prompts`，桌面端 Web 的「提示词库」对话框） ----
     // 与工作区同一套策略：打开面板才拉，翻页按需；写操作是 IPC，这里只读。
@@ -1493,80 +1498,6 @@ class ChatViewModel @Inject constructor(
     }.getOrNull()
 
     /** 抽屉打开时调用；同一会话只自动拉一次，之后靠下拉/切页手动刷。 */
-    fun loadWorkspace(force: Boolean = false) {
-        if (workspaceLoaded && !force) return
-        workspaceLoaded = true
-        refreshWorkspace()
-    }
-
-    fun refreshWorkspace() {
-        val device = device ?: return
-        val projectId = projectIdOf() ?: run {
-            workspaceError = "这个会话没有关联项目，看不到改动与文件"
-            return
-        }
-        workspaceBusy = true
-        workspaceError = null
-        viewModelScope.launch {
-            try {
-                val session = stateStore.session(deviceId, sessionId)
-                // 五个面板各自独立失败：**要记下来**。
-                // 以前全是 `attempt {}.getOrNull()`，断网/超时/401 全被吞成 null，
-                // 界面显示「没有待办 / 没有改动 / 空文件树」—— 用户只会以为数据丢了。
-                val failures = linkedSetOf<String>()
-                suspend fun <T> attempt(label: String, block: suspend () -> T): T? =
-                    try {
-                        block()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Throwable) {
-                        if (e is CancellationException) throw e
-                        failures += "$label：${describeConnectionError(e)}"
-                        null
-                    }
-                val todo = attempt("待办") { api.todo(device, token, sessionId) }
-                val changes = attempt("改动") {
-                    api.changes(device, token, projectId, session?.projectPath)
-                }
-                val files = attempt("文件") {
-                    api.files(device, token, projectId, workspaceDir)
-                } ?: emptyList()
-                val agents = attempt("子任务") { api.subagents(device, token, sessionId) }
-                    ?: emptyList()
-                // 提交历史是锦上添花：拿不到（不是仓库 / 没装 git）就空着，不打断上面三页
-                val commits = if (changes?.repo == true) {
-                    attempt { api.gitLog(device, token, projectId, limit = 15) }
-                        .getOrDefault(emptyList())
-                } else {
-                    emptyList()
-                }
-                workspaceCommits = commits
-                workspaceTodo = todo
-                workspaceChanges = changes
-                workspaceFiles = files
-                subagents = agents
-                workspaceError = if (failures.isEmpty()) {
-                    null
-                } else {
-                    "部分面板没读到（其余照常显示）：" + failures.joinToString("；")
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-
-                workspaceError = dev.pideck.nativeapp.data.describeConnectionError(e)
-            } finally {
-                workspaceBusy = false
-            }
-        }
-    }
-
-    fun openDir(dir: String) {
-        workspaceDir = dir
-        refreshWorkspace()
-    }
-
     // ---- `@` 文件候选 ----
     // 候选只用当前目录这一层：深目录全量扫太贵，而用户打 `@` 时通常只想引当前层或已知路径。
     // 拿不到时输入框不弹候选，不报错。
