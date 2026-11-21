@@ -282,7 +282,8 @@ class ChatViewModel @Inject constructor(
 
         /** 直播节拍：2s 一次（用户 0.5.33 要求）。 */
         /** 统计行问宿主要的节拍：只用来「看有没有新值」，不按这个间隔重排。 */
-        const val HOST_STATS_POLL_MS = 1_000L
+        /** 宿主只在落一步时结算 perf，1 秒打一次纯属浪费；2 秒足够跟上。 */
+        const val HOST_STATS_POLL_MS = 2_000L
 
         /** 宿主 perf 超过这个岁数就不认了（没有 `endedAt` 可对账时的兜底）。 */
         const val HOST_PERF_FRESH_MS = 120_000L
@@ -738,8 +739,9 @@ class ChatViewModel @Inject constructor(
                 throw e
             } catch (e: Throwable) {
                 if (e is CancellationException) throw e
-                // 命中率只是辅助信息：拉不到就当没有，别用一条报错挡住上下文用量
+                // 命中率只是辅助信息，不能因为一条报错挡住上下文用量；但也不能完全没痕迹。
                 cacheStat = null
+                actionNote = "读取缓存命中率失败：" + describeConnectionError(e)
             } finally {
                 cacheBusy = false
             }
@@ -1987,12 +1989,15 @@ class ChatViewModel @Inject constructor(
             imageError = "一条消息最多带 ${ImagePrep.MAX_COUNT} 张图"
             return
         }
-        val prepared = platform.imageFromClipboard()
-        if (prepared == null) {
-            imageError = "剪贴板里没有图片"
-            return
+        // 解码一张几 MB 的图要几十毫秒，主线程做会卡住输入框（粘贴时最明显）。
+        viewModelScope.launch {
+            val prepared = withContext(Dispatchers.IO) { platform.imageFromClipboard() }
+            if (prepared == null) {
+                imageError = "剪贴板里没有图片"
+                return@launch
+            }
+            images = images + prepared
         }
-        images = images + prepared
     }
 
     fun removeImage(id: String) {

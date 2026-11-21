@@ -88,7 +88,9 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val devices = attempt { repository.devices.first() }.getOrDefault(emptyList())
             deviceCount = devices.size
-            device = devices.firstOrNull { it.id == deviceId } ?: devices.firstOrNull()
+            // 传进来的 deviceId 找不到时不要静默跳到第一台：设置页会显示别的设备的地址、
+            // 用量与会话数，用户还以为自己在看当前设备。宁可空着（界面会显示「未选择设备」）。
+            device = devices.firstOrNull { it.id == deviceId }
             val cached = device?.let { StateCache.get(it.id) }
             hostVersion = cached?.version
             sessionCount = cached?.sessions?.size ?: 0
