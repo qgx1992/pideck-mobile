@@ -26,8 +26,13 @@ object NotificationNav {
      * 必须带上 deviceId：只用 sessionId 会让两台设备的同名会话（克隆过的工作区很常见）
      * 互相覆盖，点回来还会开错机器。
      */
-    fun notificationId(deviceId: String, sessionId: String): Int =
-        "$deviceId|$sessionId".hashCode()
+    fun notificationId(deviceId: String, sessionId: String, tag: String = TAG_DONE): Int =
+        "$deviceId|$sessionId|$tag".hashCode()
+
+    /** 「它在等你回答」与「回复完成」必须是两条通知：共用一个 id 时，静音了完成通知
+     *  的人会把要回答的那条一起顶掉。 */
+    const val TAG_ASK = "ask"
+    const val TAG_DONE = "done"
 
     private val _flow = MutableStateFlow<Target?>(null)
     val flow: StateFlow<Target?> = _flow.asStateFlow()

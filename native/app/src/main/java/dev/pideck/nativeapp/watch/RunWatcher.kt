@@ -3,6 +3,7 @@ package dev.pideck.nativeapp.watch
 import dev.pideck.nativeapp.data.attempt
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import androidx.core.content.ContextCompat
 
 /**
@@ -22,7 +23,11 @@ object RunWatcher {
     /** 启动看护。前台时调用才稳（Android 12+ 限制后台启动前台服务）。 */
     fun start(context: Context) {
         val intent = Intent(context, RunWatchService::class.java)
+        // Android 12+ 在后台起前台服务会抛 ForegroundServiceStartNotAllowedException。
+        // 以前这里被 attempt 静默吞掉，表现只是「跑完了没有通知」；至少留一行诊断。
         attempt { ContextCompat.startForegroundService(context, intent) }
+            .exceptionOrNull()
+            ?.let { Log.w("PiDeck", "看护服务启动失败（多半是后台启动限制）", it) }
     }
 
     fun stop(context: Context) {

@@ -119,10 +119,13 @@ internal class PromptLibraryController(
     }
 
     private var searchJob: Job? = null
+    private var searchSeq = 0
 
     private fun loadPrompts(reset: Boolean) {
         val device = device() ?: return
-        if (promptsBusy) return
+        // 新搜索必须顶掉旧的：原本 busy 时直接 return，列表会停在上一轮关键字的结果上；
+        // 单靠 busy 还会让旧请求的 finally 把新请求的忙碌状态提前复位。
+        val seq = ++searchSeq
         promptsBusy = true
         promptsError = null
         val page = if (reset) 1 else promptPage + 1
@@ -137,6 +140,7 @@ internal class PromptLibraryController(
                     page = page,
                     pageSize = 20,
                 )
+                if (seq != searchSeq) return@launch
                 prompts = if (reset) result.prompts else prompts + result.prompts.filterNot { incoming ->
                     prompts.any { it.slug == incoming.slug }
                 }
@@ -150,7 +154,7 @@ internal class PromptLibraryController(
 
                 promptsError = dev.pideck.nativeapp.data.describeConnectionError(e)
             } finally {
-                promptsBusy = false
+                if (seq == searchSeq) promptsBusy = false
             }
         }
     }

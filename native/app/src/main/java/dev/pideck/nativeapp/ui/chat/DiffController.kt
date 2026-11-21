@@ -34,12 +34,16 @@ internal class DiffController(
     var busy by mutableStateOf(false)
         private set
 
+    /** 快速点两个文件时，只允许最后点的那次落地（否则会出现「标题是 B、内容是 A」）。 */
+    private var openSeq = 0
+
     var group by mutableStateOf("workingTree")
         private set
 
     fun open(file: ChangedFile) {
         val target = device() ?: return
         val project = projectId() ?: return
+        val seq = ++openSeq
         path = file.path
         group = file.group
         text = ""
@@ -48,6 +52,7 @@ internal class DiffController(
         scope.launch {
             try {
                 val payload = api().fileDiff(target, auth, project, file.group, file.path)
+                if (seq != openSeq) return@launch
                 text = if (payload == null) {
                     ""
                 } else {
@@ -57,9 +62,9 @@ internal class DiffController(
                 throw e
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                text = describeConnectionError(e)
+                if (seq == openSeq) text = describeConnectionError(e)
             } finally {
-                busy = false
+                if (seq == openSeq) busy = false
             }
         }
     }
