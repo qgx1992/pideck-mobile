@@ -119,18 +119,12 @@ fun WorkspacePanel(
                 container = MaterialTheme.colorScheme.surfaceVariant,
             )
         }
-        TabRow(
-            selectedTabIndex = tab,
-            containerColor = Color.Transparent,
-        ) {
-            tabs.forEachIndexed { index, label ->
-                Tab(
-                    selected = tab == index,
-                    onClick = { tab = index },
-                    text = { Text(label) },
-                )
-            }
-        }
+        LiquidGlassTabs(
+            labels = tabs,
+            selected = tab,
+            onSelect = { tab = it },
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+        )
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             when (tab) {
                 0 -> TodoTab(viewModel.workspaceTodo)
