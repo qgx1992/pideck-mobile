@@ -53,14 +53,6 @@ class SettingsViewModel @Inject constructor(
     var autoCheckUpdate by mutableStateOf(Prefs.autoCheckUpdate)
         private set
 
-    var perfOverlay by mutableStateOf(Prefs.perfOverlay)
-        private set
-
-    fun togglePerfOverlay(enabled: Boolean) {
-        perfOverlay = enabled
-        viewModelScope.launch { Prefs.setPerfOverlay(context, enabled) }
-    }
-
     /** 检查更新的状态（唯一来源在 [UpdateCenter]，这里只是转给界面看）。 */
     val updateState: UpdateState get() = UpdateCenter.state
 

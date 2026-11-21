@@ -33,9 +33,6 @@ object Prefs {
     private val KEY_PROCESS_GROUP = booleanPreferencesKey("process_group_display")
     private val KEY_EXPAND_INTERIM = booleanPreferencesKey("expand_interim_stream")
     private val KEY_AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
-    val perfOverlayFlow = MutableStateFlow(false)
-
-    private val KEY_PERF_OVERLAY = booleanPreferencesKey("perf_overlay")
 
     /** 通知权限只在「还没问过」时请求一次（Android 13+）。 */
     private val KEY_NOTIFY_ASKED = booleanPreferencesKey("notify_permission_asked")
@@ -107,9 +104,6 @@ object Prefs {
      */
     @Volatile
     var autoCheckUpdate: Boolean = true
-
-    /** 性能浮层（FPS / 1% Low）。默认关：绝大多数人不需要。 */
-    var perfOverlay: Boolean = false
         private set
 
     private var loaded = false
@@ -141,9 +135,6 @@ object Prefs {
                 processGroupFlow.value = groupProcess
                 expandInterimFlow.value = expandInterim
                 autoCheckUpdate = data[KEY_AUTO_CHECK_UPDATE] ?: true
-                val overlay = data[KEY_PERF_OVERLAY] ?: false
-                perfOverlay = overlay
-                perfOverlayFlow.value = overlay
                 loadedFlow.value = true
             }
         }
@@ -207,12 +198,6 @@ object Prefs {
         processGroupDisplay = enabled
         processGroupFlow.value = enabled
         context.prefsStore.edit { it[KEY_PROCESS_GROUP] = enabled }
-    }
-
-    suspend fun setPerfOverlay(context: Context, enabled: Boolean) {
-        perfOverlay = enabled
-        perfOverlayFlow.value = enabled
-        context.prefsStore.edit { it[KEY_PERF_OVERLAY] = enabled }
     }
 
     suspend fun setAutoCheckUpdate(context: Context, enabled: Boolean) {
