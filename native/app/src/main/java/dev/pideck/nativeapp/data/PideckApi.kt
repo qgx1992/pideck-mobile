@@ -9,6 +9,9 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -322,7 +325,21 @@ class OkHttpPideckApi(private val client: OkHttpClient) : PideckApi {
                 throw PideckException("messages ${response.code}", code = response.code)
             }
             val body = response.body?.string() ?: throw PideckException("messages: 空响应")
-            PideckJson.decodeFromString(SessionMessagePage.serializer(), body)
+            // 逐条解码：宿主给来一条字段不认识的消息（扩展塞了新字段、或半条记录）时，
+            // 整页 `decodeFromString` 会整体失败，界面显示成「连不上宿主」、一页消息全空。
+            val root = attempt { PideckJson.parseToJsonElement(body) as? JsonObject }.getOrNull()
+                ?: throw PideckException("messages: 回包不是 JSON 对象")
+            val messages = (root["messages"] as? JsonArray).orEmpty().mapNotNull { element ->
+                attempt {
+                    PideckJson.decodeFromJsonElement(ChatMessage.serializer(), element)
+                }.getOrNull()
+            }
+            SessionMessagePage(
+                messages = messages,
+                total = (root["total"] as? JsonPrimitive)?.intOrNull ?: messages.size,
+                nextBefore = (root["nextBefore"] as? JsonPrimitive)?.longOrNull,
+                unavailable = (root["unavailable"] as? JsonPrimitive)?.contentOrNull,
+            )
         }
     }
 

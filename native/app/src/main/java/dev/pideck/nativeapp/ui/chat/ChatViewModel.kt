@@ -1875,7 +1875,15 @@ class ChatViewModel @Inject constructor(
             val page = api.messagesPage(target, token, sessionId, pageSize = 40)
             if (seq != historyRefreshSeq) return
             unavailable = page.unavailable
-            items = page.messages.toTimelineItems()
+            // 整页替换会把「刚发出去、还没落盘」的本地气泡一起抹掉（表现：发出去一行字又消失）。
+            // 已经出现在这一页里的（按文本尾巴对账）交给真实记录，其余继续留着等落盘。
+            val landed = page.messages.filter { it.role == "user" }
+                .map { it.text.orEmpty().trim() }
+                .filter { it.isNotEmpty() }
+            val pendingLocals = items.filterIsInstance<TimelineItem.UserMessage>()
+                .filter { it.key.startsWith("local-") }
+                .filterNot { local -> landed.any { it.endsWith(local.text.trim()) } }
+            items = page.messages.toTimelineItems() + pendingLocals
             markLastTurnResult()
             settleTurnStats(page.messages)
             lastMessageSeq = maxOf(lastMessageSeq, QueuedPrompts.baselineOf(page.messages))
@@ -2319,9 +2327,11 @@ class ChatViewModel @Inject constructor(
         if (body.isEmpty()) return
         val submission = ComposerModePayloads.submission(composerMode, text)
         val outgoing = submission.message
-        // 先上屏：等落盘再显示会有半秒「没反应」，重拉历史时这条本地气泡会被真实记录替掉
+        // 先上屏：等落盘再显示会有半秒「没反应」，重拉历史时这条本地气泡会被真实记录替掉。
+        // 记住 key：宿主拒收（不在跑 / 不支持 steer）时要把这行撤掉，否则用户以为已经发出去了。
+        val localKey = "local-${System.currentTimeMillis()}"
         items = items + TimelineItem.UserMessage(
-            key = "local-${System.currentTimeMillis()}",
+            key = localKey,
             text = submission.display,
             timestamp = System.currentTimeMillis(),
         )
@@ -2338,11 +2348,15 @@ class ChatViewModel @Inject constructor(
                         agentMessage = submission.agentMessage,
                     ),
                 )
-                if (!delivery.accepted) error = delivery.error ?: "宿主没有接受这条消息"
+                if (!delivery.accepted) {
+                    items = items.filterNot { it.key == localKey }
+                    error = delivery.error ?: "宿主没有接受这条消息"
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
                 if (e is CancellationException) throw e
+                items = items.filterNot { it.key == localKey }
                 error = describeConnectionError(e)
             }
         }

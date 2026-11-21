@@ -212,16 +212,18 @@ class DeviceRepository(private val context: Context) : DeviceDirectory {
      */
     private suspend fun mutateDevices(block: (List<Device>) -> List<Device>) {
         context.deviceStore.edit { prefs ->
-            val current = decodeDevices(prefs[devicesKey])
+            // 解析失败时**不能**当成空清单回写：改名/配对/touch 会把整份清单覆盖成一条。
+            val current = decodeDevices(prefs[devicesKey]) ?: return@edit
             val encoded = PideckJson.encodeToString(ListSerializer(Device.serializer()), block(current))
             prefs[devicesKey] = encoded
         }
     }
 
-    private fun decodeDevices(raw: String?): List<Device> {
+    /** 解析失败返回 null（不是空表）：调用方据此决定「不回写」，否则重装升级后设备清单会被清空。 */
+    private fun decodeDevices(raw: String?): List<Device>? {
         if (raw == null) return emptyList()
         return attempt {
             PideckJson.decodeFromString(ListSerializer(Device.serializer()), raw)
-        }.getOrDefault(emptyList())
+        }.getOrNull()
     }
 }
