@@ -281,6 +281,25 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(12.dp))
             SectionTitle("诊断")
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("性能浮层", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "屏幕上叠一个可拖动的 FPS / 1% Low 小胶囊，排查卡顿时用（关掉就完全不采样）。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = viewModel.perfOverlay,
+                    onCheckedChange = { viewModel.togglePerfOverlay(it) },
+                )
+            }
             // 闪退现场一没就只剩一句描述。这里给出栈，用户直接复制粘贴就能定位。
             val crash = viewModel.crashLog
             if (crash == null) {

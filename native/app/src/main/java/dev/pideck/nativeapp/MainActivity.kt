@@ -17,6 +17,11 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import dev.pideck.nativeapp.ui.debug.PerfOverlay
 import dev.pideck.nativeapp.data.Prefs
 import dev.pideck.nativeapp.data.ThemeMode
 import dev.pideck.nativeapp.ui.AppNav
@@ -61,7 +66,14 @@ class MainActivity : ComponentActivity() {
                 )
             }
             PiDeckTheme(darkTheme = dark) {
-                AppNav()
+                // 性能浮层挂在最外层：任何页面都能看（设置里打开才采样）。
+                val perfOverlayOn by Prefs.perfOverlayFlow.collectAsState()
+                Box(Modifier.fillMaxSize()) {
+                    AppNav()
+                    if (perfOverlayOn) {
+                        PerfOverlay(modifier = Modifier.align(Alignment.TopStart))
+                    }
+                }
             }
         }
     }
