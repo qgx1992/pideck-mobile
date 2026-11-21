@@ -177,6 +177,9 @@ class ChatViewModel @Inject constructor(
             sendJob?.cancel()
             sendJob = null
             sending = false
+            // 退后台没人看提问卡，5 秒一次的 /api/state 只是白耗电、白打宿主。
+            statePollJob?.cancel()
+            statePollJob = null
         }
     }
 
@@ -194,6 +197,7 @@ class ChatViewModel @Inject constructor(
             live = null
             actionNote = "已回到前台，进度已同步"
         }
+        startStatePolling()
         startWatching()
     }
     private var merger = ReplyMerger()
@@ -2130,21 +2134,29 @@ class ChatViewModel @Inject constructor(
                 if (e is CancellationException) throw e
                 error = describeConnectionError(e)
             } finally {
-                sending = false
                 live = null
                 stopHostStatsWatch()
-                if (turnEndedAt == 0L) turnEndedAt = System.currentTimeMillis()
-                // 收尾必须 NonCancellable：点停止 / 页面销毁会把整个协程 cancel 掉，
-                // 那时 refreshHistory() 之后那句 delay(600) 会立刻抛 CancellationException，
-                // 于是「补拉落盘消息」这条最需要跑的路永远跑不到（统计行停在 — 上）。
-                withContext(NonCancellable) {
-                    refreshHistoryNow(++historyRefreshSeq)
-                    // 落盘比收尾帧略晚：第一次重拉可能还没这条 assistant 消息，
-                    // 补一次把统计行的 tokens 补上（已经结算过就什么都不做）。
-                    if (turnStartedAt > 0L) {
-                        delay(600)
-                        if (turnStartedAt > 0L) refreshHistoryNow(++historyRefreshSeq)
+                if (streamPaused) {
+                    // onAppBackground 会 cancel 本协程：宿主那一轮其实还在跑，
+                    // 不能把半轮当「已结束」结算（秒表清零 + 统计行显示半截数字）。
+                    sending = false
+                } else {
+                    if (turnEndedAt == 0L) turnEndedAt = System.currentTimeMillis()
+                    // 收尾必须 NonCancellable：点停止 / 页面销毁会把整个协程 cancel 掉，
+                    // 那时 refreshHistory() 之后那句 delay(600) 会立刻抛 CancellationException，
+                    // 于是「补拉落盘消息」这条最需要跑的路永远跑不到（统计行停在 — 上）。
+                    withContext(NonCancellable) {
+                        refreshHistoryNow(++historyRefreshSeq)
+                        // 落盘比收尾帧略晚：第一次重拉可能还没这条 assistant 消息，
+                        // 补一次把统计行的 tokens 补上（已经结算过就什么都不做）。
+                        if (turnStartedAt > 0L) {
+                            delay(600)
+                            if (turnStartedAt > 0L) refreshHistoryNow(++historyRefreshSeq)
+                        }
                     }
+                    // 结算完再放开「发送」：提前置 false 时用户下一条一按 resetTurnClock
+                    // 就把还没结算的秒表清零，连发两条的统计会串台。
+                    sending = false
                 }
             }
         }
