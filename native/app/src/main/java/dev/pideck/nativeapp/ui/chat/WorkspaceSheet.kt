@@ -14,7 +14,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.abs
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -90,6 +96,19 @@ fun WorkspacePanel(
 ) {
     var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("待办", "改动", "文件", "子任务")
+    val pager = rememberPagerState(pageCount = { tabs.size })
+
+    // 手指滑过半页 → 胶囊与文字跟着换；点胶囊 → 内容页滑过去。
+    // `isScrollInProgress` 那道守卫是必需的：不加会互相触发（pager 回调改 tab，tab 又命令 pager 动画），
+    // 表现是松手后内容页自己反复抖两下。
+    LaunchedEffect(pager.currentPage) {
+        if (tab != pager.currentPage) tab = pager.currentPage
+    }
+    LaunchedEffect(tab) {
+        if (!pager.isScrollInProgress && pager.currentPage != tab) {
+            pager.animateScrollToPage(tab)
+        }
+    }
 
     RightSidePanel(visible = visible, onDismiss = onDismiss) {
         Row(
@@ -124,17 +143,38 @@ fun WorkspacePanel(
             selected = tab,
             onSelect = { tab = it },
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+            fraction = pager.currentPageOffsetFraction,
         )
-        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            when (tab) {
-                0 -> TodoTab(viewModel.workspaceTodo)
-                1 -> ChangesTab(
-                    changes = viewModel.workspaceChanges,
-                    commits = viewModel.workspaceCommits,
-                    onOpenDiff = viewModel::openDiff,
-                )
-                2 -> FilesTab(viewModel, onInsertMention)
-                else -> SubagentTab(viewModel.subagents)
+        // 每页内容跟着滑动做「淡入 + 轻微放大」，滑走的那页同时淡出；
+        // 位移本身交给 pager（跟手、带速度），这里只叠一层层次感。
+        HorizontalPager(
+            state = pager,
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            pageSpacing = 12.dp,
+            verticalAlignment = Alignment.Top,
+        ) { page ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val away = page - pager.currentPage - pager.currentPageOffsetFraction
+                        val distance = abs(away).coerceAtMost(1f)
+                        alpha = 1f - distance * 0.55f
+                        val shrink = 1f - distance * 0.05f
+                        scaleX = shrink
+                        scaleY = shrink
+                    },
+            ) {
+                when (page) {
+                    0 -> TodoTab(viewModel.workspaceTodo)
+                    1 -> ChangesTab(
+                        changes = viewModel.workspaceChanges,
+                        commits = viewModel.workspaceCommits,
+                        onOpenDiff = viewModel::openDiff,
+                    )
+                    2 -> FilesTab(viewModel, onInsertMention)
+                    else -> SubagentTab(viewModel.subagents)
+                }
             }
         }
         viewModel.workspaceError?.let { message ->

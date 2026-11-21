@@ -60,6 +60,8 @@ internal fun LiquidGlassTabs(
     selected: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    /** 手指拖动中的实时偏移（以「格」为单位，-1..1）。非 0 时胶囊跟手，否则走自己的吸附动画。 */
+    fraction: Float = 0f,
 ) {
     if (labels.isEmpty()) return
     val density = LocalDensity.current
@@ -100,7 +102,9 @@ internal fun LiquidGlassTabs(
             .onSizeChanged { widthPx = it.width }
             .drawBehind {
                 if (segment <= 0f) return@drawBehind
-                val center = (position.value + 0.5f) * segment
+                // 拖动中直接跟手（不打动画），松手后由 position 的弹簧接上。
+                val index = if (fraction != 0f) selected + fraction else position.value
+                val center = (index + 0.5f) * segment
                 val width = (segment * (0.9f + 0.24f * stretch.value) - padPx * 2f)
                     .coerceAtLeast(1f)
                 val height = heightPx - padPx * 2f
