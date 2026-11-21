@@ -23,30 +23,41 @@ object TurnStatsStore {
     /** key = `sessionId|messageId`；只放内存里，attach 时从磁盘补一次。 */
     private val memory = LinkedHashMap<String, TurnStats>()
 
+    /** 读盘只做一次；不能用 `memory.isNotEmpty()` 判断 —— 空盘时每次 attach 都重读，
+     *  而刚 remember 过一条之后又永远不再读（升级后旧统计就丢了）。 */
+    private var loaded = false
+
     fun attach(context: Context) {
         this.context = context.applicationContext
-        if (memory.isNotEmpty()) return
+        if (loaded) return
         val raw = attempt {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getStringSet(KEY, emptySet()).orEmpty()
         }.getOrNull().orEmpty()
-        for (line in raw) {
-            val (key, stats) = decode(line) ?: continue
-            memory[key] = stats
+        synchronized(memory) {
+            for (line in raw) {
+                val (key, stats) = decode(line) ?: continue
+                memory[key] = stats
+            }
         }
+        loaded = true
     }
 
     fun remember(sessionId: String, messageId: String, stats: TurnStats) {
         if (stats.isEmpty) return
         val key = keyOf(sessionId, messageId)
-        memory[key] = stats
-        trim()
+        synchronized(memory) {
+            memory[key] = stats
+            trim()
+        }
         persist()
     }
 
-    fun recall(sessionId: String, messageId: String): TurnStats? = memory[keyOf(sessionId, messageId)]
+    fun recall(sessionId: String, messageId: String): TurnStats? =
+        synchronized(memory) { memory[keyOf(sessionId, messageId)] }
 
     /** 测试用：清空内存表（不动磁盘，避免把用户的历史记录洗掉）。 */
-    fun forgetAll() = memory.clear()
+    fun forgetAll() =
+        synchronized(memory) { memory.clear() }
 
     private fun keyOf(sessionId: String, messageId: String) = "$sessionId|$messageId"
 

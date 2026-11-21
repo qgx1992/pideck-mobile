@@ -906,6 +906,11 @@ class ChatViewModel @Inject constructor(
     private var stateFailures = 0
     private var statePollJob: Job? = null
 
+    /** 本地气泡的 key：同一毫秒连发两条时纯时间戳会撞（LazyColumn 抛 Key was already used）。 */
+    private var localKeySeq = 0
+
+    private fun nextLocalKey(): String = "local-${System.currentTimeMillis()}-${++localKeySeq}"
+
     fun dismissAskError() {
         askError = null
     }
@@ -2035,7 +2040,7 @@ class ChatViewModel @Inject constructor(
         merger = ReplyMerger()
         live = null
         // 用户消息先上屏：等磁盘落盘再显示会有半秒的「没反应」。
-        val localKey = "local-${System.currentTimeMillis()}"
+        val localKey = nextLocalKey()
         // 图片直接带在气泡里（宿主回传的也是 base64，形状一致），不再用「（N 张图片）」占位。
         val localImages = attached.map { image ->
             MessageImage(
@@ -2341,7 +2346,7 @@ class ChatViewModel @Inject constructor(
         val outgoing = submission.message
         // 先上屏：等落盘再显示会有半秒「没反应」，重拉历史时这条本地气泡会被真实记录替掉。
         // 记住 key：宿主拒收（不在跑 / 不支持 steer）时要把这行撤掉，否则用户以为已经发出去了。
-        val localKey = "local-${System.currentTimeMillis()}"
+        val localKey = nextLocalKey()
         items = items + TimelineItem.UserMessage(
             key = localKey,
             text = submission.display,

@@ -49,7 +49,8 @@ object LocalPrompts {
         val name = title.trim().take(MAX_TITLE_LENGTH).ifEmpty {
             text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(MAX_TITLE_LENGTH) ?: "未命名模板"
         }
-        val id = "local-" + System.currentTimeMillis().toString(36) + "-" + load().size
+        // 用 uuid 尾段：同一毫秒连建两条时，时间戳 + size 会撞（删一条再建同样会撞）。
+        val id = "local-" + java.util.UUID.randomUUID().toString().take(8)
         val items = (load() + Prompt(id = id, title = name, body = text)).takeLast(MAX_COUNT)
         persist(items)
         return items
