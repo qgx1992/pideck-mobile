@@ -189,8 +189,9 @@ class HomeViewModel @Inject constructor(
                 models = api.models(target, token, force)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-
-                // 清单拿不到不影响新建会话：不带模型就是「跟随电脑端默认」
+                // 清单拿不到不影响新建会话（不带模型就是「跟随电脑端默认」），
+                // 但静默吞掉会让用户以为这台机器没有模型 —— 说一句。
+                actionError = "读取模型清单失败：" + dev.pideck.nativeapp.data.describeConnectionError(e)
             } finally {
                 modelsBusy = false
             }

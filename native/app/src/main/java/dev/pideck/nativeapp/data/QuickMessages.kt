@@ -92,10 +92,11 @@ object QuickMessages {
 
     private fun read(): List<String> {
         val prefs = context?.getSharedPreferences(PREFS, Context.MODE_PRIVATE) ?: return SEED
+        // null = 从没存过（给种子清单）；空串 = 用户把最后一条也删了（就该是空）。
+        // 原来用 `items.ifEmpty { SEED }`，删光之后种子会复活，用户以为删不掉。
         val raw = attempt { prefs.getString(KEY, null) }.getOrNull()
             ?: return SEED
-        val items = decode(raw).take(MAX_COUNT)
-        return items.ifEmpty { SEED }
+        return decode(raw).take(MAX_COUNT)
     }
 
     /** 单测用：不落盘，直接给定一份。 */

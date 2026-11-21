@@ -370,7 +370,7 @@ private fun ChangesTab(
             )
         }
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(changes.files, key = { it.group + it.path }) { file ->
+            items(changes.files, key = { "${it.group}|${it.path}" }) { file ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -482,7 +482,7 @@ private fun FilesTab(viewModel: ChatViewModel, onInsertMention: (String) -> Unit
             )
         }
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(viewModel.workspaceFiles, key = { it.path + it.isDir }) { node ->
+            items(viewModel.workspaceFiles, key = { "${it.path}|${it.isDir}" }) { node ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
