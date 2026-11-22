@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
@@ -72,20 +73,34 @@ internal fun LiquidGlassTabs(
     val stretch = remember { Animatable(0f) }
     var first by remember { mutableStateOf(true) }
 
-    LaunchedEffect(selected) {
+    // 注意这里同时监听 `fraction`：手指拖动时每帧把动画值钉到实时位置。
+    // 不这么做就会在松手那一帧出问题 —— `selected` 已经跳到新格，而 `position` 还停在旧格，
+    // 于是胶囊先「瞬移回旧格」再滑过去，看起来就是闪一下。
+    LaunchedEffect(selected, fraction) {
+        if (fraction != 0f) {
+            // 拖动中：直接跟手，不打动画、不拉伸。
+            position.snapTo(selected + fraction)
+            return@LaunchedEffect
+        }
         if (first) {
             first = false
             position.snapTo(selected.toFloat())
             return@LaunchedEffect
         }
-        // 1 表示「撑到最宽」，随后弹簧收回 0。
-        stretch.snapTo(1f)
+        val delta = selected - position.value
+        // 已经被拖动带到位（差值 < 2% 格）：什么都不做，否则会原地抖一下。
+        if (abs(delta) < 0.02f) return@LaunchedEffect
+        // 只有「点按跳格」才做水滴拉伸；拖动收尾不需要，那一下撑开正是另一处闪。
+        val jump = abs(delta) >= 0.5f
+        if (jump) stretch.snapTo(1f)
         coroutineScope {
             launch {
                 position.animateTo(selected.toFloat(), tween(durationMillis = 340, easing = EaseOutBack))
             }
-            launch {
-                stretch.animateTo(0f, spring(dampingRatio = 0.52f, stiffness = 360f))
+            if (jump) {
+                launch {
+                    stretch.animateTo(0f, spring(dampingRatio = 0.52f, stiffness = 360f))
+                }
             }
         }
     }
