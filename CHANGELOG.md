@@ -6,6 +6,7 @@
 - 换页时旧页淡出、新页淡入并放大到 100%（偏移 1 格时 alpha 0.45、scale 0.95），滑到一半是两页各半透明。
 - 顶部的液态玻璃胶囊跟手移动（拖动中读 `currentPageOffsetFraction`，不打动画），松手后由弹簧接上；点胶囊则内容页 `animateScrollToPage` 过去。
 - `isScrollInProgress` 守卫双向联动，避免「pager 改 tab、tab 又命令 pager」的自激抖动。
+- 修订（第二版）：胶囊位置改为只由 pager 的连续位置驱动（`currentPage + currentPageOffsetFraction`），去掉自带的 Animatable 追格逻辑，拖动与点按都连续移动；拉伸由「离最近一格的距离」决定，不再 `snapTo(1f)` 硬撑。
 - 修订：拖动时把胶囊的动画值直接钉到实时位置，松手那一帧不再「跳回旧格再滑过去」；水滴拉伸只在点按跳格时触发，拖动收尾不撑开。
 ## 0.5.73 — 2026-11-21
 

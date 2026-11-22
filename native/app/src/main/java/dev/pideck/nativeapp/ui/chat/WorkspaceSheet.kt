@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.animation.core.EaseOutBack
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -106,7 +108,7 @@ fun WorkspacePanel(
     }
     LaunchedEffect(tab) {
         if (!pager.isScrollInProgress && pager.currentPage != tab) {
-            pager.animateScrollToPage(tab)
+            pager.animateScrollToPage(tab, animationSpec = tween(durationMillis = 340, easing = EaseOutBack))
         }
     }
 
@@ -143,7 +145,7 @@ fun WorkspacePanel(
             selected = tab,
             onSelect = { tab = it },
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
-            fraction = pager.currentPageOffsetFraction,
+            position = pager.currentPage + pager.currentPageOffsetFraction,
         )
         // 每页内容跟着滑动做「淡入 + 轻微放大」，滑走的那页同时淡出；
         // 位移本身交给 pager（跟手、带速度），这里只叠一层层次感。
