@@ -14,14 +14,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.animation.core.EaseOutBack
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
@@ -100,15 +103,15 @@ fun WorkspacePanel(
     val tabs = listOf("待办", "改动", "文件", "子任务")
     val pager = rememberPagerState(pageCount = { tabs.size })
 
-    // 手指滑过半页 → 胶囊与文字跟着换；点胶囊 → 内容页滑过去。
-    // `isScrollInProgress` 那道守卫是必需的：不加会互相触发（pager 回调改 tab，tab 又命令 pager 动画），
-    // 表现是松手后内容页自己反复抖两下。
-    LaunchedEffect(pager.currentPage) {
-        if (tab != pager.currentPage) tab = pager.currentPage
-    }
-    LaunchedEffect(tab) {
-        if (!pager.isScrollInProgress && pager.currentPage != tab) {
-            pager.animateScrollToPage(tab, animationSpec = tween(durationMillis = 340, easing = EaseOutBack))
+    // 单一真源：点击只负责「设目标 + 让 pager 滚过去」，滚动中不回写 tab。
+    // 之前用 `LaunchedEffect(tab)` 播放动画是死锁的根源：从第 1 项点到第 3 项，
+    // pager 经过第 2 项时 currentPage 变化 → 回写 tab=1 → effect 重启 → 正在跑的
+    // animateScrollToPage 被取消，页面就永远停在两项中间。
+    val scope = rememberCoroutineScope()
+    // 只有「停稳」之后才回写（拖动松手 / 动画结束），滚动过程中不打断自己。
+    LaunchedEffect(pager) {
+        snapshotFlow { pager.settledPage }.collect { page ->
+            if (tab != page) tab = page
         }
     }
 
@@ -143,7 +146,18 @@ fun WorkspacePanel(
         LiquidGlassTabs(
             labels = tabs,
             selected = tab,
-            onSelect = { tab = it },
+            onSelect = { target ->
+                if (target != tab) {
+                    tab = target
+                    // 不带 overshoot：pager 的位移动画一旦越界会被夹住，反而像卡死。
+                    scope.launch {
+                        pager.animateScrollToPage(
+                            target,
+                            animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
+                        )
+                    }
+                }
+            },
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
             position = pager.currentPage + pager.currentPageOffsetFraction,
         )
