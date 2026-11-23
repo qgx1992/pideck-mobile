@@ -155,6 +155,19 @@ fun buildChatRows(
         flush()
         rows += ChatRow.Single(item)
     }
+    // 流式中「正在生成的这段思考」也要在组里：桌面端同一个组会显示「思考 3/4」，
+    // 正文在组外继续往下写。不加这段，运行中就是「组里只有工具、思考掉到组外」，
+    // 跑完把思考挪回组里才对齐——用户看到的就是「完成的顺序才对」。
+    if (groupProcess && live != null && !live.thinking.isNullOrBlank() && pending.none { it.key == live.key }) {
+        pending += live.copy(
+            key = live.key + "-think",
+            text = "",
+            tools = emptyList(),
+            errorText = null,
+            interim = emptyList(),
+            streaming = true,
+        )
+    }
     flush()
     return rows
 }
