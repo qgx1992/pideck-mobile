@@ -329,7 +329,7 @@ class TimelineTest {
     }
 
     @Test
-    fun `一段正文被思考块分开时前面的段算中间回复`() {
+    fun `正文被思考块切开时不再按段造中间回复`() {
         val message = ChatMessage(
             id = "a-interim",
             role = "assistant",
@@ -337,7 +337,9 @@ class TimelineTest {
         )
         val item = listOf(message).toTimelineItems().single() as TimelineItem.AssistantMessage
         assertEquals("乙段", item.text)
-        assertEquals(listOf("甲段"), item.interim)
+        // 桌面端的 interim-answer 是「一条消息一处正文」，不按标签分段；
+        // 中间正文的折入由 ChatRows 以整条消息为单位处理。
+        assertEquals(emptyList<String>(), item.interim)
         assertEquals(true, item.thinking.orEmpty().contains("先想"))
     }
 }

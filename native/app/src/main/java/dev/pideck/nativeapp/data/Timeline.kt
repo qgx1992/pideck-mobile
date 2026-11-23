@@ -140,7 +140,10 @@ fun List<ChatMessage>.toTimelineItems(): List<TimelineItem> = mapNotNull { messa
             // 不拆就会在思考块下面再看到一整段带标签的重复内容。
             val (segments, inlineThinking) = splitBodySegments(message.text)
             val text = segments.lastOrNull().orEmpty()
-            val interim = segments.dropLast(1).filter { it.isNotBlank() }
+            // 「中间回复」按**消息**算，不按标签切开的段算：桌面端的 interim-answer
+            // 是一条 assistant 消息一处正文（buildProcessSummary 只对非空正文 +1），
+            // 这里把正文切段只会让同一句话被数好几次。整条正文的折入在 ChatRows 里做。
+            val interim = emptyList<String>()
             val thinking = listOfNotNull(
                 message.thinking?.let(::thinkingFieldText)?.trim()?.takeIf { it.isNotBlank() },
                 inlineThinking,

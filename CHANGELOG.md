@@ -2,6 +2,7 @@
 
 适配桌面端 0.13.2（0.13.0 → 0.13.2 对账）：
 
+- 修订：过程组组头计数对齐网页版——只有思考、没有正文的条目也算一段「中间回复」（💬），工具只显示主类别图标加总数，不再按类别拆成多枚 chip。
 - 路由：新增 `GET /api/ping`（`{name,version,host,os}`）；无删除、无改名。
 - `/api/state` 新增 lite 客户端分支：只对 `User-Agent: Go-http-client/*` 返回精简快照，其余 UA 直接 `return false` 落到原实现；手机端 okhttp 不受影响。
 - `toPublicSession`、`getState()`、`createSessionDraft` 逐字节相同；runtime 动作集合无新增；SSE 帧类型相同。

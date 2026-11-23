@@ -1233,13 +1233,13 @@ private fun InterimLine(text: String, counter: String?, onOpen: () -> Unit) {
  */
 @Composable
 private fun ProcessHeaderStats(toolNames: List<String>, thinkingCount: Int, interimCount: Int) {
-    val kinds = toolNames
+    // 桌面端组头只画「主类别图标 + 工具总数」，不按类别拆开（13 个 bash 是 13，不是 12+1）。
+    val top = toolNames
         .groupingBy { ToolCategoryMap.of(it) }
         .eachCount()
-        .entries
-        .sortedByDescending { it.value }
-        .take(3)
-    val any = kinds.isNotEmpty() || thinkingCount > 0 || interimCount > 0
+        .maxByOrNull { it.value }
+        ?.key
+    val any = top != null || thinkingCount > 0 || interimCount > 0
     if (!any) {
         Text(
             text = "过程",
@@ -1249,18 +1249,17 @@ private fun ProcessHeaderStats(toolNames: List<String>, thinkingCount: Int, inte
         return
     }
     var first = true
-    kinds.forEach { entry ->
-        if (!first) HeaderDot()
+    if (top != null) {
         first = false
         Icon(
-            imageVector = categoryIcon(entry.key),
+            imageVector = categoryIcon(top),
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(13.dp),
         )
         Spacer(Modifier.size(3.dp))
         Text(
-            text = "${entry.value}",
+            text = "${toolNames.size}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1342,7 +1341,8 @@ private fun ProcessGroupBlock(
             step.tools.forEach { add(ProcessMember.Tool(it)) }
             step.interim.forEach { piece ->
                 interimIndex += 1
-                add(ProcessMember.Interim(piece, interimIndex, interimTotal))
+                // 只有思考的条目也占一个计数（对齐桌面端的 💬），但不画空行。
+                if (piece.isNotBlank()) add(ProcessMember.Interim(piece, interimIndex, interimTotal))
             }
         }
     }

@@ -100,14 +100,19 @@ fun buildChatRows(
 
     all.forEachIndexed { index, raw ->
         var item = raw
+        // 桌面端的 💬 是「本轮除最终回答外，每条 assistant 消息一段」——即使那条只有思考、
+        // 没有正文，也算一段（正文空串在组里不画行，计数仍 +1）。两轮实测对得上：12 条消息 → 11，
+        // 4 条消息 → 3。
         val earlyAnswer = (item as? TimelineItem.AssistantMessage)
             ?.takeIf {
-                index > lastUserIndex && it.text.isNotBlank() && it.key != lastAnswerKey && it.key != liveKey
+                index > lastUserIndex && it.key != lastAnswerKey && it.key != liveKey &&
+                    // 既没正文也没思考的条目（只有错误）不算中间回复，留给下面的空行处理。
+                    (it.text.isNotBlank() || !it.thinking.isNullOrBlank())
             }
         if (groupProcess && earlyAnswer != null) {
             pending += earlyAnswer.copy(
                 text = "",
-                interim = earlyAnswer.interim + earlyAnswer.text,
+                interim = listOf(earlyAnswer.text),
                 streaming = false,
             )
             return@forEachIndexed
