@@ -1599,7 +1599,19 @@ private fun ThinkingCard(
             // 组内默认露出思考内容的第一行（网页版就是这样：一眼能看出在想什么），
             // 组外那张「思考过程」卡不需要预览，标题已经说明了。
             val preview = text.trim().lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
-            if (counter != null && preview.isNotBlank()) {
+            if (streaming && text.isNotBlank()) {
+                // 流式中直接把正在写的思考铺出来（跟着 token 长，最多 8 行）；
+                // 本次思考结束、streaming 落回 false 才收成一行头部预览。
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    text = text.trim(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 8,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            } else if (counter != null && preview.isNotBlank()) {
                 Spacer(Modifier.size(8.dp))
                 Text(
                     text = preview,
