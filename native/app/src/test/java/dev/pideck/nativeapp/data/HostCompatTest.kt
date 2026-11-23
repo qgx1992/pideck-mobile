@@ -2,6 +2,7 @@ package dev.pideck.nativeapp.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -27,7 +28,8 @@ class HostCompatTest {
     fun olderThanBaseline() {
         assertTrue(HostCompat.isOlderThanBaseline("0.9.9"))
         assertTrue(HostCompat.isOlderThanBaseline("0.9.99"))
-        assertFalse(HostCompat.isOlderThanBaseline("0.13.0"))
+        assertTrue(HostCompat.isOlderThanBaseline("0.13.0"))
+        assertFalse(HostCompat.isOlderThanBaseline("0.13.2"))
         assertTrue(HostCompat.isOlderThanBaseline("0.11.3"))
         assertTrue(HostCompat.isOlderThanBaseline("0.10.3"))
         assertFalse(HostCompat.isOlderThanBaseline("0.14.0"))
@@ -42,7 +44,8 @@ class HostCompatTest {
 
     @Test
     fun hintOnlyForOlderHosts() {
-        assertNull(HostCompat.hint("0.13.0"))
+        assertNotNull(HostCompat.hint("0.13.0"))
+        assertNull(HostCompat.hint("0.13.2"))
         val hint = HostCompat.hint("0.9.9")
         assertTrue(hint != null && hint.contains(HostCompat.BASELINE))
     }

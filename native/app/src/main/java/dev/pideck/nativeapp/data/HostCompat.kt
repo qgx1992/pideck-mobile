@@ -18,7 +18,7 @@ package dev.pideck.nativeapp.data
 object HostCompat {
 
     /** 本客户端按哪个桌面端版本对过接口。涨这个值要真的重新对账，别当装饰。 */
-    const val BASELINE = "0.13.0"
+    const val BASELINE = "0.13.2"
 
     /** 取版本号前三段数字（`0.10.0-beta.1` → `[0, 10, 0]`），认不出来返回 null。 */
     fun parse(version: String?): List<Int>? {

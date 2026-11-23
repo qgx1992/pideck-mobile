@@ -1,3 +1,12 @@
+## 0.5.75 — 2026-11-23
+
+适配桌面端 0.13.2（0.13.0 → 0.13.2 对账）：
+
+- 路由：新增 `GET /api/ping`（`{name,version,host,os}`）；无删除、无改名。
+- `/api/state` 新增 lite 客户端分支：只对 `User-Agent: Go-http-client/*` 返回精简快照，其余 UA 直接 `return false` 落到原实现；手机端 okhttp 不受影响。
+- `toPublicSession`、`getState()`、`createSessionDraft` 逐字节相同；runtime 动作集合无新增；SSE 帧类型相同。
+- `resolveSendAgentMessage` 仍是「无 remoteExtensions 就原样使用 agentMessage」——本机会话走这条，计划/目标模式不受影响。
+- `HostCompat.BASELINE` 升到 `0.13.2`，低于它的宿主会提示升级。
 ## 0.5.74 — 2026-11-21
 
 工作区面板可以左右滑动换页：

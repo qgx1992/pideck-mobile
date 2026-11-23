@@ -4,7 +4,7 @@
 为什么从 WebView 壳迁到全原生；0.4.x 的 Capacitor 壳（`app/`）与更早的 TypeScript 协议核心（`src/`、
 `tests/`）已在 0.5.41 从 master 删除，完整内容留在分支 `archive/webview-shell`。
 
-版本 0.5.74 / `versionCode 574`，包名 `top.caoayu.pideck`，Kotlin 2.0 + Jetpack Compose。
+版本 0.5.75 / `versionCode 575`，包名 `top.caoayu.pideck`，Kotlin 2.0 + Jetpack Compose。
 
 ## 工程结构
 
