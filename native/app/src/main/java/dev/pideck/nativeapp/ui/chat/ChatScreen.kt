@@ -1596,7 +1596,22 @@ private fun ThinkingCard(
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
-            Spacer(Modifier.weight(1f))
+            // 组内默认露出思考内容的第一行（网页版就是这样：一眼能看出在想什么），
+            // 组外那张「思考过程」卡不需要预览，标题已经说明了。
+            val preview = text.trim().lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+            if (counter != null && preview.isNotBlank()) {
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    text = preview,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
             Text(
                 text = "${text.length} 字",
                 style = MaterialTheme.typography.labelSmall,
